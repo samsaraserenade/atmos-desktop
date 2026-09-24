@@ -182,7 +182,8 @@ function describeContributions(entry, files) {
       // A widget whose height follows its content only ("resizable": false).
       resizable: surface !== 'sidebar' || def?.resizable !== false,
       // The panels a widget shows beside until the person picks otherwise
-      // ("showIn": ["audio-player"]); absent means everywhere.
+      // ("showIn": ["audio-player"]). Absent means beside its own extension's
+      // panel (filled in below); "showIn": [] means everywhere.
       showIn: surface === 'sidebar' && Array.isArray(def?.showIn)
         ? [...new Set(def.showIn.filter(id => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,59}$/.test(id)))].slice(0, 8)
         : null,
@@ -222,6 +223,15 @@ function describeContributions(entry, files) {
     if (value === undefined || value === false) continue;
     const list = Array.isArray(value) && surface === 'sidebar' ? value : [value];
     list.forEach((def, index) => add(surface, def === true ? {} : def, index));
+  }
+  // A widget that doesn't say where it shows goes beside its own panel, so
+  // a plugin's accordions appear with it rather than everywhere. One with
+  // no panel of its own (a service's, say) still shows everywhere.
+  const ownPanel = out.find(contribution => contribution.surface === 'panel');
+  if (ownPanel) {
+    for (const contribution of out) {
+      if (contribution.surface === 'sidebar' && contribution.showIn === null) contribution.showIn = [ownPanel.id];
+    }
   }
   return out;
 }

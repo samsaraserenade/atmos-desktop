@@ -23,3 +23,7 @@ __pycache__/
 backups/
 .rollback-*/
 _to_delete/
+
+# Private runtime data — never commit
+*.docx
+.sync-test-marker.txt

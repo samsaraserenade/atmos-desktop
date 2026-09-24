@@ -1039,8 +1039,9 @@ Panel and sidebar entries may also declare:
 - `"resizable": false` (sidebar only): the widget's height always follows
   its content; the user can't resize it.
 - `"showIn": ["audio-player"]` (sidebar only): the panels the widget shows
-  beside until the user picks otherwise in its header menu (absent: every
-  panel). The user's own choice, Global included, is kept over it.
+  beside until the user picks otherwise in its header menu. Absent: beside
+  the extension's own panel only (every panel if it has none); `[]`: every
+  panel. The user's own choice, Global included, is kept over it.
 - `"glass": true` (panel only): Atmos draws the panel's frosted glass under
   the frame, where the frame says (`atmos.surface.setGlass` /
   `trackGlass`), following the panel's blur and opacity (Settings →

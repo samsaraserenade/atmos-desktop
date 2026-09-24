@@ -115,7 +115,13 @@ test('widgets name their default panels; panels ask for Core-drawn glass', () =>
   assert.equal(sidebar.glass, false, 'widgets sit on the sidebar\'s own glass');
   const [plainPanel, plainSidebar] = frames.describeContributions(entry('first-party', { manifest: { contributes: { panel: {}, sidebar: {} } } }), files);
   assert.equal(plainPanel.glass, false);
-  assert.equal(plainSidebar.showIn, null);
+  assert.deepEqual(plainSidebar.showIn, ['hello'], 'a widget shows beside its own panel by default');
+  const [, everywhere] = frames.describeContributions(entry('first-party', { manifest: { contributes: { panel: {}, sidebar: { showIn: [] } } } }), files);
+  assert.deepEqual(everywhere.showIn, [], '"showIn": [] keeps a widget everywhere');
+  const [legacyPanel, legacyWidget] = frames.describeContributions(entry('first-party', { manifest: { contributes: { panel: { legacyId: 'old-panel' }, sidebar: {} } } }), files);
+  assert.deepEqual(legacyWidget.showIn, [legacyPanel.id], 'the default follows the panel\'s own id');
+  const [widgetOnly] = frames.describeContributions(entry('first-party', { manifest: { contributes: { sidebar: {} } } }), ['sidebar.js']);
+  assert.equal(widgetOnly.showIn, null, 'a widget with no panel of its own shows everywhere');
 });
 
 test('a library service contributes no surfaces or boot frame, whatever it ships', () => {
