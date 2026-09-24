@@ -3,7 +3,7 @@
 :root {
   color-scheme: dark;
   --ink-rgb: 255, 255, 255;
-  --surface-rgb: 18, 18, 20;
+  --surface-rgb: 22, 22, 24;
   --app-font-family: system-ui, sans-serif;
 }
 html, body {

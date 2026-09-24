@@ -67,7 +67,7 @@ const DEFAULT_APP_FONT_ID = 'default';
 // for the much smaller set of actual opaque/translucent panel and menu
 // backgrounds (#settings-drawer, #ctx-menu, plugins' dropdown surfaces).
 export const APP_THEMES = Object.freeze([
-  { id: 'atmos-dark',  label: 'Atmos Dark',  ink: '255,255,255', surface: '18,18,20' },
+  { id: 'atmos-dark',  label: 'Atmos Dark',  ink: '255,255,255', surface: '22,22,24' },
   { id: 'amoled',      label: 'AMOLED Black', ink: '255,255,255', surface: '0,0,0' },
   { id: 'atmos-light', label: 'Atmos Light', ink: '15,15,18',    surface: '255,255,255' },
 ]);

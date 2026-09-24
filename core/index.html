@@ -60,7 +60,7 @@ window.addEventListener('unhandledrejection', function(e) {
       ? saved.coreState.appearance.data.theme
       : null;
     var themes = {
-      'atmos-dark':  { ink: '255,255,255', surface: '18,18,20', scheme: 'dark' },
+      'atmos-dark':  { ink: '255,255,255', surface: '22,22,24', scheme: 'dark' },
       'amoled':      { ink: '255,255,255', surface: '0,0,0', scheme: 'dark' },
       'atmos-light': { ink: '15,15,18', surface: '255,255,255', scheme: 'light' }
     };
@@ -75,7 +75,7 @@ window.addEventListener('unhandledrejection', function(e) {
 <title>ATMOS</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-html { height:100%; width:100%; overflow:hidden; background:transparent; font-family:var(--app-font-family, 'Segoe UI',Roboto,Helvetica,sans-serif); --ink-rgb:255,255,255; --surface-rgb:18,18,20; }
+html { height:100%; width:100%; overflow:hidden; background:transparent; font-family:var(--app-font-family, 'Segoe UI',Roboto,Helvetica,sans-serif); --ink-rgb:255,255,255; --surface-rgb:22,22,24; }
 body { height:100%; width:100%; overflow:hidden; background:rgb(var(--surface-rgb)); }
 html.custom-window-effects body { border-radius:12px; clip-path:inset(0 round 12px); }
 html.custom-window-effects body::after { content:''; position:fixed; inset:0; z-index:1590; border:1px solid rgba(var(--ink-rgb),.18); border-radius:12px; pointer-events:none; }
@@ -93,7 +93,7 @@ html.custom-window-effects.window-fullscreen body::after { display:none; }
    app themes off of (see appearance.js) -- rather than a splash-specific
    palette, so a custom theme is honored here too. Both vars are given a
    hardcoded fallback right on <html> above (--ink-rgb:255,255,255;
-   --surface-rgb:18,18,20), so even before appearance.js has run a single
+   --surface-rgb:22,22,24), so even before appearance.js has run a single
    line, the splash still renders in the app's real default theme colors
    instead of transparent/black. ── */
 #boot-splash {
@@ -612,7 +612,7 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
   -webkit-backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%);
 }
 .atmos-frame-glass[data-material="shell"] {
-  background:rgba(var(--surface-rgb, 18,18,20), var(--shell-opacity, .88));
+  background:rgba(var(--surface-rgb, 22,22,24), var(--shell-opacity, .88));
   backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
   -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
 }
