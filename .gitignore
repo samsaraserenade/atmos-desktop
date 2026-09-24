@@ -1,0 +1,25 @@
+node_modules/
+dist/
+release-repo/
+*.log
+.DS_Store
+.tmp/
+_archive/
+
+# Build output and toolchains inside extensions
+.gradle/
+.android-sdk/
+.manual-build/
+.signing/
+*.apk
+*.keystore
+**/mobile-android/build/
+**/mobile-android/app/build/
+**/android-client/build/
+**/android-client/app/build/
+__pycache__/
+
+# Local snapshots — keep history in git instead
+backups/
+.rollback-*/
+_to_delete/

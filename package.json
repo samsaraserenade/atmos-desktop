@@ -1,0 +1,73 @@
+{
+  "name": "atmos",
+  "version": "0.8.3",
+  "description": "A modular personal desktop environment.",
+  "license": "Apache-2.0",
+  "author": "hashy",
+  "main": "core/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test:core": "node --test core/js/core/*.test.cjs",
+    "test:services": "node --experimental-vm-modules --test scripts/service-core-v2-contract.test.cjs",
+    "test:permissions": "node --test scripts/extension-permissions.test.cjs",
+    "build": "electron-builder --win nsis",
+    "build:portable": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.hashy.atmosphere",
+    "productName": "Atmos",
+    "asar": false,
+    "afterPack": "scripts/after-pack.cjs",
+    "win": {
+      "target": "nsis",
+      "icon": "core/assets/icon.ico"
+    },
+    "nsis": {
+      "artifactName": "Atmos Setup ${version}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Atmos",
+      "uninstallDisplayName": "Atmos",
+      "deleteAppDataOnUninstall": false
+    },
+    "files": [
+      "core/**/*",
+      "!core/**/*.test.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "plugins",
+        "to": "extensions/plugins",
+        "filter": [
+          "**/*",
+          "!**/tests/**",
+          "!**/data/**",
+          "!**/node_modules/**",
+          "!*/mobile-android/**",
+          "!*/android-client/**",
+          "!*/backend/**",
+          "!*/tools/**",
+          "!**/*.log"
+        ]
+      },
+      {
+        "from": "services",
+        "to": "extensions/services",
+        "filter": [
+          "**/*",
+          "!**/tests/**",
+          "!**/benchmarks/**",
+          "!**/*.log"
+        ]
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
+  }
+}

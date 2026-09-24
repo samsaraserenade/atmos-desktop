@@ -1,0 +1,18 @@
+{
+  "apiVersion": 2,
+  "tier": "first-party",
+  "requires": {
+    "extensions.manifest": 1
+  },
+  "permissions": {
+    "node": [
+      "fs",
+      "path"
+    ],
+    "ipc": true,
+    "provides": [
+      "media-metadata"
+    ]
+  },
+  "library": true
+}

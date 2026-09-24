@@ -1,0 +1,22 @@
+{
+  "apiVersion": 2,
+  "tier": "system",
+  "displayName": "Wallpaper",
+  "requires": {
+    "extensions.manifest": 1,
+    "lifecycle.context": 1,
+    "state.namespaced": 1,
+    "renderer.capabilities": 1,
+    "surface.workspace": 1,
+    "context-menu.contributions": 1,
+    "settings.appearance-contributions": 1
+  },
+  "permissions": {
+    "network": [
+      "images.unsplash.com"
+    ],
+    "browser": [
+      "clipboard-read"
+    ]
+  }
+}

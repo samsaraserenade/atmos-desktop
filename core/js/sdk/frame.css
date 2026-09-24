@@ -1,0 +1,18 @@
+/* Base styles for every extension frame. Theme variables are set on :root
+   by the SDK from Atmos's current appearance. */
+:root {
+  color-scheme: dark;
+  --ink-rgb: 255, 255, 255;
+  --surface-rgb: 18, 18, 20;
+  --app-font-family: system-ui, sans-serif;
+}
+html, body {
+  margin: 0;
+  background: transparent;
+  color: rgb(var(--ink-rgb));
+  font-family: var(--app-font-family);
+  font-size: 13px;
+}
+/* Panels fill their surface; sidebar widgets and settings are sized to their content. */
+html[data-atmos-surface="panel"], html[data-atmos-surface="panel"] body { height: 100%; }
+html[data-atmos-surface="sidebar"] body, html[data-atmos-surface="settings"] body { overflow: hidden; }

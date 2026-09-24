@@ -1,0 +1,83 @@
+{
+  "apiVersion": 3,
+  "tier": "first-party",
+  "runtime": "frame",
+  "displayName": "Audio Player",
+  "requires": {
+    "extensions.manifest": 1,
+    "extensions.frames": 3
+  },
+  "contributes": {
+    "panel": {
+      "label": "Music",
+      "icon": "icon.svg",
+      "default": true,
+      "drawer": {
+        "bar": 54,
+        "keys": true
+      }
+    },
+    "sidebar": [
+      {
+        "label": "Now Playing",
+        "icon": "icon.svg",
+        "order": 20,
+        "resizable": false
+      },
+      {
+        "id": "queue",
+        "entry": "sidebar-queue.js",
+        "label": "Queue",
+        "icon": "icon-queue.svg",
+        "order": 21
+      },
+      {
+        "id": "library",
+        "entry": "sidebar-library.js",
+        "label": "Library",
+        "icon": "icon-library.svg",
+        "order": 22
+      }
+    ],
+    "boot": {
+      "entry": "boot.js",
+      "keys": [
+        "Space"
+      ]
+    }
+  },
+  "legacyStorage": {
+    "indexedDB": [
+      {
+        "name": "samsara_db",
+        "keys": [
+          "audio-player:*",
+          "library-meta",
+          "waveform-cache",
+          "playlist"
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "node": [
+      "fs",
+      "path",
+      "stream"
+    ],
+    "electron": [
+      "BrowserWindow",
+      "dialog",
+      "shell"
+    ],
+    "ipc": true,
+    "resources": [
+      "audio-player-media"
+    ],
+    "invokes": [
+      "service:audio",
+      "service:media-metadata",
+      "service:wallpaper"
+    ]
+  }
+}

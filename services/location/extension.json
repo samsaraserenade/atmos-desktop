@@ -1,0 +1,19 @@
+{
+  "apiVersion": 2,
+  "tier": "system",
+  "requires": {
+    "extensions.manifest": 1,
+    "events.namespaced": 1,
+    "lifecycle.context": 1,
+    "state.namespaced": 1
+  },
+  "permissions": {
+    "network": [
+      "geocoding-api.open-meteo.com",
+      "nominatim.openstreetmap.org"
+    ],
+    "browser": [
+      "geolocation"
+    ]
+  }
+}

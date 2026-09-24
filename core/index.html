@@ -1,0 +1,1321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- ── Import map — plugins live outside the app bundle now (see
+     %AppData%/Atmos/plugins, discovered via main.js's plugins:list and
+     dynamically imported by js/core/plugin-loader.js). A plugin file's own
+     relative imports (e.g. total-chart.js's old '../../persist.js') broke
+     the moment it stopped living a fixed number of folders under js/ — no
+     amount of '../' can reach back into a different filesystem root. This
+     maps a stable bare specifier prefix to the bundle's real js/ folder
+     (relative to this document, which is where the bundle actually lives),
+     so any plugin file — regardless of how deep %AppData%/Atmos/plugins
+     nests it, or which machine/drive it's installed on — can import a
+     stable `atmos-core/` API path. MUST be the first thing in <head>, before any
+     <script type="module"> or dynamic import() anywhere in this file —
+     import maps only apply to specifiers resolved after they're
+     registered. -->
+<script type="importmap">
+{
+  "imports": {
+    "atmos-core/": "./js/"
+  }
+}
+</script>
+<link rel="stylesheet" href="./js/core/task-view.css">
+<script>
+// Runtime JS errors (syntax errors, thrown exceptions, etc.)
+window.addEventListener('error', function(e) {
+  console.log('[SYNTAX-TRAP] file=' + e.filename + ' line=' + e.lineno + ' col=' + e.colno + ' msg=' + e.message);
+});
+
+// Module/resource load failures — e.g. a <script type="module"> or an
+// `import` inside one pointing at a path that 404s after a file move.
+// These fire as a plain Event (no .message) on the failed element itself,
+// and only reach window in the CAPTURE phase — they don't bubble.
+window.addEventListener('error', function(e) {
+  const el = e.target;
+  if (el && el !== window && (el.src || el.href)) {
+    console.log('[LOAD-TRAP] failed to load: ' + (el.src || el.href) + ' (tag=' + el.tagName + ')');
+  }
+}, true);
+
+// Dynamic import() failures — e.g. import('./js/foo.js') where foo.js was
+// moved/renamed. These reject a promise rather than throwing, so they only
+// show up here, not in the error trap above.
+window.addEventListener('unhandledrejection', function(e) {
+  console.log('[IMPORT-TRAP] unhandled rejection: ' + (e.reason?.message || e.reason));
+});
+</script>
+<script>
+// Apply the saved theme before the first paint. The full Appearance service
+// validates and reapplies it during normal startup; this tiny bootstrap only
+// prevents the splash from flashing the dark defaults first.
+(function () {
+  try {
+    var saved = JSON.parse(localStorage.getItem('samsara_v4') || localStorage.getItem('samsara_v3') || '{}');
+    var theme = saved.coreState && saved.coreState.appearance && saved.coreState.appearance.data
+      ? saved.coreState.appearance.data.theme
+      : null;
+    var themes = {
+      'atmos-dark':  { ink: '255,255,255', surface: '18,18,20', scheme: 'dark' },
+      'amoled':      { ink: '255,255,255', surface: '0,0,0', scheme: 'dark' },
+      'atmos-light': { ink: '15,15,18', surface: '255,255,255', scheme: 'light' }
+    };
+    if (!themes[theme]) return;
+    document.documentElement.style.setProperty('--ink-rgb', themes[theme].ink);
+    document.documentElement.style.setProperty('--surface-rgb', themes[theme].surface);
+    document.documentElement.style.colorScheme = themes[theme].scheme;
+    document.documentElement.dataset.appTheme = theme;
+  } catch (error) { /* use the CSS defaults when saved state is unavailable */ }
+})();
+</script>
+<title>ATMOS</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html { height:100%; width:100%; overflow:hidden; background:transparent; font-family:var(--app-font-family, 'Segoe UI',Roboto,Helvetica,sans-serif); --ink-rgb:255,255,255; --surface-rgb:18,18,20; }
+body { height:100%; width:100%; overflow:hidden; background:rgb(var(--surface-rgb)); }
+html.custom-window-effects body { border-radius:12px; clip-path:inset(0 round 12px); }
+html.custom-window-effects body::after { content:''; position:fixed; inset:0; z-index:1590; border:1px solid rgba(var(--ink-rgb),.18); border-radius:12px; pointer-events:none; }
+html.custom-window-effects.window-maximized body,
+html.custom-window-effects.window-fullscreen body { border-radius:0; clip-path:none; }
+html.custom-window-effects.window-maximized body::after,
+html.custom-window-effects.window-fullscreen body::after { display:none; }
+/* ── Boot splash — Rev centered over the app background until startup
+   finishes (app.js dispatches 'atmos:boot-complete'; see the inline script), same press/release click reaction as the
+   About page, plus a status line and a progress bar pinned to the very
+   bottom of the screen. Fully removed from the DOM once its fade-out
+   finishes (see the inline script by #boot-splash below), so it can never
+   sit invisibly on top of the app eating clicks.
+   Colors read var(--ink-rgb)/--surface-rgb -- the same vars the rest of the
+   app themes off of (see appearance.js) -- rather than a splash-specific
+   palette, so a custom theme is honored here too. Both vars are given a
+   hardcoded fallback right on <html> above (--ink-rgb:255,255,255;
+   --surface-rgb:18,18,20), so even before appearance.js has run a single
+   line, the splash still renders in the app's real default theme colors
+   instead of transparent/black. ── */
+#boot-splash {
+  position: fixed; inset: 0; z-index: 9999; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px;
+  background: rgb(var(--surface-rgb));
+  opacity: 1; transition: opacity .4s ease;
+}
+#boot-splash.boot-splash-hide { opacity: 0; pointer-events: none; }
+/* The user's actual custom wallpaper (background plugin, IndexedDB asset
+   "background:wallpaper" -- see the inline script below), dimmed way down
+   so it reads as a moody backdrop rather than competing with the mascot/
+   text/bar on top of it. Starts invisible and fades in only once/if that
+   asset is actually found -- no custom wallpaper set (or the asset store
+   isn't reachable yet) just leaves the plain theme surface color above. */
+#boot-splash-bg {
+  position: absolute; inset: 0; z-index: 0;
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+  filter: brightness(.1) saturate(0);
+  opacity: 0; transition: opacity .6s ease;
+}
+#boot-splash-bg.boot-splash-bg-visible { opacity: 1; }
+html[data-app-theme="atmos-light"] #boot-splash-bg {
+  filter: brightness(.72) saturate(.45);
+  opacity: 0;
+}
+html[data-app-theme="atmos-light"] #boot-splash-bg.boot-splash-bg-visible { opacity: .42; }
+#boot-splash-mascot {
+  position: relative; z-index: 1;
+  width: min(180%, 660px); height: min(180%, 660px);
+  object-fit: contain; opacity: .92; cursor: pointer; user-select: none;
+  -webkit-user-drag: none;
+}
+#boot-splash-status {
+  position: relative; z-index: 1;
+  min-height: 1.2em; max-width: 480px; padding: 0 24px;
+  font-size: .78rem; letter-spacing: .01em; text-align: center;
+  color: rgba(var(--ink-rgb),.48);
+  opacity: 0; transition: opacity .25s ease;
+}
+#boot-splash-status.boot-splash-status-visible { opacity: 1; }
+#boot-splash-bar-track {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
+  height: 3px; background: rgba(var(--ink-rgb),.08);
+}
+#boot-splash-bar-fill {
+  height: 100%; width: 0%;
+  background: rgba(var(--ink-rgb),.85);
+  transition-property: width; transition-timing-function: linear;
+}
+
+/* ── Title bar — sole drag region, everything else is untouched ── */
+#titlebar { position:fixed; top:0; left:0; right:0; height:28px; z-index:200; display:flex; align-items:center; justify-content:flex-end; padding:0 8px; -webkit-app-region:drag; background:rgba(0,0,0,0); user-select:none; cursor:grab; }
+#titlebar:active { cursor:grabbing; }
+.win-controls { display:flex; align-items:center; gap:2px; -webkit-app-region:no-drag; }
+.win-btn { width:28px; height:22px; background:none; border:none; color:rgba(var(--ink-rgb),0.3); font-size:0.8rem; cursor:pointer; border-radius:4px; display:flex; align-items:center; justify-content:center; transition:color 0.12s, background 0.12s, opacity 0.15s; font-family:inherit; line-height:1; padding:0; opacity:0; }
+#titlebar:hover .win-btn { opacity:1; }
+.win-btn:hover { color:rgba(var(--ink-rgb),0.85); background:rgba(var(--ink-rgb),0.1); }
+#win-fullscreen.active { color:rgba(var(--ink-rgb),.9); background:rgba(var(--ink-rgb),.1); }
+#win-fullscreen svg { width:11px; height:11px; }
+#win-close:hover { color:rgb(var(--ink-rgb)); background:rgba(232,17,35,0.75); }
+.window-resize-handle { position:fixed; z-index:1600; -webkit-app-region:no-drag; touch-action:none; }
+.window-resize-n,.window-resize-s { left:7px; right:7px; height:7px; cursor:ns-resize; }
+.window-resize-n { top:0; }
+.window-resize-s { bottom:0; }
+.window-resize-e,.window-resize-w { top:7px; bottom:7px; width:7px; cursor:ew-resize; }
+.window-resize-e { right:0; }
+.window-resize-w { left:0; }
+.window-resize-ne,.window-resize-nw,.window-resize-se,.window-resize-sw { width:12px; height:12px; }
+.window-resize-ne { top:0; right:0; cursor:nesw-resize; }
+.window-resize-nw { top:0; left:0; cursor:nwse-resize; }
+.window-resize-se { right:0; bottom:0; cursor:nwse-resize; }
+.window-resize-sw { left:0; bottom:0; cursor:nesw-resize; }
+input[type=range].crange { -webkit-appearance:none; width:100%; height:3px; background:rgba(var(--ink-rgb),.12); border-radius:2px; outline:none; cursor:pointer; }
+input[type=range].crange::-webkit-slider-thumb { -webkit-appearance:none; width:9px; height:9px; background:rgba(var(--ink-rgb),.88); border-radius:50%; cursor:pointer; box-shadow:0 0 5px rgba(var(--ink-rgb),.25); transition:transform .1s,background .1s; }
+input[type=range].crange::-webkit-slider-thumb:hover { background:rgb(var(--ink-rgb)); transform:scale(1.18); }
+
+/* ── Titlebar-mounted widget overrides ── */
+#titlebar .win-controls { margin-left:auto; }
+/* ── Panel host: one full-window surface, or a grid/freeform workspace ── */
+#media-fullscreen { position:fixed; inset:0; z-index:10; }
+.panel-section { min-width:0; min-height:0; position:relative; display:flex; flex-direction:column; overflow:hidden; }
+#media-fullscreen.panel-host-empty { display:none; }
+#media-fullscreen:not(.panel-workspace) #panel-primary { height:100%; }
+/* Panel content mount point (generic — the plugin fills it in). */
+#panel-content { width:100%; flex:1; min-height:0; }
+/* Pass-through panels (registerPanelPlugin({ passThrough: true })) only take
+   pointer events where they draw something; empty areas reach the workspace. */
+#media-fullscreen.panel-pass-through,
+#media-fullscreen.panel-pass-through #panel-primary,
+#media-fullscreen.panel-pass-through #panel-content { pointer-events:none; }
+#media-fullscreen.panel-workspace { inset:0; display:grid; gap:1px; padding:0; background:transparent; }
+#media-fullscreen.panel-workspace .panel-section { background:transparent; border:0; border-radius:0; box-shadow:none; }
+#media-fullscreen.panel-workspace .panel-section-content { flex:1; width:100%; height:auto !important; min-height:0; overflow:hidden; pointer-events:all; }
+#media-fullscreen.panel-workspace .panel-plugin-viewport { position:relative; width:100%; height:100%; overflow:hidden; container-type:inline-size; }
+#media-fullscreen[data-panel-layout="columns"] { grid-template-columns:minmax(0,var(--panel-split-x,50%)) minmax(0,1fr); }
+#media-fullscreen[data-panel-layout="columns"] [data-panel-section="right"] { grid-column:2; }
+#media-fullscreen[data-panel-layout="rows"] { grid-template-rows:minmax(0,var(--panel-split-y,50%)) minmax(0,1fr); }
+#media-fullscreen[data-panel-layout="rows"] [data-panel-section="bottom"] { grid-row:2; }
+#media-fullscreen[data-panel-layout="right-stack"] { grid-template-columns:minmax(0,var(--panel-split-x,57.45%)) minmax(0,1fr); grid-template-rows:minmax(0,var(--panel-split-y,50%)) minmax(0,1fr); }
+#media-fullscreen[data-panel-layout="right-stack"] [data-panel-section="main"] { grid-row:1 / 3; }
+#media-fullscreen[data-panel-layout="left-stack"] { grid-template-columns:minmax(0,var(--panel-split-x,42.55%)) minmax(0,1fr); grid-template-rows:minmax(0,var(--panel-split-y,50%)) minmax(0,1fr); }
+#media-fullscreen[data-panel-layout="left-stack"] [data-panel-section="main"] { grid-column:2; grid-row:1 / 3; }
+#media-fullscreen[data-panel-layout="quad"] { grid-template-columns:minmax(0,var(--panel-split-x,50%)) minmax(0,1fr); grid-template-rows:minmax(0,var(--panel-split-y,50%)) minmax(0,1fr); }
+#media-fullscreen [data-panel-section="top-left"] { grid-column:1; grid-row:1; }
+#media-fullscreen [data-panel-section="top-right"] { grid-column:2; grid-row:1; }
+#media-fullscreen [data-panel-section="bottom-left"] { grid-column:1; grid-row:2; }
+#media-fullscreen [data-panel-section="bottom-right"] { grid-column:2; grid-row:2; }
+#media-fullscreen[data-panel-layout="freeform"] { display:block; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-section { position:absolute; display:flex; border:1px solid rgba(var(--ink-rgb),.14); overflow:hidden; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-titlebar { order:-2; position:relative; z-index:10; width:100%; height:28px; min-height:28px; flex-shrink:0; display:flex; align-items:center; padding:0 5px 0 10px; background:rgba(var(--surface-rgb),.86); border-bottom:1px solid rgba(var(--ink-rgb),.09); color:rgba(var(--ink-rgb),.48); font-size:.58rem; font-weight:650; letter-spacing:.11em; text-transform:uppercase; cursor:move; user-select:none; touch-action:none; -webkit-app-region:no-drag; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-titlebar::before { content:''; width:5px; height:5px; margin-right:7px; border:1px solid rgba(var(--ink-rgb),.35); }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-actions { display:flex; align-items:center; align-self:stretch; margin-left:8px; -webkit-app-region:no-drag; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-action { width:25px; align-self:stretch; display:grid; place-items:center; border:0; border-radius:3px; background:transparent; color:rgba(var(--ink-rgb),.42); font:inherit; cursor:pointer; transition:background .1s,color .1s; -webkit-app-region:no-drag; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-action:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-close:hover { background:rgba(232,17,35,.72); }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-maximize svg { width:9px; height:9px; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-resizer { position:absolute; z-index:5; right:0; bottom:0; width:14px; height:14px; cursor:nwse-resize; touch-action:none; }
+#media-fullscreen[data-panel-layout="freeform"] .panel-window-resizer::after { content:''; position:absolute; right:3px; bottom:3px; width:6px; height:6px; border-right:1px solid rgba(var(--ink-rgb),.35); border-bottom:1px solid rgba(var(--ink-rgb),.35); }
+body.panel-window-moving, body.panel-window-moving * { user-select:none !important; cursor:move !important; }
+body.panel-window-resizing, body.panel-window-resizing * { user-select:none !important; cursor:nwse-resize !important; }
+.panel-splitter { position:absolute; z-index:40; touch-action:none; -webkit-app-region:no-drag; }
+.panel-splitter::after { content:''; position:absolute; background:rgba(var(--ink-rgb),.16); transition:background .12s; }
+.panel-splitter:hover::after, .panel-splitter.dragging::after { background:rgba(var(--ink-rgb),.5); }
+.panel-splitter[data-axis="x"] { top:0; bottom:0; left:var(--panel-split-x,50%); width:9px; transform:translateX(-4px); cursor:col-resize; }
+.panel-splitter[data-axis="x"]::after { top:0; bottom:0; left:4px; width:1px; }
+.panel-splitter[data-axis="y"] { left:0; right:0; top:var(--panel-split-y,50%); height:9px; transform:translateY(-4px); cursor:row-resize; }
+.panel-splitter[data-axis="y"]::after { left:0; right:0; top:4px; height:1px; }
+.panel-splitter.splitter-right { left:var(--panel-split-x,50%); }
+.panel-splitter.splitter-left { right:calc(100% - var(--panel-split-x,50%)); }
+body.panel-split-resizing, body.panel-split-resizing * { user-select:none !important; }
+body.panel-split-resizing-x, body.panel-split-resizing-x * { cursor:col-resize !important; }
+body.panel-split-resizing-y, body.panel-split-resizing-y * { cursor:row-resize !important; }
+body.drawer-open #media-fullscreen { right:290px; }
+/* Sidebar visibility changes resize the workspace immediately to avoid repeated content reflow. */
+body.drawer-open #media-fullscreen[data-panel-layout="freeform"] { right:0; }
+body.drawer-open #titlebar { right:290px; }
+html[data-sidebar-position="left"] body.drawer-open #media-fullscreen,
+html[data-sidebar-position="left"] body.drawer-open #titlebar { left:290px; right:0; }
+html[data-sidebar-position="left"] body.drawer-open #media-fullscreen[data-panel-layout="freeform"] { left:0; }
+/* T212 settings panel */
+.t212-panel { padding:8px 12px 10px; display:flex; flex-direction:column; gap:7px; }
+.t212-field-inp { background:rgba(var(--ink-rgb),.06); border:1px solid rgba(var(--ink-rgb),.12); color:rgb(var(--ink-rgb)); border-radius:5px; padding:5px 9px; font-size:0.7rem; font-family:inherit; letter-spacing:.02em; width:100%; outline:none; }
+.t212-field-inp::placeholder { color:rgba(var(--ink-rgb),.25); }
+.t212-field-inp:focus { border-color:rgba(var(--ink-rgb),.28); }
+.t212-env-select { background:rgba(var(--ink-rgb),.06); border:1px solid rgba(var(--ink-rgb),.12); color:rgba(var(--ink-rgb),.8); border-radius:5px; padding:5px 9px; font-size:0.7rem; font-family:inherit; width:100%; outline:none; cursor:pointer; appearance:none; }
+.t212-env-select option { background:rgb(var(--surface-rgb)); color:rgb(var(--ink-rgb)); }
+.t212-save-btn { background:rgba(var(--ink-rgb),.1); border:1px solid rgba(var(--ink-rgb),.16); color:rgba(var(--ink-rgb),.8); border-radius:5px; padding:6px 0; font-size:0.65rem; letter-spacing:.1em; text-transform:uppercase; cursor:pointer; font-family:inherit; transition:background .1s,color .1s; width:100%; }
+.t212-save-btn:hover { background:rgba(var(--ink-rgb),.18); color:rgb(var(--ink-rgb)); }
+.t212-field-label { font-size:0.6rem; color:rgba(var(--ink-rgb),.3); letter-spacing:.1em; text-transform:uppercase; margin-bottom:2px; }
+.t212-active-row { display:flex; align-items:center; gap:8px; }
+.t212-active-key { font-size:0.65rem; color:rgba(var(--ink-rgb),.45); letter-spacing:.04em; flex:1; font-variant-numeric:tabular-nums; }
+.t212-active-env-badge { font-size:0.58rem; background:rgba(74,222,128,.12); color:#4ade80; border:1px solid rgba(74,222,128,.25); border-radius:3px; padding:1px 5px; letter-spacing:.06em; flex-shrink:0; }
+.t212-rm-btn { background:none; border:none; color:rgba(var(--ink-rgb),.2); cursor:pointer; font-size:0.65rem; padding:2px 5px; border-radius:3px; font-family:inherit; transition:color .1s; flex-shrink:0; }
+.t212-rm-btn:hover { color:#f87171; }
+.t212-hint { font-size:0.6rem; color:rgba(var(--ink-rgb),.22); letter-spacing:.04em; line-height:1.5; }
+.t212-status { font-size:0.62rem; letter-spacing:.04em; }
+.t212-status.ok  { color:#4ade80; }
+.t212-status.err { color:#f87171; }
+
+
+/* Shared frosted-glass menu chrome — used by Core's own workspace menu
+   (#ctx-menu below) AND by every transient, per-target menu a plugin opens
+   via js/core/context-menu.js's openMenu() (album/track rows, chat messages,
+   library tiles, ...). One definition so every right-click menu in the app
+   reads as the same material; a plugin should never redefine these rules
+   under its own class name. */
+.ctx-menu-surface { position:fixed; z-index:1150; min-width:250px; max-width:260px; background:rgba(var(--surface-rgb),var(--shell-opacity, .88)); border:1px solid rgba(var(--ink-rgb),.1); border-radius:10px; padding:5px; backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%); -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%); box-shadow:0 8px 32px rgba(0,0,0,.7), 0 1px 0 rgba(var(--ink-rgb),.05) inset; opacity:0; pointer-events:none; user-select:none; transform:scale(0.96); transform-origin:top left; transition:opacity .12s ease, transform .12s ease; }
+.ctx-menu-surface.visible { opacity:1; pointer-events:all; transform:scale(1); }
+
+/* ── Settings drawer ─────────────────────────────────────────────────────── */
+#settings-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 1100;
+  width: 290px;
+  background: rgba(var(--surface-rgb),var(--shell-opacity, .88));
+  border-left: 1px solid rgba(var(--ink-rgb),.09);
+  backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  box-shadow: none;
+  display: flex; flex-direction: column;
+  transform: translateX(100%);
+  transition: none;
+  pointer-events: none;
+  user-select: none;
+}
+#settings-drawer.open { transform: translateX(0); pointer-events: all; box-shadow: -8px 0 32px rgba(0,0,0,.6); }
+html[data-sidebar-position="left"] #settings-drawer {
+  left:0; right:auto;
+  border-left:0; border-right:1px solid rgba(var(--ink-rgb),.09);
+  transform:translateX(-100%);
+}
+html[data-sidebar-position="left"] #settings-drawer.open { transform:translateX(0); box-shadow:8px 0 32px rgba(0,0,0,.6); }
+html[data-sidebar-shadow="hidden"] #settings-drawer.open { box-shadow: none; }
+
+/* Tab panels — only the active one is shown */
+.settings-panel { display: none; flex: 1; overflow-y: auto; padding: 0 0 12px; }
+.settings-panel.active { display: block; }
+.settings-panel::-webkit-scrollbar { width: 3px; }
+.settings-panel::-webkit-scrollbar-track { background: transparent; }
+.settings-panel::-webkit-scrollbar-thumb { background: rgba(var(--ink-rgb),.12); border-radius: 2px; }
+#settings-panel-main.active { display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:0; }
+#sidebar-scroll-region { flex:1 1 0; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-bottom:0; }
+#sidebar-scroll-region::-webkit-scrollbar,
+#sidebar-top-dock::-webkit-scrollbar,
+#sidebar-bottom-dock::-webkit-scrollbar { width:3px; }
+#sidebar-scroll-region::-webkit-scrollbar-track,
+#sidebar-top-dock::-webkit-scrollbar-track,
+#sidebar-bottom-dock::-webkit-scrollbar-track { background:transparent; }
+#sidebar-scroll-region::-webkit-scrollbar-thumb,
+#sidebar-top-dock::-webkit-scrollbar-thumb,
+#sidebar-bottom-dock::-webkit-scrollbar-thumb { background:rgba(var(--ink-rgb),.12); border-radius:2px; }
+#sidebar-top-dock, #sidebar-bottom-dock { flex:0 0 auto; min-height:0; max-height:60%; overflow-y:auto; overscroll-behavior:contain; background:transparent; }
+#settings-panel-main:has(#sidebar-top-dock > .fin-section:not([hidden])):has(#sidebar-bottom-dock > .fin-section:not([hidden])) > :is(#sidebar-top-dock, #sidebar-bottom-dock) { max-height:40%; }
+#sidebar-top-dock:not(:empty) { border-bottom:1px solid rgba(var(--ink-rgb),.12); box-shadow:0 10px 24px rgba(0,0,0,.18); }
+#sidebar-bottom-dock:not(:empty) { border-top:1px solid rgba(var(--ink-rgb),.12); box-shadow:0 -10px 24px rgba(0,0,0,.18); }
+#sidebar-footer {
+  flex:0 0 54px; height:54px; min-height:54px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 13px 0 15px;
+  border-top:1px solid rgba(var(--ink-rgb),.1);
+  background:rgba(var(--surface-rgb),.5);
+}
+.sidebar-footer-brand { min-width:0; line-height:1; }
+.sidebar-footer-name { font-size:.72rem; font-weight:650; letter-spacing:.16em; color:rgba(var(--ink-rgb),.82); }
+.sidebar-footer-version { margin-top:5px; font-size:.52rem; letter-spacing:.06em; color:rgba(var(--ink-rgb),.32); }
+#sidebar-footer-settings {
+  width:30px; height:30px; flex:0 0 30px;
+  display:grid; place-items:center;
+  border:0; border-radius:6px; background:transparent;
+  color:rgba(var(--ink-rgb),.46); cursor:pointer;
+  transition:background .12s, color .12s;
+}
+#sidebar-footer-settings:hover { background:rgba(var(--ink-rgb),.08); color:rgba(var(--ink-rgb),.86); }
+#sidebar-footer-settings:focus-visible { outline:1px solid rgba(var(--ink-rgb),.45); outline-offset:1px; }
+#sidebar-footer-settings svg { width:16px; height:16px; }
+/* no backdrop — drawer is non-modal, UI stays fully interactive */
+/* ── Accordion sections ──────────────────────────────────────────────────── */
+.fin-section { position: relative; border-bottom: 1px solid rgba(var(--ink-rgb),.06); }
+.fin-section:last-child { border-bottom: none; }
+.fin-section-label {
+  display: flex; align-items: center; gap: 7px;
+  height: 38px; padding: 0 14px;
+  font-size: .6rem; letter-spacing: .12em; text-transform: uppercase;
+  color: rgba(var(--ink-rgb),.3); font-weight: 600;
+  cursor: pointer; user-select: none;
+  transition: color .12s;
+}
+.fin-section-label:hover { color: rgba(var(--ink-rgb),.55); }
+.fin-section-label svg { opacity: .5; flex-shrink: 0; transition: opacity .12s; }
+.fin-section-label:hover svg { opacity: .75; }
+/* label text takes all available space — pushes everything else to the right */
+.fin-section-name { flex: 1; }
+/* summary val — hidden; we rely on chevron only */
+.fin-section-val { display: none; }
+/* chevron — always rightmost, no auto-margin needed */
+.fin-section-chevron {
+  width: 8px; height: 8px; flex-shrink: 0;
+  color: rgba(var(--ink-rgb),.18); transition: transform .22s cubic-bezier(.22,1,.36,1), color .12s;
+  opacity: 1 !important; /* override the label svg rule */
+}
+.fin-section.open .fin-section-chevron { transform: rotate(90deg); color: rgba(var(--ink-rgb),.35); }
+.fin-section.open .fin-section-label { color: rgba(var(--ink-rgb),.6); }
+/* body collapse */
+.fin-section-body {
+  overflow: hidden;
+  max-height: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  transition: max-height .32s cubic-bezier(.22,1,.36,1);
+}
+.fin-section-body::-webkit-scrollbar { display:none; width:0; height:0; }
+/* Accordion content starts flush beneath its Core-owned header. Keeping this
+   in the shell makes plugin and built-in sections follow the same spacing. */
+.fin-section-body > :first-child { margin-top:0 !important; padding-top:0 !important; }
+.fin-section.open .fin-section-body { max-height: none; }
+.fin-section.has-custom-height.open .fin-section-body {
+  height: var(--sidebar-section-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Fixed-content contributions must stay intrinsic even if an older session
+   left a saved custom-height class/property behind on the section. */
+.fin-section[data-resizable="false"].open .fin-section-body {
+  height: auto !important;
+  max-height: none !important;
+  overflow: hidden;
+}
+.fin-section[data-resizable="false"] .fin-section-resize-handle { display:none !important; }
+.fin-section-resize-handle {
+  display: none; position: absolute; z-index: 5;
+  left: 0; right: 0; bottom: -5px; height: 10px;
+  cursor: ns-resize; touch-action: none;
+}
+.fin-section.open .fin-section-resize-handle { display: block; }
+.fin-section-resize-handle:focus-visible { outline: 1px solid rgba(var(--ink-rgb),.32); outline-offset: -2px; }
+body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none !important; }
+.fin-section.resizing .fin-section-body { transition: none; }
+/* Drag-to-reorder highlight */
+.fin-section.drag-over { box-shadow: 0 -2px 0 rgba(var(--ink-rgb),.2); }
+.fin-section.docked-top, .fin-section.docked-bottom { background:rgba(var(--surface-rgb),.22); }
+/* Generic slot for any registry-mounted plugin's header controls (see
+   sidebar-registry.js's headerExtra wrapping) — right-aligned, hidden
+   until the section is open. Core only needs this one selector; it never
+   needs to know a plugin's own class names. */
+.fin-section-header-extra {
+  display: flex; align-items: center; margin-left: auto;
+  opacity: 0; pointer-events: none;
+  transition: opacity .15s; flex-shrink: 0;
+}
+.fin-section.open .fin-section-header-extra { opacity: 1; pointer-events: all; }
+/* hide header controls when collapsed, reveal when open (static sections'
+   own header markup — .fin-section-header-extra above covers registry
+   plugins). The .lib-header-actions half of this used to live here too —
+   real core→plugin coupling — moved to the audio plugin's panel.css. */
+.fin-section-label .sd-action {
+  opacity: 0; pointer-events: none;
+  transition: opacity .15s; flex-shrink: 0;
+}
+.fin-section.open .fin-section-label .sd-action {
+  opacity: 1; pointer-events: all;
+}
+
+
+/* ── Settings ── modal overlay, distinct from the sidebar drawer above.
+   Sidebar = always-there widgets; this = a proper settings app (left nav +
+   content pane), opened on demand via the ctx menu's "Settings" item.
+   z-index sits above both context menus (1150) and #settings-drawer (1100) so
+   it can be reached regardless of what else is open.
+   Every page is owned by Atmos Core. Plugins and Services are lifecycle
+   controls populated from extension discovery metadata. ───────────────── */
+#settings-menu {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity .18s ease;
+}
+#settings-menu.open { opacity: 1; pointer-events: all; }
+#settings-menu-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
+#settings-menu-panel {
+  position: relative;
+  width: min(780px, 92vw); height: min(560px, 84vh);
+  display: flex; flex-direction: row;
+  background: rgba(var(--surface-rgb),var(--shell-opacity, .88));
+  border: 1px solid rgba(var(--ink-rgb),.09);
+  border-radius: 14px;
+  backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 1px 0 rgba(var(--ink-rgb),.05) inset;
+  transform: scale(.97); transition: transform .18s ease;
+  overflow: hidden;
+}
+#settings-menu.open #settings-menu-panel { transform: scale(1); }
+
+/* ── Left nav — the Atmos Control Centre pages. ───────────────────────── */
+.sm-sidebar {
+  width: 196px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  padding: 16px 8px;
+  background: rgba(var(--ink-rgb),.015);
+  border-right: 1px solid rgba(var(--ink-rgb),.07);
+  overflow-y: auto;
+}
+.sm-sidebar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 6px 16px 10px;
+}
+.sm-sidebar-title {
+  font-size: .78rem; font-weight: 600; color: rgba(var(--ink-rgb),.85);
+  letter-spacing: .01em;
+}
+.sm-nav { display: flex; flex-direction: column; gap: 1px; }
+.sm-nav-group-label {
+  font-size: .55rem; letter-spacing: .12em; text-transform: uppercase;
+  color: rgba(var(--ink-rgb),.2); padding: 12px 10px 5px;
+}
+.sm-nav-group:first-child .sm-nav-group-label { padding-top: 0; }
+.sm-nav-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 6px;
+  border: 0; background: none; box-sizing: border-box;
+  width: 100%; font-family: inherit; text-align: left;
+  font-size: .72rem; color: rgba(var(--ink-rgb),.5);
+  cursor: pointer; user-select: none;
+  transition: background .12s, color .12s;
+}
+.sm-nav-item:hover { background: rgba(var(--ink-rgb),.05); color: rgba(var(--ink-rgb),.85); }
+.sm-nav-item.active { background: rgba(var(--ink-rgb),.09); color: rgb(var(--ink-rgb)); }
+.sm-nav-icon {
+  width: 15px; height: 15px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  opacity: .55;
+}
+.sm-nav-item.active .sm-nav-icon { opacity: .9; }
+.sm-nav-icon svg { width: 14px; height: 14px; }
+.sm-nav-count {
+  margin-left: auto; font-size: .58rem; color: rgba(var(--ink-rgb),.25);
+  font-variant-numeric: tabular-nums;
+}
+/* Appearance + About are compact utility buttons pinned above the
+   full-width page list, side by side (About first, Appearance after). */
+.sm-nav-top-row { display: flex; flex-direction: row; gap: 4px; margin-left: 4px; }
+.sm-nav-home {
+  width: 29px; height: 29px; align-self: flex-start;
+  justify-content: center; padding: 0; margin-left: 0;
+}
+.sm-nav-divider { height: 1px; margin: 8px 2px; background: rgba(var(--ink-rgb),.06); }
+
+/* ── Right pane — the active page's content ──────────────────────────── */
+.sm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sm-main-header {
+  flex-shrink: 0; padding: 12px 12px 6px;
+  display: flex; align-items: center;
+}
+/* Home has no search, and the close button now lives in the sidebar —
+   nothing left to show in the header at all. */
+.sm-main-header.sm-no-search { display: none; }
+#settings-menu-close {
+  background: none; border: none; color: rgba(var(--ink-rgb),.4);
+  font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 2px 6px;
+  border-radius: 5px; transition: color .12s, background .12s; flex-shrink: 0;
+}
+#settings-menu-close:hover { color: rgb(var(--ink-rgb)); background: rgba(var(--ink-rgb),.08); }
+/* Uses the same 12px content gutter as the extension list below. */
+.sm-search {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(var(--ink-rgb),.04);
+  border: 1px solid rgba(var(--ink-rgb),.055);
+  border-radius: 7px; padding: 8px 10px;
+  box-sizing: border-box;
+  transition: background .12s, border-color .12s, box-shadow .12s;
+}
+.sm-search:focus-within {
+  background: rgba(var(--ink-rgb),.055);
+  border-color: rgba(129,140,248,.38);
+  box-shadow: 0 0 0 2px rgba(129,140,248,.08);
+}
+.sm-search svg { width: 13px; height: 13px; color: rgba(var(--ink-rgb),.3); flex-shrink: 0; }
+.sm-search input {
+  flex: 1; min-width: 0; width: 100%; padding: 0;
+  background: none; border: none; outline: none;
+  color: rgb(var(--ink-rgb)); font-size: .72rem; font-family: inherit;
+}
+.sm-search input::placeholder { color: rgba(var(--ink-rgb),.25); }
+
+#settings-menu-list { overflow-y: auto; flex: 1; padding: 6px 12px 14px; }
+#settings-menu-empty {
+  padding: 40px 16px; font-size: .7rem; color: rgba(var(--ink-rgb),.3);
+  text-align: center;
+}
+
+/* Rows — compact list rows rather than a floating "box" of cards. */
+.sm-card {
+  border-bottom: 1px solid rgba(var(--ink-rgb),.045);
+  transition: background .12s;
+}
+.sm-card:last-child { border-bottom: none; }
+.sm-card:hover { background: rgba(var(--ink-rgb),.03); }
+.sm-card.open { background: rgba(var(--ink-rgb),.04); }
+.sm-card-main {
+  display: flex; align-items: center; gap: 12px;
+  height: 54px; padding: 0 8px;
+  cursor: pointer; user-select: none;
+}
+.sm-icon {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  background: rgba(var(--ink-rgb),.06);
+  color: rgba(var(--ink-rgb),.55);
+}
+.sm-icon svg { width: 16px; height: 16px; }
+.sm-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sm-card-name {
+  font-size: .76rem; color: rgba(var(--ink-rgb),.8);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sm-card-detail {
+  font-size: .59rem; color: rgba(var(--ink-rgb),.28);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sm-extension-card.disabled .sm-icon,
+.sm-extension-card.disabled .sm-card-name { opacity: .5; }
+.sm-tier-badge { display:inline-block; margin-left:6px; padding:1px 6px; border-radius:8px; font-size:.58rem; font-weight:500; letter-spacing:.04em; vertical-align:1px; color:rgba(var(--ink-rgb),.55); background:rgba(var(--ink-rgb),.07); }
+.sm-tier-badge[data-tier="system"] { color:rgba(var(--ink-rgb),.8); background:rgba(var(--ink-rgb),.14); }
+.sm-tier-badge[data-tier="third-party"] { background:transparent; border:1px solid rgba(var(--ink-rgb),.14); }
+.sm-extension-toolbar {
+  min-height: 38px; padding: 4px 8px 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  color: rgba(var(--ink-rgb),.32); font-size: .65rem; line-height: 1.4;
+}
+.sm-restart-button {
+  flex-shrink: 0; padding: 6px 10px;
+  border: 1px solid rgba(129,140,248,.4); border-radius: 6px;
+  background: rgba(129,140,248,.16); color: rgba(var(--ink-rgb),.82);
+  font: inherit; font-size: .63rem; cursor: pointer;
+}
+.sm-restart-button:hover { background: rgba(129,140,248,.25); color: rgb(var(--ink-rgb)); }
+/* Framed extensions (extension-frame-host.js). The frame inherits the page's
+   color-scheme, so its transparent background shows the shell through. */
+.atmos-extension-frame { display:block; width:100%; height:100%; border:0; background:transparent; }
+/* Glass Core draws under a framed panel ("glass": true, atmos.surface.setGlass). */
+.atmos-frame-glass-host { position:relative; }
+.atmos-frame-glass-host > .atmos-extension-frame { position:relative; z-index:1; }
+.atmos-frame-glass-layer { position:absolute; inset:0; z-index:0; overflow:hidden; pointer-events:none; }
+.atmos-frame-glass { position:absolute; }
+.atmos-frame-glass[data-material="panel"] {
+  background:color-mix(in srgb, #000 calc(var(--panel-opacity, var(--default-panel-opacity, .69)) * 100%), transparent);
+  backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%);
+  -webkit-backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%);
+}
+.atmos-frame-glass[data-material="shell"] {
+  background:rgba(var(--surface-rgb, 18,18,20), var(--shell-opacity, .88));
+  backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
+  -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
+}
+html[data-app-theme="amoled"] .atmos-frame-glass { backdrop-filter:none; -webkit-backdrop-filter:none; }
+/* Drawer panels (panel-drawer.js): a pass-through surface over the full
+   workspace; the drawer and its frame only take pointer events while open. */
+.atmos-drawer-surface { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
+.atmos-drawer { position:absolute; left:0; right:0; bottom:0; height:100%; pointer-events:none; will-change:transform; }
+.atmos-drawer > .atmos-extension-frame { position:absolute; inset:0; pointer-events:none; }
+.atmos-drawer.open > .atmos-extension-frame { pointer-events:auto; }
+/* A frame can't blur what lies behind it (the wallpaper is in this page), so
+   Core draws the glass under the frame: shell glass behind the bar, panel
+   glass behind the visible browser. The frame paints its tints on top. */
+.atmos-drawer-glass { position:absolute; left:0; right:0; pointer-events:none; }
+.atmos-drawer-glass-bar {
+  top:0; height:var(--atmos-drawer-bar-h, 54px);
+  backdrop-filter:blur(var(--shell-blur, 30px)) saturate(220%) brightness(1.08);
+  -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(220%) brightness(1.08);
+}
+.atmos-drawer-glass-body {
+  top:var(--atmos-drawer-bar-h, 54px); height:var(--atmos-drawer-visible-h, 0px);
+  backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px)));
+  -webkit-backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px)));
+}
+.atmos-drawer.open .atmos-drawer-glass-bar { box-shadow:0 -1px 20px rgba(0,0,0,.4), 0 -40px 80px rgba(0,0,0,.6); }
+.atmos-drawer[data-bar-placement="bottom"] .atmos-drawer-glass { display:none; }
+html[data-app-theme="amoled"] .atmos-drawer-glass { backdrop-filter:none; -webkit-backdrop-filter:none; }
+.atmos-drawer-dock-blur {
+  display:none; position:absolute; left:0; right:0; bottom:0; height:var(--atmos-drawer-bar-h, 54px); pointer-events:none;
+  backdrop-filter:blur(var(--shell-blur, 30px)) saturate(220%) brightness(1.08);
+  -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(220%) brightness(1.08);
+}
+.atmos-drawer-surface.dock-open .atmos-drawer-dock-blur { display:block; }
+html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdrop-filter:none; -webkit-backdrop-filter:none; }
+/* Escape once: the bar is outlined and asks for a second Escape. */
+.atmos-drawer-pending { display:none; position:absolute; left:0; right:0; top:0; height:var(--atmos-drawer-bar-h, 54px); outline:1px solid rgba(var(--ink-rgb),.2); outline-offset:-1px; pointer-events:none; z-index:1; }
+.atmos-drawer[data-bar-placement="bottom"] .atmos-drawer-pending { top:auto; bottom:0; }
+.atmos-drawer.pending-close .atmos-drawer-pending { display:block; }
+.atmos-drawer-pending::after {
+  content:attr(data-hint); position:absolute; top:-22px; left:50%; transform:translateX(-50%);
+  font-size:.58rem; letter-spacing:.12em; text-transform:uppercase; color:rgba(var(--ink-rgb),.3); white-space:nowrap;
+}
+.atmos-extension-frame-sidebar, .atmos-extension-frame-settings { height:0; }
+.atmos-extension-icon { display:inline-block; width:16px; height:16px; flex-shrink:0; background:currentColor; -webkit-mask:var(--atmos-extension-icon) center / contain no-repeat; mask:var(--atmos-extension-icon) center / contain no-repeat; }
+.sm-extension-trust { padding: 0 8px 0 50px; }
+.sm-extension-trust:empty { display: none; }
+.sm-permissions { margin: -6px 0 8px; font-size: .62rem; color: rgba(var(--ink-rgb),.4); }
+.sm-permissions summary { cursor: pointer; width: max-content; color: rgba(var(--ink-rgb),.34); }
+.sm-permissions summary:hover { color: rgba(var(--ink-rgb),.6); }
+.sm-permissions .sm-trust-secondary { margin: 2px 0 4px; }
+.sm-permission-list { margin: 6px 0 8px; padding-left: 16px; line-height: 1.55; }
+.sm-permission-new { color: rgba(var(--ink-rgb),.82); }
+.sm-permission-new span { margin-left: 4px; padding: 0 5px; border-radius: 6px; font-size: .55rem; background: rgba(251,191,36,.18); color: rgb(251,191,36); }
+.sm-trust-note { margin: -6px 0 10px; font-size: .64rem; line-height: 1.45; color: rgba(var(--ink-rgb),.5); }
+.sm-trust-alert { color: rgb(248,113,113); }
+.sm-trust-review { padding: 10px 12px; border: 1px solid rgba(var(--ink-rgb),.1); border-radius: 8px; background: rgba(var(--ink-rgb),.03); color: rgba(var(--ink-rgb),.7); }
+.sm-trust-warning { margin: 0 0 10px; padding: 7px 9px; border-radius: 6px; background: rgba(251,191,36,.1); color: rgba(251,191,36,.95); }
+.sm-trust-actions { display: flex; gap: 8px; }
+.sm-trust-secondary {
+  padding: 6px 10px; border: 1px solid rgba(var(--ink-rgb),.14); border-radius: 6px;
+  background: transparent; color: rgba(var(--ink-rgb),.6); font: inherit; font-size: .63rem; cursor: pointer;
+}
+.sm-trust-secondary:hover { color: rgba(var(--ink-rgb),.85); background: rgba(var(--ink-rgb),.05); }
+.sm-trust-error { margin-top: 8px; color: rgb(248,113,113); }
+.sm-card-chevron {
+  width: 8px; height: 8px; flex-shrink: 0;
+  color: rgba(var(--ink-rgb),.2);
+  transition: transform .22s cubic-bezier(.22,1,.36,1), color .12s;
+}
+.sm-card.open .sm-card-chevron { transform: rotate(90deg); color: rgba(var(--ink-rgb),.4); }
+.sm-card.open .sm-card-name { color: rgb(var(--ink-rgb)); }
+.sm-card-body {
+  overflow: hidden; max-height: 0;
+  transition: max-height .28s cubic-bezier(.22,1,.36,1);
+}
+.sm-card.open .sm-card-body { max-height: 500px; }
+.sm-placeholder {
+  padding: 4px 12px 14px 50px; font-size: .68rem; color: rgba(var(--ink-rgb),.32);
+  line-height: 1.5;
+}
+
+/* ── Home ─────────────────────────────────────────────────────────────── */
+/* App info top-left, About in its own small scrollable pane to the right —
+   the two are independent blocks side by side rather than one centered
+   stack, so the poem no longer pushes the app info around as it opens. */
+.sm-home {
+  height: 100%; min-height: 320px;
+  display: flex; flex-direction: row; align-items: flex-start;
+  gap: 28px; padding: 32px;
+}
+.sm-home-info {
+  flex-shrink: 0; width: 260px;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 3px; text-align: left;
+  padding-top: 10px;
+}
+/* Wordmark sits at the top of the app-information column. */
+.sm-home-title { width: 100%; }
+.sm-home-title img { display: block; width: 100%; height: auto; }
+/* Hidden until the <img> above 404s (see its onerror inline in settings-menu.js) */
+.sm-home-title-fallback {
+  display: none;
+  font-size: 1.1rem; font-weight: 700; color: rgb(var(--ink-rgb)); letter-spacing: .02em;
+}
+.sm-home-version {
+  font-size: .68rem; color: rgba(var(--ink-rgb),.32); letter-spacing: .02em;
+}
+/* ── Appearance page ───────────────────────────────────────────────────────
+   Settings → Appearance (settings-menu.js _renderAppearancePage()). Core's
+   sections (appearance.js) and the services that add one (Wallpaper,
+   Location) share these classes, so every row has the same shape: label
+   (and an optional hint under it) on the left, control on the right. */
+.sa-section { padding: 2px 0 10px; }
+.sa-section + .sa-section { border-top: 1px solid rgba(var(--ink-rgb),.07); }
+.sa-heading {
+  font-size: .6rem; letter-spacing: .14em; text-transform: uppercase;
+  color: rgba(var(--ink-rgb),.4); padding: 14px 14px 6px;
+}
+.sa-row {
+  display: grid; grid-template-columns: minmax(120px, 40%) 1fr;
+  align-items: center; gap: 14px; padding: 5px 14px; min-height: 32px;
+}
+.sa-label { font-size: .72rem; color: rgba(var(--ink-rgb),.7); letter-spacing: .01em; min-width: 0; }
+.sa-label small {
+  display: block; margin-top: 1px; font-size: .6rem; letter-spacing: .01em;
+  color: rgba(var(--ink-rgb),.32);
+}
+.sa-control { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.sa-slider { display: flex; align-items: center; gap: 10px; width: 100%; }
+.sa-slider input { flex: 1; min-width: 0; }
+.sa-slider input:disabled { opacity: .35; cursor: default; }
+.sa-slider output {
+  min-width: 38px; text-align: right; font-size: .66rem;
+  color: rgba(var(--ink-rgb),.45); font-variant-numeric: tabular-nums;
+}
+.sa-select {
+  min-width: 0; max-width: 170px; padding: 4px 6px; border-radius: 5px;
+  border: 1px solid rgba(var(--ink-rgb),.12); background: rgba(var(--ink-rgb),.06);
+  color: inherit; font: inherit; font-size: .68rem;
+}
+.sa-btn {
+  padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(var(--ink-rgb),.12);
+  background: rgba(var(--ink-rgb),.06); color: rgba(var(--ink-rgb),.75);
+  font: inherit; font-size: .66rem; line-height: 1.4; cursor: pointer; white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.sa-btn:hover { background: rgba(var(--ink-rgb),.11); color: rgb(var(--ink-rgb)); }
+.sa-btn:disabled { opacity: .4; cursor: default; }
+.sa-btn-icon { width: 24px; padding: 4px 0; text-align: center; }
+.sa-btn[hidden] { display: none; }
+.sa-segmented {
+  display: inline-flex; border: 1px solid rgba(var(--ink-rgb),.12); border-radius: 6px; overflow: hidden;
+}
+.sa-segmented button {
+  background: transparent; border: 0; padding: 4px 11px; cursor: pointer;
+  font: inherit; font-size: .66rem; color: rgba(var(--ink-rgb),.5);
+  transition: background .12s, color .12s;
+}
+.sa-segmented button + button { border-left: 1px solid rgba(var(--ink-rgb),.12); }
+.sa-segmented button:hover { color: rgba(var(--ink-rgb),.85); }
+.sa-segmented button.active { background: rgba(var(--ink-rgb),.13); color: rgb(var(--ink-rgb)); }
+.sa-swatches { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.sa-swatch {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: .64rem; color: rgba(var(--ink-rgb),.5);
+}
+.sa-swatch-dot {
+  position: relative; width: 16px; height: 16px; border-radius: 50%; overflow: hidden;
+  border: 1px solid rgba(var(--ink-rgb),.2); flex-shrink: 0;
+}
+.sa-swatch-dot input[type=color] {
+  position: absolute; inset: -8px; width: 32px; height: 32px;
+  opacity: 0; border: 0; padding: 0; cursor: pointer;
+}
+.sa-swatch:hover .sa-swatch-dot { box-shadow: 0 0 0 2px rgba(var(--ink-rgb),.18); }
+.sa-inline-toggle { display: flex; align-items: center; gap: 8px; font-size: .64rem; color: rgba(var(--ink-rgb),.45); cursor: pointer; }
+.sa-panel-overrides:not(:empty) { margin-top: 4px; border-top: 1px dashed rgba(var(--ink-rgb),.07); padding-top: 4px; }
+/* A panel's own sliders, under its row while Custom is on. */
+.sa-nested { margin: 0 14px 4px; padding-left: 10px; border-left: 1px solid rgba(var(--ink-rgb),.1); }
+.sa-nested .sa-row { padding-left: 4px; padding-right: 0; min-height: 28px; }
+.sa-nested[hidden] { display: none; }
+.sa-status { font-size: .64rem; color: rgba(var(--ink-rgb),.4); }
+.sa-status.ok { color: var(--color-positive, #34d399); }
+.sa-status.err { color: var(--color-negative, #f87171); }
+/* A collapsible group of rows (Wallpaper's image adjustments). */
+.sa-details > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px; font-size: .72rem; color: rgba(var(--ink-rgb),.7);
+}
+.sa-details > summary::-webkit-details-marker { display: none; }
+.sa-details > summary::after {
+  content: ''; margin-left: auto; width: 6px; height: 6px;
+  border-right: 1.5px solid rgba(var(--ink-rgb),.45); border-bottom: 1.5px solid rgba(var(--ink-rgb),.45);
+  transform: rotate(45deg); transition: transform .15s;
+}
+.sa-details[open] > summary::after { transform: rotate(225deg); }
+.sa-details > summary small { font-size: .6rem; color: rgba(var(--ink-rgb),.32); }
+.sa-details > summary:hover { color: rgb(var(--ink-rgb)); }
+
+/* No align-self override -- .sm-home's own align-items:flex-start already
+   puts this pane at the top of the panel, alongside the info column on the
+   left. (Previously align-self:flex-end sank just this pane to the bottom
+   while the info column stayed at top; moved back to top-right.) */
+.sm-about-logo {
+  flex: 1; min-width: 0; height: 270px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.sm-about-logo img {
+  display: block; width: min(100%,270px); height: min(100%,270px);
+  object-fit: contain; opacity: .86; cursor: pointer;
+  transform: translate(10px, -40px);
+  /* No drop-shadow here anymore -- at this blur/spread (32px, .32 alpha)
+     it rendered as a soft dark smudge under/around the mascot rather than
+     a crisp shadow, which is what actually looked like a "background" on
+     an otherwise transparent PNG. The source image itself has a clean
+     alpha channel (verified: ~75% fully transparent, ~23% fully opaque,
+     ~1.5% ordinary antialiased edge pixels) -- nothing to fix there. */
+}
+
+/* ── First-run onboarding ─────────────────────────────────────────────── */
+.sm-onboarding { max-width:620px; padding:34px 38px; }
+.sm-onboarding-kicker { margin-bottom:8px; color:rgba(var(--ink-rgb),.3); font-size:.6rem; letter-spacing:.18em; text-transform:uppercase; }
+.sm-onboarding h1 { margin:0; color:rgba(var(--ink-rgb),.92); font-size:1.55rem; font-weight:400; letter-spacing:.025em; }
+.sm-onboarding > p { max-width:500px; margin:10px 0 24px; color:rgba(var(--ink-rgb),.43); font-size:.74rem; line-height:1.65; }
+.sm-onboarding-steps { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; overflow:hidden; border:1px solid rgba(var(--ink-rgb),.07); border-radius:10px; background:rgba(var(--ink-rgb),.06); }
+.sm-onboarding-steps > div { min-height:108px; padding:14px; background:rgba(var(--surface-rgb),.55); display:flex; flex-direction:column; align-items:flex-start; }
+.sm-onboarding-steps span { width:20px; height:20px; margin-bottom:12px; display:grid; place-items:center; border:1px solid rgba(var(--ink-rgb),.12); border-radius:50%; color:rgba(var(--ink-rgb),.4); font-size:.58rem; }
+.sm-onboarding-steps strong { color:rgba(var(--ink-rgb),.7); font-size:.7rem; font-weight:500; }
+.sm-onboarding-steps small { margin-top:4px; color:rgba(var(--ink-rgb),.28); font-size:.62rem; line-height:1.45; }
+.sm-onboarding-actions { display:flex; gap:8px; margin-top:17px; }
+.sm-onboarding-actions button { padding:8px 12px; border:1px solid rgba(var(--ink-rgb),.12); border-radius:7px; background:rgba(var(--ink-rgb),.08); color:rgba(var(--ink-rgb),.72); font:inherit; font-size:.66rem; cursor:pointer; transition:background .12s,color .12s,border-color .12s; }
+.sm-onboarding-actions button:hover { background:rgba(var(--ink-rgb),.13); border-color:rgba(var(--ink-rgb),.19); color:rgb(var(--ink-rgb)); }
+.sm-onboarding-actions button.secondary { background:transparent; color:rgba(var(--ink-rgb),.4); }
+
+/* ── Sidebar page (widget enable/disable list) ───────────────────────────
+   Reuses .sm-card/.sm-icon/.sm-card-text from the plugin list below — same
+   row shell, just with a toggle switch where the expand-chevron would be
+   (there's no body here to expand). See settings-menu.js's
+   _renderSidebarPage(). */
+.sm-sidebar-page-hint {
+  font-size: .68rem; color: rgba(var(--ink-rgb),.32);
+  padding: 4px 8px 14px;
+}
+.sm-toggle {
+  position: relative;
+  width: 34px; height: 20px; flex-shrink: 0;
+}
+.sm-toggle input {
+  position: absolute; inset: 0; margin: 0;
+  opacity: 0; cursor: pointer; z-index: 1;
+}
+.sm-toggle-track {
+  position: absolute; inset: 0;
+  border-radius: 999px;
+  background: var(--color-neutral, #9ca3af);
+  transition: background .15s ease;
+}
+.sm-toggle-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: rgb(var(--ink-rgb));
+  box-shadow: 0 1px 2px rgba(0,0,0,.4);
+  transition: transform .15s cubic-bezier(.22,1,.36,1);
+}
+/* Toggles use Core's shared semantic palette. */
+.sm-toggle input:checked + .sm-toggle-track { background: var(--color-positive, #34d399); }
+.sm-toggle input:checked + .sm-toggle-track .sm-toggle-thumb { transform: translateX(14px); }
+.sm-toggle input:focus-visible + .sm-toggle-track { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-positive, #34d399) 50%, transparent); }
+
+/* ── Panels page (plugin workspace switcher) ─────────────────────────────
+   Reuses .sm-card/.sm-icon/.sm-card-text/.sm-card-body — same row shell
+   as the Sidebar page above, but a plugin's "open" card body doubles as
+   the row's selected state instead of independent per-row content (see
+   settings-menu.js's _renderPanelsPage()). .sm-radio stands in for
+   .sm-toggle since this is one choice among plugins, not N independent
+   on/off switches. */
+.sm-radio {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  position: relative;
+  border: 1.5px solid rgba(var(--ink-rgb),.25);
+  transition: border-color .15s ease;
+}
+.sm-radio.checked { border-color: #818cf8; }
+.sm-radio.checked::after {
+  content: ''; position: absolute; inset: 3px;
+  border-radius: 50%; background: #818cf8;
+}
+.sm-panel-layouts { display:flex; flex-wrap:wrap; gap:6px; padding:10px 0 14px; }
+.sm-panel-section { display:grid; grid-template-columns:minmax(90px,.7fr) minmax(150px,1fr); align-items:center; gap:12px; padding:10px 12px; border:1px solid rgba(var(--ink-rgb),.07); border-radius:8px; background:rgba(var(--ink-rgb),.025); margin-bottom:7px; }
+.sm-panel-section-name { font-size:.66rem; color:rgba(var(--ink-rgb),.5); letter-spacing:.08em; text-transform:uppercase; }
+.sm-panel-select { width:100%; min-width:0; background:rgb(var(--surface-rgb)); border:1px solid rgba(var(--ink-rgb),.12); border-radius:6px; color:rgba(var(--ink-rgb),.82); padding:7px 9px; font:inherit; font-size:.7rem; outline:none; }
+.sm-panel-select:focus { border-color:rgba(129,140,248,.65); }
+
+/* ── Settings panel design system ──────────────────────────────────────── */
+/* Universal data row */
+.sd-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px;
+  border-bottom: 1px solid rgba(var(--ink-rgb),.04);
+  min-height: 32px;
+}
+.sd-row:last-child { border-bottom: none; }
+.sd-label { font-size: .72rem; color: rgba(var(--ink-rgb),.65); flex: 1; letter-spacing: .01em; }
+.sd-sublabel { font-size: .6rem; color: rgba(var(--ink-rgb),.25); letter-spacing: .03em; flex: 1; }
+.sd-val { font-size: .68rem; color: rgba(var(--ink-rgb),.3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Micro divider — groups related rows inside a merged section without full accordion chrome */
+.sd-subhead {
+  font-size: .56rem; letter-spacing: .12em; text-transform: uppercase;
+  color: rgba(var(--ink-rgb),.2); padding: 8px 14px 3px;
+}
+
+/* Single-button cycle control — click to advance through modes */
+.sd-pill {
+  background: rgba(var(--ink-rgb),.05); border: 1px solid rgba(var(--ink-rgb),.09);
+  border-radius: 4px; color: rgba(var(--ink-rgb),.32); font-size: .58rem;
+  letter-spacing: .07em; text-transform: uppercase; padding: 3px 8px;
+  cursor: pointer; font-family: inherit; transition: background .1s, color .1s, border-color .1s;
+  white-space: nowrap; line-height: 1.4;
+}
+.sd-pill:hover { background: rgba(var(--ink-rgb),.09); color: rgba(var(--ink-rgb),.7); border-color: rgba(var(--ink-rgb),.16); }
+.sd-pill.active { background: rgba(var(--ink-rgb),.13); border-color: rgba(var(--ink-rgb),.26); color: rgb(var(--ink-rgb)); }
+
+/* Wrapping row of sd-pill options */
+.sd-pill-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 10px; border-bottom: 1px solid rgba(var(--ink-rgb),.04); }
+.sd-pill-row .sd-pill { font-size: .6rem; padding: 4px 9px; }
+
+
+.sd-cycle-btn {
+  background: none; border: none; cursor: pointer; padding: 2px 4px;
+  font-size: .9rem; line-height: 1; font-family: inherit;
+  opacity: .75; transition: opacity .12s, transform .12s; flex-shrink: 0;
+}
+.sd-cycle-btn:hover { opacity: 1; transform: scale(1.1); }
+
+/* Slim slider row */
+.sd-slider-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 14px; min-height: 28px;
+  border-bottom: 1px solid rgba(var(--ink-rgb),.04);
+}
+.sd-slider-row:last-child { border-bottom: none; }
+.sd-slider-label { font-size: .65rem; color: rgba(var(--ink-rgb),.35); min-width: 56px; flex-shrink: 0; letter-spacing: .01em; }
+.sd-slider-val { font-size: .63rem; color: rgba(var(--ink-rgb),.28); min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+
+/* Colour swatch dots */
+.sd-color-dots { display: flex; gap: 5px; align-items: center; flex-shrink: 0; }
+.sd-color-dot {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1px solid rgba(var(--ink-rgb),.18); cursor: pointer;
+  flex-shrink: 0; overflow: hidden;
+  transition: transform .1s, box-shadow .1s;
+}
+.sd-color-dot:hover { transform: scale(1.15); box-shadow: 0 0 0 2px rgba(var(--ink-rgb),.2); }
+.sd-color-dot input[type=color] {
+  width: 200%; height: 200%; margin: -50%; opacity: 0; cursor: pointer;
+  -webkit-appearance: none; border: none; padding: 0;
+}
+
+/* Gradient preview bar */
+.sd-grad-bar {
+  height: 3px; border-radius: 2px; flex: 1;
+  border: 1px solid rgba(var(--ink-rgb),.08); min-width: 0;
+}
+
+/* Inline text action link (replaces full-width buttons) */
+.sd-action {
+  background: none; border: none; cursor: pointer; padding: 0;
+  font-size: .62rem; color: rgba(var(--ink-rgb),.3); letter-spacing: .06em;
+  text-transform: uppercase; font-family: inherit;
+  transition: color .12s; white-space: nowrap; flex-shrink: 0;
+}
+.sd-action:hover { color: rgba(var(--ink-rgb),.75); }
+
+/* Small toggle — more subordinate than vis-toggle */
+.sd-toggle { position: relative; width: 26px; height: 14px; flex-shrink: 0; cursor: pointer; }
+.sd-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.sd-ttrack { position: absolute; inset: 0; border-radius: 7px; background: var(--color-neutral, #9ca3af); border: 1px solid var(--color-neutral, #9ca3af); transition: background .2s, border-color .2s; }
+.sd-tthumb { position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: rgba(var(--ink-rgb),.35); transition: transform .2s, background .2s; }
+.sd-toggle input:checked ~ .sd-ttrack { background: var(--color-positive, #34d399); border-color: var(--color-positive, #34d399); }
+.sd-toggle input:checked ~ .sd-tthumb { transform: translateX(12px); background: rgb(var(--ink-rgb)); }
+
+
+
+/* drawer-nav tabs removed — single accordion panel */
+.ctx-lbl { padding:8px 12px 4px; font-size:.6rem; letter-spacing:.15em; text-transform:uppercase; color:rgba(var(--ink-rgb),.3); font-weight:600; }
+.ctx-sep { height:1px; background:rgba(var(--ink-rgb),.08); margin:4px 0; }
+.ctx-item { position:relative; display:flex; align-items:center; gap:10px; padding:7px 12px; border-radius:6px; font-size:.78rem; color:rgba(var(--ink-rgb),.85); cursor:pointer; transition:background .08s; letter-spacing:.02em; }
+.ctx-item:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
+.ctx-item:hover > .ctx-sub { opacity:1; pointer-events:all; transform:scale(1); }
+.ctx-ico { width:16px; height:16px; opacity:.6; flex-shrink:0; }
+.ctx-lbl2 { flex:1; }
+/* Non-interactive info row inside a menu (an "Artist · 4 tracks" line, a
+   track title header, ...) — generalized from audio-player's own
+   .alb-ctx-meta, which every migrated menu now uses instead of redefining. */
+.ctx-item-meta { opacity:.5; cursor:default; }
+/* A row of small buttons (a quick-reaction row, say): type 'buttons'. */
+.ctx-buttons { display:flex; flex-wrap:wrap; gap:2px; padding:2px 4px; }
+.ctx-button { display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:28px; padding:0 4px; border:none; border-radius:6px; background:none; color:rgba(var(--ink-rgb),.6); font:inherit; font-size:16px; line-height:1; cursor:pointer; }
+.ctx-button:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
+.ctx-button svg { width:16px; height:16px; }
+.ctx-item-meta:hover { background:transparent; color:rgba(var(--ink-rgb),.5); }
+.ctx-control-row { cursor:default; }
+.ctx-control-row input, .ctx-control-row select { font:inherit; color:inherit; }
+.ctx-control-toggle { appearance:none; -webkit-appearance:none; position:relative; width:30px; height:16px; margin:0; flex:0 0 auto; border:1px solid rgba(var(--ink-rgb),.16); border-radius:999px; background:var(--color-neutral, #9ca3af); cursor:pointer; transition:background .16s ease,border-color .16s ease; }
+.ctx-control-toggle::after { content:''; position:absolute; top:2px; left:2px; width:10px; height:10px; border-radius:50%; background:rgb(var(--ink-rgb)); opacity:.72; transition:transform .16s ease,opacity .16s ease; }
+.ctx-control-toggle:checked { background:var(--color-positive, #34d399); border-color:var(--color-positive, #34d399); }
+.ctx-control-toggle:checked::after { transform:translateX(14px); opacity:1; }
+.ctx-control-toggle:focus-visible { outline:2px solid var(--color-positive, #34d399); outline-offset:2px; }
+.ctx-control-row input[type="range"] { appearance:none; -webkit-appearance:none; width:92px; min-width:72px; height:14px; margin:0; padding:0; background:transparent; cursor:pointer; accent-color:var(--color-positive, #34d399); }
+.ctx-control-row input[type="range"]::-webkit-slider-runnable-track { height:3px; border-radius:999px; background:rgba(var(--ink-rgb),.18); }
+.ctx-control-row input[type="range"]::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:12px; height:12px; margin-top:-4.5px; border:0; border-radius:50%; background:var(--color-positive, #34d399); box-shadow:0 0 0 2px rgba(var(--surface-rgb),.75); }
+.ctx-control-row input[type="range"]::-moz-range-track { height:3px; border-radius:999px; background:rgba(var(--ink-rgb),.18); }
+.ctx-control-row input[type="range"]::-moz-range-thumb { width:12px; height:12px; border:0; border-radius:50%; background:var(--color-positive, #34d399); }
+.ctx-control-value { min-width:40px; text-align:right; font-size:.68rem; color:rgba(var(--ink-rgb),.55); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.ctx-control-number { display:flex; align-items:center; justify-content:flex-end; gap:4px; color:rgba(var(--ink-rgb),.5); font-size:.68rem; }
+.ctx-control-number input { width:58px; box-sizing:border-box; padding:3px 5px; border:1px solid rgba(var(--ink-rgb),.16); border-radius:4px; background:rgba(var(--ink-rgb),.06); text-align:right; font-variant-numeric:tabular-nums; }
+.ctx-control-number input:focus { outline:1px solid var(--color-positive, #34d399); border-color:var(--color-positive, #34d399); }
+.ctx-control-colors { display:flex; align-items:center; justify-content:flex-end; gap:5px; }
+.ctx-control-colors input[type="color"] { appearance:none; -webkit-appearance:none; width:25px; height:18px; padding:0; border:1px solid rgba(var(--ink-rgb),.18); border-radius:4px; background:transparent; cursor:pointer; overflow:hidden; }
+.ctx-control-colors input[type="color"]::-webkit-color-swatch-wrapper { padding:0; }
+.ctx-control-colors input[type="color"]::-webkit-color-swatch { border:0; }
+.ctx-control-colors input[type="color"]::-moz-color-swatch { border:0; }
+.ctx-val { font-size:.7rem; color:rgba(var(--ink-rgb),.4); white-space:nowrap; }
+.ctx-arr { font-size:.6rem; opacity:.4; }
+.ctx-sub { position:absolute; left:calc(100% + 4px); top:-5px; min-width:180px; background:rgba(var(--surface-rgb),var(--shell-opacity, .88)); border:1px solid rgba(var(--ink-rgb),.1); border-radius:10px; padding:5px; backdrop-filter:blur(var(--shell-blur, 30px)); box-shadow:0 8px 32px rgba(0,0,0,.7); opacity:0; pointer-events:none; transform:scale(0.96); transform-origin:top left; transition:opacity .15s ease .08s, transform .15s ease .08s; }
+.ctx-item:hover > .ctx-sub { opacity:1; pointer-events:all; transform:scale(1); transition:opacity .1s ease, transform .1s ease; }
+.ctx-sub::before { content:''; position:absolute; left:-12px; top:0; width:12px; height:100%; }
+.ctx-sub.flip { left:auto; right:calc(100% + 4px); transform-origin:top right; }
+.ctx-sub.flip::before { left:auto; right:-12px; }
+.ctx-si { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:6px; font-size:.78rem; color:rgba(var(--ink-rgb),.75); cursor:pointer; transition:background .08s; }
+.ctx-si:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
+.ctx-si.on { color:rgb(var(--ink-rgb)); }
+.ctx-si .ck { width:14px; font-size:.75rem; color:rgba(var(--ink-rgb),.5); flex-shrink:0; }
+.ctx-si.on .ck { color:rgb(var(--ink-rgb)); }
+.color-swatch { width:28px; height:10px; border-radius:3px; flex-shrink:0; border:1px solid rgba(var(--ink-rgb),0.14); display:inline-block; }
+
+.ctx-acc { display:flex; align-items:center; gap:10px; padding:7px 12px; border-radius:6px; font-size:.78rem; color:rgba(var(--ink-rgb),.85); cursor:pointer; transition:background .08s; letter-spacing:.02em; user-select:none; }
+.ctx-acc:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
+.ctx-acc .ctx-chevron { font-size:.55rem; opacity:.35; margin-left:auto; transition:transform .25s ease; display:inline-block; }
+.ctx-acc.open .ctx-chevron { transform:rotate(180deg); }
+.ctx-panel { overflow:hidden; max-height:0; opacity:0; transition:max-height .35s cubic-bezier(0.22,1,0.36,1), opacity .2s ease; }
+.ctx-panel.open { max-height:800px; opacity:1; }
+.vis-row { display:flex; align-items:center; justify-content:space-between; padding:5px 12px 5px 14px; gap:12px; }
+.vis-label { font-size:.74rem; color:rgba(var(--ink-rgb),.65); letter-spacing:.02em; }
+.vis-toggle { position:relative; width:30px; height:16px; flex-shrink:0; cursor:pointer; }
+.vis-toggle input { opacity:0; width:0; height:0; position:absolute; }
+.vis-track { position:absolute; inset:0; border-radius:8px; background:rgba(var(--ink-rgb),.12); border:1px solid rgba(var(--ink-rgb),.12); transition:background .2s, border-color .2s; }
+.vis-thumb { position:absolute; top:2px; left:2px; width:10px; height:10px; border-radius:50%; background:rgba(var(--ink-rgb),.4); transition:transform .2s, background .2s; }
+.vis-toggle input:checked ~ .vis-track { background:rgba(var(--ink-rgb),.22); border-color:rgba(var(--ink-rgb),.3); }
+.vis-toggle input:checked ~ .vis-thumb { transform:translateX(14px); background:rgb(var(--ink-rgb)); }
+.vis-panel { padding:4px 0 6px; }
+.vis-subheading { font-size:.58rem; letter-spacing:.14em; text-transform:uppercase; color:rgba(var(--ink-rgb),.25); font-weight:600; padding:6px 14px 2px; }
+
+
+
+
+/* AMOLED keeps the workspace black even when a wallpaper or transparent
+   window is configured. Theme switching restores those preferences. */
+html[data-app-theme="amoled"] body { background:#000 !important; }
+html[data-app-theme="amoled"] [data-atmos-surface-layer="workspace-background"],
+html[data-app-theme="amoled"] #boot-splash-bg { display:none !important; }
+html[data-app-theme="amoled"] #settings-drawer,
+html[data-app-theme="amoled"] #settings-menu-panel,
+html[data-app-theme="amoled"] .ctx-menu-surface,
+html[data-app-theme="amoled"] .ctx-sub,
+html[data-app-theme="amoled"] .panel-window-titlebar,
+html[data-app-theme="amoled"] #media-fullscreen .panel-section,
+html[data-app-theme="amoled"] .sm-sidebar,
+html[data-app-theme="amoled"] .sm-onboarding-steps > div {
+  background:#000;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+html[data-app-theme="amoled"] #settings-menu {
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+</style>
+
+<body>
+<div id="boot-splash">
+  <div id="boot-splash-bg"></div>
+  <img src="assets/Rev2.png" alt="Atmos mascot" id="boot-splash-mascot">
+  <div id="boot-splash-status"></div>
+  <div id="boot-splash-bar-track"><div id="boot-splash-bar-fill"></div></div>
+</div>
+<script>
+(function () {
+  var splash = document.getElementById('boot-splash');
+  var mascot = document.getElementById('boot-splash-mascot');
+  var statusEl = document.getElementById('boot-splash-status');
+  var barFill = document.getElementById('boot-splash-bar-fill');
+  if (!splash || !mascot) return;
+
+  // Same press/release "boop" as the About page mascot.
+  var restSrc = 'assets/Rev2.png';
+  var clickSrc = 'assets/RevClickTSP.png';
+  var press = function () { mascot.src = clickSrc; };
+  var release = function () { mascot.src = restSrc; };
+  mascot.addEventListener('mousedown', press);
+  mascot.addEventListener('mouseup', release);
+  mascot.addEventListener('mouseleave', release);
+  mascot.addEventListener('touchstart', press, { passive: true });
+  mascot.addEventListener('touchend', release);
+  mascot.addEventListener('touchcancel', release);
+
+  // The splash stays up until app.js reports that startup has finished,
+  // but never less than MIN_DISPLAY_MS (no flash on a fast start) and never
+  // more than MAX_DISPLAY_MS (a slow network boot hook or a failed start
+  // still reveals the app).
+  var MIN_DISPLAY_MS = 900;
+  var MAX_DISPLAY_MS = 5000;
+  var shownAt = Date.now();
+
+  // A big pool of boot-sequence flavour text -- a handful get picked at
+  // random each launch (see pickRandomMessages below) so it doesn't say the
+  // same thing on every startup.
+  var BOOT_MESSAGES = [
+    // Rev boot sequence
+    'Waking up Rev...',
+    'Rev has been located. He was hiding.',
+    'Putting the leaves back on...',
+    'Untangling antlers...',
+    "Making sure Rev hasn't eaten the config files...",
+    'Rev searched the runtime for his purpose and found a config file named purpose_final_final_v7.',
+    'Rev attempted to organise the modules. The modules organised Rev instead.',
+    'Rev discovered a circular dependency and called it "a friendship with commitment issues."',
+    'Rev inspected the dependency graph and found a small ecosystem of mistakes wearing business attire.',
+    'Rev opened the documentation. The documentation closed itself.',
+    // Creature diagnostics
+    "Rev's antlers entered a philosophical disagreement about which direction they were pointing.",
+    'Rev replaced his missing leaf and briefly achieved inner peace.',
+    "Rev's cloak was searched for suspicious activity. The cloak contained three plugins and an unresolved existential question.",
+    'Rev was asked what was inside the cloak. Rev replied "mostly weather."',
+    // Developer goblin energy
+    'Compiling questionable decisions...',
+    'Turning it off and on again...',
+    'Searching for missing semicolons...',
+    'The garbage collector was negotiated with. It requested a better work-life balance.',
+    'Rev entered goblin mode and created an abstraction for the abstraction that was supposed to prevent abstractions.',
+    'The dependency tree was inspected. It had become less of a tree and more of an ancient forest with unresolved issues.',
+    'Rev attempted to remove technical debt. Technical debt claimed emotional attachment.',
+    'Rev found a memory leak and gave it a tiny bucket.',
+    // Memory
+    'Rev checked memory usage and discovered the application had built itself a small cottage inside the RAM.',
+    'RAM was questioned about its behaviour. RAM responded with 600MB of silence.',
+    'Rev released unused memory into the wild. It returned three days later with friends.',
+    'Rev asked Chrome to stop eating the RAM. Chrome pretended not to hear him.',
+    'Rev discovered a forgotten cache entry containing memories from a previous lifetime.',
+    // Atmos
+    'Breathing life into the environment...',
+    'Calibrating the vibes...',
+    'Stabilising the ecosystem...',
+    'Warming up the glass panels...',
+    'Rev is actually working. Suspicious.',
+    'Rev found a button. This is concerning.',
+    'Atmos inhaled. The pixels rearranged themselves into a slightly more confident version of reality.',
+    'The glass panels were warmed until they developed opinions.',
+    'Rev calibrated the atmosphere and accidentally improved the weather.',
+    'The ecosystem achieved balance, then immediately requested another feature.',
+    'Rev adjusted the vibes. The vibes adjusted back.',
+    'Atmos opened a window into nowhere and found another window already open.'
+  ];
+
+  function pickRandomMessages(count) {
+    var pool = BOOT_MESSAGES.slice();
+    var picked = [];
+    for (var i = 0; i < count && pool.length; i++) {
+      var idx = Math.floor(Math.random() * pool.length);
+      picked.push(pool[idx]);
+      pool.splice(idx, 1);
+    }
+    return picked;
+  }
+
+  if (statusEl) {
+    statusEl.textContent = pickRandomMessages(1)[0];
+    requestAnimationFrame(function () { statusEl.classList.add('boot-splash-status-visible'); });
+  }
+
+  // Real progress isn't known, so ease towards 90% over the longest wait and
+  // complete the bar once startup reports in.
+  if (barFill) {
+    requestAnimationFrame(function () {
+      barFill.style.transitionTimingFunction = 'cubic-bezier(.2,.7,.3,1)';
+      barFill.style.transitionDuration = MAX_DISPLAY_MS + 'ms';
+      barFill.style.width = '90%';
+    });
+  }
+
+  // Pull the user's actual custom wallpaper straight out of the background
+  // plugin's asset store (same IndexedDB db "samsara_db" / object store
+  // "assets" / key "background:wallpaper" that atmos-core/persist.js's
+  // loadAsset() reads) and show it, heavily dimmed, behind the mascot. If
+  // nothing's saved there yet (or the store isn't reachable this early),
+  // this silently no-ops and the plain theme surface color stays as-is.
+  var bgLayer = document.getElementById('boot-splash-bg');
+  if (bgLayer && window.indexedDB) {
+    try {
+      var dbRequest = indexedDB.open('samsara_db', 1);
+      dbRequest.onupgradeneeded = function (event) {
+        if (!event.target.result.objectStoreNames.contains('assets')) {
+          event.target.result.createObjectStore('assets');
+        }
+      };
+      dbRequest.onsuccess = function (event) {
+        var db = event.target.result;
+        try {
+          var getRequest = db.transaction('assets', 'readonly').objectStore('assets').get('background:wallpaper');
+          getRequest.onsuccess = function (getEvent) {
+            var blob = getEvent.target.result;
+            if (!blob) return;
+            try {
+              var wallpaperUrl = URL.createObjectURL(blob);
+              bgLayer.style.backgroundImage = 'url("' + wallpaperUrl + '")';
+              bgLayer.classList.add('boot-splash-bg-visible');
+              splash.addEventListener('atmos:splash-removed', function () {
+                URL.revokeObjectURL(wallpaperUrl);
+              }, { once: true });
+            } catch (e) { /* leave the theme surface color */ }
+          };
+        } catch (e) { /* leave the theme surface color */ }
+      };
+    } catch (e) { /* leave the theme surface color */ }
+  }
+
+  var hidden = false;
+  function hideSplash() {
+    if (hidden) return;
+    hidden = true;
+    if (barFill) {
+      barFill.style.transitionTimingFunction = 'ease-out';
+      barFill.style.transitionDuration = '200ms';
+      barFill.style.width = '100%';
+    }
+    setTimeout(function () {
+      splash.classList.add('boot-splash-hide');
+      // Child transitions bubble too; only the splash's own fade counts.
+      splash.addEventListener('transitionend', function onEnd(event) {
+        if (event.target !== splash) return;
+        splash.removeEventListener('transitionend', onEnd);
+        splash.dispatchEvent(new Event('atmos:splash-removed'));
+        splash.remove();
+      });
+    }, 200);
+  }
+  function onBootComplete() {
+    setTimeout(hideSplash, Math.max(0, MIN_DISPLAY_MS - (Date.now() - shownAt)));
+  }
+  if (window.__atmosBootComplete) onBootComplete();
+  else window.addEventListener('atmos:boot-complete', onBootComplete, { once: true });
+  setTimeout(hideSplash, MAX_DISPLAY_MS);
+})();
+</script>
+<div id="titlebar">
+  <div class="win-controls">
+    <button class="win-btn" id="win-fullscreen" title="Enter borderless fullscreen" aria-label="Enter borderless fullscreen" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 5V1.5H5M11 1.5h3.5V5M14.5 11v3.5H11M5 14.5H1.5V11"/></svg></button>
+    <button class="win-btn" id="win-min" title="Minimise">&#8212;</button>
+    <button class="win-btn" id="win-max" title="Maximise / Restore">&#9723;</button>
+    <button class="win-btn" id="win-close" title="Close">&#x2715;</button>
+  </div>
+</div>
+<div id="media-fullscreen" class="panel-host-empty" data-panel-layout="single">
+  <section id="panel-primary" class="panel-section" data-panel-section="main">
+    <div id="panel-content" class="panel-section-content"></div>
+  </section>
+</div>
+
+<div id="ctx-menu" class="ctx-menu-surface">
+  <div id="ctx-extension-items"></div>
+
+  <div class="ctx-item" id="acc-sidebar">
+    <svg class="ctx-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18" stroke-linecap="round"/></svg>
+    <span class="ctx-lbl2">Sidebar</span>
+  </div>
+
+  <div class="ctx-item" id="acc-plugin-settings">
+    <svg class="ctx-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="ctx-lbl2">Settings</span>
+  </div>
+
+</div>
+
+<!-- ── Settings drawer ────────────────────────────────────────────────────── -->
+<div id="settings-drawer">
+
+  <div class="settings-panel active" id="settings-panel-main">
+    <div id="sidebar-top-dock"></div>
+    <div id="sidebar-scroll-region"></div>
+    <div id="sidebar-bottom-dock"></div>
+    <div id="sidebar-footer">
+      <div class="sidebar-footer-brand">
+        <div class="sidebar-footer-name">ATMOS</div>
+        <div class="sidebar-footer-version" id="sidebar-footer-version">Version —</div>
+      </div>
+      <button type="button" id="sidebar-footer-settings" aria-label="Open Settings" title="Open Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.18V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.17 14H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.32 10H21a2 2 0 1 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div><!-- /settings-panel-main -->
+</div><!-- /settings-drawer -->
+
+
+<script type="module" src="./app.js"></script>

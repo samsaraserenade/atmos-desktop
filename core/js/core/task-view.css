@@ -1,0 +1,150 @@
+body.task-view-open { overflow:hidden; }
+
+#task-view {
+  position:fixed;
+  inset:0;
+  z-index:1400;
+  display:grid;
+  place-items:center;
+  padding:clamp(34px,6vh,72px) clamp(28px,6vw,96px);
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+  transition:opacity .18s ease,visibility 0s linear .18s;
+  -webkit-app-region:no-drag;
+}
+#task-view.open {
+  opacity:1;
+  visibility:visible;
+  pointer-events:auto;
+  transition:opacity .18s ease;
+}
+.task-view-scrim {
+  position:absolute;
+  inset:0;
+  background:
+    radial-gradient(circle at 50% 36%,rgba(80,86,115,.18),transparent 48%),
+    rgba(3,4,6,.72);
+  backdrop-filter:blur(22px) saturate(120%);
+  -webkit-backdrop-filter:blur(22px) saturate(120%);
+}
+.task-view-shell {
+  position:relative;
+  width:min(1080px,100%);
+  max-height:100%;
+  display:flex;
+  flex-direction:column;
+  padding:28px;
+  overflow:hidden;
+  border:1px solid rgba(var(--ink-rgb),.11);
+  border-radius:18px;
+  color:rgb(var(--ink-rgb));
+  background:rgba(var(--surface-rgb),.78);
+  box-shadow:0 28px 80px rgba(0,0,0,.55),inset 0 1px rgba(var(--ink-rgb),.045);
+  transform:translateY(12px) scale(.985);
+  transition:transform .22s cubic-bezier(.22,1,.36,1);
+}
+#task-view.open .task-view-shell { transform:none; }
+.task-view-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));
+  gap:14px;
+  min-height:0;
+  overflow:auto;
+  padding:3px;
+  scrollbar-width:thin;
+}
+.task-view-card {
+  min-width:0;
+  padding:0;
+  overflow:hidden;
+  border:1px solid rgba(var(--ink-rgb),.085);
+  border-radius:13px;
+  color:inherit;
+  background:rgba(var(--ink-rgb),.025);
+  box-shadow:0 10px 28px rgba(0,0,0,.18);
+  cursor:pointer;
+  text-align:left;
+  font:inherit;
+  outline:none;
+  transition:transform .15s ease,border-color .15s ease,background .15s ease,box-shadow .15s ease;
+}
+.task-view-card:hover {
+  transform:translateY(-2px);
+  border-color:rgba(var(--ink-rgb),.82);
+  background:rgba(var(--ink-rgb),.065);
+  box-shadow:0 10px 28px rgba(0,0,0,.18);
+}
+.task-view-card.selected {
+  transform:translateY(-2px);
+  border-color:rgb(var(--ink-rgb));
+  background:rgba(var(--ink-rgb),.065);
+  box-shadow:0 10px 28px rgba(0,0,0,.18);
+}
+.task-view-card.current.selected { border-color:rgb(var(--ink-rgb)); }
+.task-view-preview {
+  position:relative;
+  aspect-ratio:16/9;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  background:linear-gradient(145deg,rgba(var(--ink-rgb),.065),rgba(var(--ink-rgb),.012));
+  border-bottom:1px solid rgba(var(--ink-rgb),.07);
+}
+.task-view-preview::before {
+  content:'';
+  position:absolute;
+  inset:12px;
+  border:1px solid rgba(var(--ink-rgb),.045);
+  border-radius:8px;
+  box-shadow:inset 0 24px rgba(var(--ink-rgb),.018);
+}
+.task-view-snapshot {
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  object-position:center;
+  filter:saturate(.86) brightness(.78);
+  transition:filter .15s ease,transform .2s ease;
+}
+.task-view-card:hover .task-view-snapshot,
+.task-view-card.selected .task-view-snapshot { filter:saturate(1) brightness(.92); transform:scale(1.015); }
+.task-view-preview.has-snapshot::after {
+  content:'';
+  position:absolute;
+  inset:0;
+  background:linear-gradient(to bottom,transparent 58%,rgba(var(--surface-rgb),.28));
+  pointer-events:none;
+}
+.task-view-preview.has-snapshot .task-view-glyph { display:none; }
+.task-view-glyph {
+  position:relative;
+  width:48px;
+  height:48px;
+  display:grid;
+  place-items:center;
+  border:1px solid rgba(var(--ink-rgb),.12);
+  border-radius:14px;
+  color:rgba(var(--ink-rgb),.74);
+  background:rgba(var(--surface-rgb),.64);
+  box-shadow:0 12px 28px rgba(0,0,0,.28),inset 0 1px rgba(var(--ink-rgb),.07);
+}
+.task-view-glyph svg { width:22px; height:22px; }
+.task-view-details { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 14px 14px; }
+.task-view-copy { min-width:0; display:flex; flex-direction:column; }
+.task-view-label { overflow:hidden; color:rgba(var(--ink-rgb),.86); font-size:.78rem; font-weight:610; text-overflow:ellipsis; white-space:nowrap; }
+.task-view-current { flex:none; padding:3px 7px; border:1px solid color-mix(in srgb,var(--color-positive,#34d399) 42%,transparent); border-radius:999px; color:var(--color-positive,#34d399); background:color-mix(in srgb,var(--color-positive,#34d399) 12%,transparent); font-size:.53rem; letter-spacing:.08em; text-transform:uppercase; }
+html[data-app-theme="amoled"] .task-view-scrim { background:rgba(0,0,0,.86); backdrop-filter:none; -webkit-backdrop-filter:none; }
+html[data-app-theme="amoled"] .task-view-shell { background:#000; }
+
+@media (max-width:640px) {
+  #task-view { padding:24px 16px; }
+  .task-view-shell { padding:20px 16px 14px; border-radius:14px; }
+  .task-view-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  #task-view,.task-view-shell,.task-view-card { transition:none; }
+}

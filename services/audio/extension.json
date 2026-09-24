@@ -1,0 +1,11 @@
+{
+  "apiVersion": 2,
+  "tier": "system",
+  "displayName": "Audio",
+  "requires": {
+    "extensions.manifest": 1,
+    "lifecycle.context": 1,
+    "renderer.capabilities": 1
+  },
+  "permissions": {}
+}

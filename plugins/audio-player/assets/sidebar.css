@@ -1,0 +1,215 @@
+/* js/plugins/audio-player/assets/sidebar.css
+ * Styling for the sidebar mini-player (./sidebar.js). Self-owned, injected
+ * by sidebar.js at module-load time — index.html does not reference this
+ * file.
+ */
+
+/* In the Atmos page, Atmos's stylesheet gave every element these defaults, and
+   Audio Player's styles were written for them (a card's width includes its
+   padding, lists and headings have no default spacing). A frame doesn't get
+   that stylesheet, so they are set here. */
+*, *::before, *::after { box-sizing:border-box; }
+* { margin:0; padding:0; }
+
+.ap-mini-widget {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Cover: full-bleed square, spans the section's full width. Also the
+   play/pause hit target now (click anywhere on it toggles playback) and
+   the seek line lives along its bottom edge — see .ap-mini-seek-track
+   below. ── */
+
+.ap-mini-cover {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(129,140,248,.18), rgba(56,189,248,.10));
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.ap-mini-cover.is-gesture-dragging { cursor: grabbing; }
+
+.ap-mini-cover-img {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.ap-mini-cover-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ap-mini-btn-disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Play/pause overlay: sits on top of the cover, hidden until hover so
+   the artwork isn't permanently obscured. The whole cover is clickable
+   either way — this is just the visual affordance. ── */
+
+.ap-mini-pp-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.ap-mini-cover:hover .ap-mini-pp-overlay {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.ap-mini-cover.is-gesture-dragging .ap-mini-pp-overlay { opacity: 0; }
+
+.ap-mini-gesture-feedback {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  max-width: calc(100% - 28px);
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.68);
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  transform: scale(0.94);
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.ap-mini-gesture-feedback.is-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.ap-mini-gesture-feedback.is-committed { background: rgba(0, 0, 0, 0.82); }
+
+
+/* ── Track/artist/length baked into the bottom of the cover, over a scrim
+   so it reads on any artwork. The title slides (marquee) only when
+   sidebar.js measures it as wider than the box; otherwise it just sits
+   clipped. ── */
+
+.ap-mini-cover-info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 12px 13px;
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.5) 45%, rgba(0,0,0,.8) 100%);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ap-mini-track-wrap {
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+  width: 100%;
+}
+
+.ap-mini-track {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.95);
+  white-space: nowrap;
+}
+
+.ap-mini-track.ap-mini-empty {
+  opacity: 0.6;
+  font-weight: 400;
+  font-style: italic;
+}
+
+.ap-mini-track-wrap.is-sliding .ap-mini-track {
+  animation: ap-mini-marquee 8s linear 2;
+}
+
+@keyframes ap-mini-marquee {
+  0%, 12%   { transform: translateX(0); }
+  50%       { transform: translateX(calc(-1 * var(--ap-marquee-dist, 0px))); }
+  88%, 100% { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ap-mini-track-wrap.is-sliding .ap-mini-track { animation: none; }
+}
+
+/* Artist + track length share a row under the title. */
+
+.ap-mini-meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ap-mini-artist {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ap-mini-artist-hidden { display: none; }
+
+.ap-mini-dur {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* ── Seek line: thin white progress line along the very bottom edge of
+   the cover, under everything else. ── */
+
+.ap-mini-seek-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.ap-mini-seek-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  transform: scaleX(0);
+  transform-origin: left center;
+}
