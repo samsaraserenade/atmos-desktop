@@ -133,7 +133,7 @@ function planExport(files, release) {
 
   const rewrite = new Map();
   const source = new Map();
-  // The public README describes what is released.
+  // A README kept elsewhere (optional; normally README.md itself, minus its private sections).
   if (settings.readme) {
     rewrite.set('README.md', text => text);
     source.set('README.md', settings.readme);
@@ -150,7 +150,26 @@ function planExport(files, release) {
   if (keep.includes('scripts/e2e/README.md')) {
     rewrite.set('scripts/e2e/README.md', text => pruneE2eReadme(text, droppedE2e));
   }
+  // Markdown: sections between <!-- private --> and <!-- /private --> stay here.
+  for (const file of keep.filter(name => name.endsWith('.md'))) {
+    const previous = rewrite.get(file) || (text => text);
+    rewrite.set(file, text => stripPrivate(previous(text)));
+  }
   return { keep, rewrite, source, dropped: [...dropped].sort() };
+}
+
+/** Remove <!-- private --> … <!-- /private --> blocks (markers on their own lines). */
+function stripPrivate(text) {
+  if (!text.includes('<!-- private -->')) return text;
+  const out = [];
+  let hidden = false;
+  for (const line of text.split('\n')) {
+    if (line.trim() === '<!-- private -->') { hidden = true; continue; }
+    if (line.trim() === '<!-- /private -->') { hidden = false; continue; }
+    if (!hidden) out.push(line);
+  }
+  if (hidden) throw new Error('export-release: a <!-- private --> block is never closed');
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '\n');
 }
 
 /** Drop ignore rules that name a left-out extension, and comments left heading nothing. */
@@ -180,5 +199,5 @@ function pruneE2eReadme(text, left) {
   return out.join('\n');
 }
 
-module.exports = { exportTo, planExport, pruneE2eReadme, pruneGitignore };
+module.exports = { exportTo, planExport, pruneE2eReadme, pruneGitignore, stripPrivate };
 if (require.main === module) main();
