@@ -21,6 +21,9 @@ const extensionItems = document.getElementById('ctx-extension-items');
 //   - type: 'toggle'    — checked, run(checked).
 //   - type: 'range'     — min, max, step, value, format(value), run(value).
 //   - type: 'number'    — min, max, step, value, suffix, run(value).
+//   - type: 'text'      — value, placeholder, maxLength; Enter runs
+//                         run(value) with the trimmed text and closes the
+//                         menu (closeOnChange: false keeps it open).
 //   - type: 'select'    — options [{value, label}], value, run(value).
 //   - type: 'colors'    — values, onPickerActive(active), run(values).
 //   - type: 'meta'      — a non-interactive info row (icon + label, no click).
@@ -31,6 +34,13 @@ const extensionItems = document.getElementById('ctx-extension-items');
 //                           closeFn() is called (before running, on any
 //                           thrown/rejected error the row still closes so a
 //                           failure can't leave a stuck-open menu).
+//                           hold: true asks for a press and hold (a bar
+//                           fills the row) before it runs, for destructive
+//                           actions; tone: 'danger' draws it in the
+//                           semantic negative colour.
+// How long a hold-to-confirm row ({ hold: true }) must be held.
+const HOLD_MS = 900;
+
 function renderMenuRow(container, entry, closeFn) {
   if (entry.type === 'separator') {
     const sep = document.createElement('div');
@@ -70,7 +80,7 @@ function renderMenuRow(container, entry, closeFn) {
     return;
   }
   const row = document.createElement('div');
-  const interactiveControl = ['toggle', 'range', 'number', 'select', 'colors'].includes(entry.type);
+  const interactiveControl = ['toggle', 'range', 'number', 'text', 'select', 'colors'].includes(entry.type);
   row.className = 'ctx-item'
     + (entry.type === 'meta' ? ' ctx-item-meta' : '')
     + (interactiveControl ? ' ctx-control-row' : '');
@@ -150,6 +160,28 @@ function renderMenuRow(container, entry, closeFn) {
       await runControl(numericValue);
     });
     row.appendChild(control);
+  } else if (entry.type === 'text') {
+    const control = document.createElement('span');
+    control.className = 'ctx-control-text';
+    const text = document.createElement('input');
+    text.type = 'text';
+    text.value = entry.value ?? '';
+    text.spellcheck = false;
+    if (entry.placeholder) text.placeholder = entry.placeholder;
+    if (Number.isFinite(entry.maxLength)) text.maxLength = entry.maxLength;
+    text.setAttribute('aria-label', entry.label || 'Enter text');
+    control.appendChild(text);
+    text.addEventListener('click', keepControlEvent);
+    text.addEventListener('keydown', async event => {
+      event.stopPropagation();
+      if (event.key === 'Escape') { closeFn(); return; }
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      const value = text.value.trim();
+      if (entry.closeOnChange !== false) closeFn();
+      await runControl(value);
+    });
+    row.appendChild(control);
   } else if (entry.type === 'select') {
     const select = document.createElement('select');
     select.setAttribute('aria-label', entry.label || 'Choose an option');
@@ -195,13 +227,43 @@ function renderMenuRow(container, entry, closeFn) {
     });
     row.appendChild(colors);
   } else if (entry.type !== 'meta' && typeof entry.run === 'function') {
-    row.addEventListener('click', async event => {
-      event.stopPropagation();
+    const runRow = async () => {
       closeFn();
       try { await entry.run(); }
       catch (error) { console.error(`[context-menu] '${entry.id || entry.label}' failed:`, error); }
-    });
+    };
+    if (entry.hold === true) {
+      // Press and hold: a bar fills across the row, and the action runs
+      // when it's full. Letting go (or leaving the row) first cancels.
+      row.classList.add('ctx-item-hold');
+      row.style.setProperty('--ctx-hold-ms', `${HOLD_MS}ms`);
+      const hint = document.createElement('span');
+      hint.className = 'ctx-hold-hint';
+      hint.textContent = 'Hold';
+      row.appendChild(hint);
+      let timer = null;
+      const cancel = () => {
+        clearTimeout(timer);
+        timer = null;
+        row.classList.remove('ctx-holding');
+      };
+      row.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        cancel();
+        row.classList.add('ctx-holding');
+        timer = setTimeout(() => { timer = null; row.classList.remove('ctx-holding'); runRow(); }, HOLD_MS);
+      });
+      for (const type of ['pointerup', 'pointercancel', 'pointerleave']) row.addEventListener(type, cancel);
+      row.addEventListener('click', event => event.stopPropagation());
+    } else {
+      row.addEventListener('click', async event => {
+        event.stopPropagation();
+        await runRow();
+      });
+    }
   }
+  if (entry.tone === 'danger') row.classList.add('ctx-item-danger');
   container.appendChild(row);
 }
 

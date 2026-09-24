@@ -124,8 +124,8 @@ export function sanitizeMenuIcon(markup) {
 
 /**
  * A frame's cleaned menu item as a Core menu row. Choosing a plain row calls
- * choose(); a control (toggle, range, number, select, colours) calls
- * change(value) on every change. A ticked row gets a tick icon, or in a
+ * choose(); a control (toggle, range, number, text, select, colours) calls
+ * change(value) on every change (a text field on Enter). A ticked row gets a tick icon, or in a
  * sidebar header menu a "✓ " before its label, like the header's own items.
  */
 function toCoreMenuItem(item, { choose, change, tickInLabel = false }) {
@@ -150,6 +150,7 @@ function toCoreMenuItem(item, { choose, change, tickInLabel = false }) {
       };
     case 'toggle':
     case 'number':
+    case 'text':
     case 'select':
     case 'colors':
       return { ...item, icon, run: change };

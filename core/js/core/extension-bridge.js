@@ -12,7 +12,7 @@
  */
 
 const MAX_STATE_BYTES = 1024 * 1024;
-const MENU_TYPES = new Set([undefined, 'separator', 'heading', 'meta', 'select', 'toggle', 'range', 'number', 'colors', 'buttons']);
+const MENU_TYPES = new Set([undefined, 'separator', 'heading', 'meta', 'select', 'toggle', 'range', 'number', 'text', 'colors', 'buttons']);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
 export class BridgeError extends Error {
@@ -52,6 +52,9 @@ function cleanMenuItems(items) {
     if (typeof item.closeOnChange === 'boolean') clean.closeOnChange = item.closeOnChange;
     // A plain row may show a tick; Core draws it.
     if ((item.type === undefined || item.type === 'toggle') && typeof item.checked === 'boolean') clean.checked = item.checked;
+    // A plain row may ask for a press and hold, and be drawn as destructive.
+    if (item.type === undefined && item.hold === true) clean.hold = true;
+    if (item.type === undefined && item.tone === 'danger') clean.tone = 'danger';
     if (item.type === 'select') {
       clean.value = String(item.value ?? '').slice(0, 120);
       clean.options = (Array.isArray(item.options) ? item.options : []).slice(0, 50).map(option => ({
@@ -66,6 +69,11 @@ function cleanMenuItems(items) {
       clean.value = finiteOr(item.value, clean.min);
       if (typeof item.suffix === 'string') clean.suffix = item.suffix.slice(0, 8);
       if (item.type === 'range' && typeof item.zeroLabel === 'string') clean.zeroLabel = item.zeroLabel.slice(0, 20);
+    }
+    if (item.type === 'text') {
+      clean.value = String(item.value ?? '').slice(0, 500);
+      if (typeof item.placeholder === 'string') clean.placeholder = item.placeholder.slice(0, 80);
+      if (Number.isFinite(item.maxLength)) clean.maxLength = Math.max(1, Math.min(500, Math.round(item.maxLength)));
     }
     if (item.type === 'buttons') {
       clean.buttons = (Array.isArray(item.buttons) ? item.buttons : []).slice(0, 12).map(button => {

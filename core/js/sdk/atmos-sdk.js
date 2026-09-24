@@ -121,6 +121,8 @@ function plainMenuItem(item, index, actions) {
   if (typeof item.icon === 'string') plain.icon = item.icon;
   if (typeof item.checked === 'boolean') plain.checked = item.checked;
   if (typeof item.closeOnChange === 'boolean') plain.closeOnChange = item.closeOnChange;
+  if (item.hold === true) plain.hold = true;
+  if (item.tone === 'danger') plain.tone = 'danger';
   if (item.type === 'select') {
     plain.value = item.value;
     plain.options = (item.options || []).map(option => ({ value: option.value, label: option.label }));
@@ -129,6 +131,11 @@ function plainMenuItem(item, index, actions) {
     for (const name of ['min', 'max', 'step', 'value', 'suffix', 'zeroLabel']) {
       if (item[name] !== undefined) plain[name] = item[name];
     }
+  }
+  if (item.type === 'text') {
+    plain.value = String(item.value ?? '');
+    if (typeof item.placeholder === 'string') plain.placeholder = item.placeholder;
+    if (Number.isFinite(item.maxLength)) plain.maxLength = item.maxLength;
   }
   if (item.type === 'colors') plain.values = [...(item.values || [])];
   if (item.type === 'buttons') {

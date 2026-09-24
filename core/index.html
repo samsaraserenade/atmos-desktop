@@ -1006,6 +1006,14 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .ctx-item:hover > .ctx-sub { opacity:1; pointer-events:all; transform:scale(1); }
 .ctx-ico { width:16px; height:16px; opacity:.6; flex-shrink:0; }
 .ctx-lbl2 { flex:1; }
+/* Destructive rows ({ tone: 'danger' }) and press-and-hold rows ({ hold: true }):
+   holding fills a bar across the row; letting go early empties it. */
+.ctx-item-danger, .ctx-item-danger:hover { color:var(--color-negative, #f87171); }
+.ctx-item-hold { user-select:none; overflow:hidden; }
+.ctx-item-hold::after { content:''; position:absolute; inset:0 auto 0 0; width:0; border-radius:inherit; background:rgba(var(--ink-rgb),.14); pointer-events:none; transition:width .12s ease; }
+.ctx-item-danger.ctx-item-hold::after { background:color-mix(in srgb, var(--color-negative, #f87171) 26%, transparent); }
+.ctx-item-hold.ctx-holding::after { width:100%; transition:width var(--ctx-hold-ms, 900ms) linear; }
+.ctx-hold-hint { font-size:.62rem; letter-spacing:.08em; text-transform:uppercase; opacity:.55; }
 /* Non-interactive info row inside a menu (an "Artist · 4 tracks" line, a
    track title header, ...) — generalized from audio-player's own
    .alb-ctx-meta, which every migrated menu now uses instead of redefining. */
@@ -1032,6 +1040,9 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .ctx-control-number { display:flex; align-items:center; justify-content:flex-end; gap:4px; color:rgba(var(--ink-rgb),.5); font-size:.68rem; }
 .ctx-control-number input { width:58px; box-sizing:border-box; padding:3px 5px; border:1px solid rgba(var(--ink-rgb),.16); border-radius:4px; background:rgba(var(--ink-rgb),.06); text-align:right; font-variant-numeric:tabular-nums; }
 .ctx-control-number input:focus { outline:1px solid var(--color-positive, #34d399); border-color:var(--color-positive, #34d399); }
+.ctx-control-text { display:flex; flex:1; min-width:0; justify-content:flex-end; }
+.ctx-control-text input { width:100%; max-width:160px; min-width:0; box-sizing:border-box; padding:3px 6px; border:1px solid rgba(var(--ink-rgb),.16); border-radius:4px; background:rgba(var(--ink-rgb),.06); color:inherit; font:inherit; }
+.ctx-control-text input:focus { outline:1px solid var(--color-positive, #34d399); border-color:var(--color-positive, #34d399); }
 .ctx-control-colors { display:flex; align-items:center; justify-content:flex-end; gap:5px; }
 .ctx-control-colors input[type="color"] { appearance:none; -webkit-appearance:none; width:25px; height:18px; padding:0; border:1px solid rgba(var(--ink-rgb),.18); border-radius:4px; background:transparent; cursor:pointer; overflow:hidden; }
 .ctx-control-colors input[type="color"]::-webkit-color-swatch-wrapper { padding:0; }

@@ -165,21 +165,25 @@ test('menus: controls report every change, plain rows once; only known fields cr
   };
   const { request, posted } = harness(createExtensionBridge, { deps });
   const reply = await request('contextMenu.open', 10, 20, [
-    { id: 'play', label: 'Play', icon: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>', onclick: 'x' },
+    { id: 'play', label: 'Play', icon: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>', onclick: 'x', hold: true, tone: 'danger' },
     { id: 'labels', label: 'Labels', type: 'toggle', checked: true },
     { id: 'size', label: 'Size', type: 'range', min: 60, max: 180, step: 4, value: 160, suffix: 'px', zeroLabel: 'Off', format: 'x' },
     { id: 'fps', label: 'Rate', type: 'number', min: 1, max: 1000, value: 'nope' },
+    { id: 'name', label: 'Name', type: 'text', value: 42, placeholder: 'Room name', maxLength: 9999, pattern: 'x' },
     { id: 'grad', label: 'Gradient', type: 'colors', values: ['#ff0000', 'javascript:alert(1)'] },
     { id: 'evil', label: 'Evil', type: 'html' },
   ]);
   assert.equal(reply.result, 'play');
-  assert.deepEqual(opened.map(item => item.id), ['play', 'labels', 'size', 'fps', 'grad']);
+  assert.deepEqual(opened.map(item => item.id), ['play', 'labels', 'size', 'fps', 'name', 'grad']);
   assert.equal(opened[0].onclick, undefined);
   assert.equal(opened[0].icon.startsWith('<svg'), true);
+  assert.deepEqual([opened[0].hold, opened[0].tone], [true, 'danger'], 'a row can ask for a hold and be drawn as destructive');
+  assert.equal(opened[1].hold, undefined, 'only plain rows can ask for a hold');
   assert.equal(opened[1].checked, true);
   assert.deepEqual([opened[2].min, opened[2].max, opened[2].step, opened[2].value, opened[2].suffix, opened[2].zeroLabel, opened[2].format], [60, 180, 4, 160, 'px', 'Off', undefined]);
   assert.equal(opened[3].value, 1);
-  assert.deepEqual(opened[4].values, ['#ff0000', '#ffffff']);
+  assert.deepEqual([opened[4].value, opened[4].placeholder, opened[4].maxLength, opened[4].pattern], ['42', 'Room name', 500, undefined]);
+  assert.deepEqual(opened[5].values, ['#ff0000', '#ffffff']);
   assert.deepEqual(posted.filter(message => message.topic === 'menu').map(message => message.payload), [
     { id: 'size', value: 120 }, { id: 'size', value: 124 }, 'play',
   ]);
