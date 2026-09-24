@@ -45,8 +45,14 @@ module.exports = async function afterPack(context) {
     : path.join(context.appOutDir, 'resources');
   const extensionsRoot = path.join(resources, 'extensions');
   if (!fs.existsSync(extensionsRoot)) throw new Error(`after-pack: ${extensionsRoot} is missing`);
-  const removed = pruneUnreleased(extensionsRoot);
-  if (removed.length) console.log(`  • not released (release.json), left out: ${removed.join(', ')}`);
+  // `npm run build:personal` (scripts/build-personal.cjs) keeps every
+  // extension in the checkout, for your own everyday install.
+  if (process.env.ATMOS_BUILD_ALL === '1') {
+    console.log('  • personal build: every extension kept (release.json not applied)');
+  } else {
+    const removed = pruneUnreleased(extensionsRoot);
+    if (removed.length) console.log(`  • not released (release.json), left out: ${removed.join(', ')}`);
+  }
   const list = writeIntegrityList(extensionsRoot);
   const files = Object.values(list.extensions).reduce((sum, entries) => sum + Object.keys(entries).length, 0);
   console.log(`  • integrity.json: ${Object.keys(list.extensions).length} extensions, ${files} files`);

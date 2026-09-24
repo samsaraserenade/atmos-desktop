@@ -41,6 +41,30 @@ function main() {
     // A path inside the folder, so a folder-only rule ("dir/") matches even before it exists.
     try { execFileSync('git', ['check-ignore', '-q', `${rel}/.export`], { cwd: repo }); return true; } catch { return false; }
   }
+  const { release, plan } = exportTo(dest, ref);
+
+  console.log(`exported ${plan.keep.length} files from ${ref} to ${dest}`);
+  console.log(`  plugins:  ${release.plugins.join(', ')}`);
+  console.log(`  services: ${release.services.join(', ')}`);
+  console.log(`  left out: ${plan.dropped.join(', ')}`);
+
+  if (message) {
+    const inDest = (...cmd) => execFileSync('git', cmd, { cwd: dest, encoding: 'utf8' });
+    if (!fs.existsSync(path.join(dest, '.git'))) inDest('init', '-q', '-b', 'main');
+    inDest('add', '-A');
+    const status = inDest('status', '--porcelain');
+    if (status.trim()) {
+      inDest('commit', '-q', '-m', message);
+      console.log(`committed in ${dest}: ${inDest('log', '--oneline', '-1').trim()}`);
+    } else {
+      console.log('nothing changed since the last export');
+    }
+  }
+
+}
+
+/** Write the released files of <ref> into <dest> (everything there except .git is replaced). */
+function exportTo(dest, ref = 'HEAD') {
   const git = (...cmd) => execFileSync('git', cmd, { cwd: repo, encoding: 'utf8', maxBuffer: 1 << 28 });
   const release = JSON.parse(git('show', `${ref}:release.json`));
   const plan = planExport(git('ls-tree', '-r', '-z', '--name-only', ref).split('\0').filter(Boolean), release);
@@ -78,24 +102,7 @@ function main() {
     fs.rmSync(staging, { recursive: true, force: true });
   }
 
-  console.log(`exported ${plan.keep.length} files from ${ref} to ${dest}`);
-  console.log(`  plugins:  ${release.plugins.join(', ')}`);
-  console.log(`  services: ${release.services.join(', ')}`);
-  console.log(`  left out: ${plan.dropped.join(', ')}`);
-
-  if (message) {
-    const inDest = (...cmd) => execFileSync('git', cmd, { cwd: dest, encoding: 'utf8' });
-    if (!fs.existsSync(path.join(dest, '.git'))) inDest('init', '-q', '-b', 'main');
-    inDest('add', '-A');
-    const status = inDest('status', '--porcelain');
-    if (status.trim()) {
-      inDest('commit', '-q', '-m', message);
-      console.log(`committed in ${dest}: ${inDest('log', '--oneline', '-1').trim()}`);
-    } else {
-      console.log('nothing changed since the last export');
-    }
-  }
-
+  return { release, plan };
 }
 
 /** Which files go, which are rewritten on the way, and what was left out. */
@@ -136,11 +143,22 @@ function planExport(files, release) {
     const { export: _unused, ...rest } = JSON.parse(text);
     return `${JSON.stringify(rest, null, 2)}\n`;
   });
+  // .gitignore without the lines that name a left-out extension.
+  const leftOut = [...dropped].filter(id => /^(plugins|services)\//.test(id)).map(id => id.split('/')[1]);
+  if (keep.includes('.gitignore')) rewrite.set('.gitignore', text => pruneGitignore(text, leftOut));
   // The end-to-end README without the checks that stayed behind.
   if (keep.includes('scripts/e2e/README.md')) {
     rewrite.set('scripts/e2e/README.md', text => pruneE2eReadme(text, droppedE2e));
   }
   return { keep, rewrite, source, dropped: [...dropped].sort() };
+}
+
+/** Drop ignore rules that name a left-out extension, and comments left heading nothing. */
+function pruneGitignore(text, ids) {
+  if (!ids.length) return text;
+  const lines = text.split('\n').filter(line => line.startsWith('#') || !ids.some(id => line.includes(id)));
+  return lines.filter((line, i) => !line.startsWith('#') || (lines[i + 1] ?? '').trim() !== '' && !(lines[i + 1] ?? '').startsWith('#')).join('\n')
+    .replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '\n');
 }
 
 /** Drop table rows, command lines and expectation blocks that name a left-out check. */
@@ -162,5 +180,5 @@ function pruneE2eReadme(text, left) {
   return out.join('\n');
 }
 
-module.exports = { planExport, pruneE2eReadme };
+module.exports = { exportTo, planExport, pruneE2eReadme, pruneGitignore };
 if (require.main === module) main();

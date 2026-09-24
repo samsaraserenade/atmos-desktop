@@ -121,3 +121,15 @@ Atmos/
 
 Atmos is licensed under the [Apache License, Version 2.0](LICENSE).
 Copyright 2026 hashy; see [NOTICE](NOTICE).
+
+## Rev
+
+Rev is the companion of Atmos — a tiny creature born from a modular world.
+
+The Rev token: https://pump.fun/coin/5dw5MXrnW4wbqerxhUr4jAg92BeRjnux7Nf5RKHhpump
+
+## Community
+
+Follow Atmos development:
+
+- X: https://x.com/atmosdesktop

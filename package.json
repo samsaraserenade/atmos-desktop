@@ -11,7 +11,9 @@
     "test:services": "node --experimental-vm-modules --test scripts/service-core-v2-contract.test.cjs",
     "test:permissions": "node --test scripts/extension-permissions.test.cjs",
     "build": "electron-builder --win nsis",
-    "build:portable": "electron-builder --win portable"
+    "build:portable": "electron-builder --win portable",
+    "build:personal": "node scripts/build-personal.cjs",
+    "publish:prepare": "node scripts/publish-release.cjs"
   },
   "build": {
     "appId": "com.hashy.atmosphere",
@@ -61,7 +63,9 @@
           "**/*",
           "!**/tests/**",
           "!**/benchmarks/**",
-          "!**/*.log"
+          "!**/*.log",
+          "!**/onnxruntime-node/bin/*/darwin/**",
+          "!**/onnxruntime-node/bin/*/linux/**"
         ]
       }
     ]
