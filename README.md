@@ -16,7 +16,8 @@ arrange however you like. Everything you use inside it is an extension, and
 the core is built to make extensions safe, consistent and pleasant to live
 with.
 
-It ships with a music player, so it's useful from the first launch.
+It ships with a music player and an end-to-end encrypted chat client, so
+it's useful from the first launch.
 
 ## The core
 
@@ -50,7 +51,8 @@ Atmos is designed so that you can install things you didn't write.
 
 - **Sandboxed.** Every plugin runs in its own isolated frame and reaches
   Atmos only through the Atmos SDK. It can't see Atmos, other extensions
-  or your files.
+  or your files. Built-in extensions that keep secrets, such as the chat
+  client's encryption keys, get a storage origin of their own too.
 - **Declared permissions.** Each extension lists what it needs (network
   hosts, browser permissions, other extensions it talks to) and Atmos
   enforces that list. Settings shows it in plain language.
@@ -61,13 +63,38 @@ Atmos is designed so that you can install things you didn't write.
 - **Built-in services.** Extensions share capabilities from Atmos (audio,
   wallpaper, location, media tags) rather than each reimplementing them.
 
-## Shipped with a music player
+## Ships with
 
-Atmos comes with the **Audio Player**: add your music folders and browse
-your library as albums, with a player that lives in a drawer at the bottom
-of the screen, a waveform seek bar, a queue that remembers where you were,
-and Now Playing, Queue and Library widgets for the sidebar. Space plays and
-pauses from anywhere in Atmos.
+### Audio Player
+
+Add your music folders and browse your library as albums, with a player
+that lives in a drawer at the bottom of the screen, a waveform seek bar, a
+queue that remembers where you were, and Now Playing, Queue and Library
+widgets for the sidebar. Space plays and pauses from anywhere in Atmos.
+
+### Matrix Chat
+
+A chat client for [Matrix](https://matrix.org), the open, federated
+messaging network, so you can talk to anyone on any Matrix app.
+
+- **Sign in or create an account** on your homeserver's own page, in your
+  browser (matrix.org and any server using the Matrix Authentication
+  Service), or with a password on other servers. The (i) on the sign-in
+  screen explains what a Matrix account is.
+- **End-to-end encrypted.** Private rooms and direct messages are
+  encrypted. New accounts set up secure messaging with a recovery key;
+  a new sign-in confirms it's you with that key or another device, and
+  message history comes back from the encrypted key backup.
+- **Knows who sent what.** A message from a device its owner never
+  verified, a deleted device, or sent unencrypted in an encrypted room says
+  so, and you're told when someone's encryption identity changes.
+- **Your keys stay yours.** Sign-in tokens and encryption keys are stored
+  encrypted with Windows' own secure storage, and deleted when you sign out.
+- **Rooms, spaces and DMs** in a sidebar widget, with replies, edits,
+  reactions, read receipts, images and files, and several accounts at once.
+- **`rev/` commands** in the message bar: `rev/go`, `rev/join`, `rev/dm`,
+  `rev/create-room`, `rev/create-space`, `rev/invite`, `rev/leave` and
+  `rev/notifications`.
 
 ## Install
 
@@ -100,8 +127,8 @@ Settings waiting for your approval. The smallest working example is
 ```text
 Atmos/
 ├── core/        # The runtime: window, panels, sidebar, settings, the extension host and SDK
-├── plugins/     # User-facing extensions (audio-player)
-├── services/    # Capabilities extensions call into (audio, location, media-metadata, wallpaper)
+├── plugins/     # User-facing extensions (audio-player, matrix-chat)
+├── services/    # Capabilities extensions call into (audio, fullscreen-viewer, location, media-metadata, wallpaper)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
 ├── release.json # What an installer bundles
 └── ATMOS_CORE_INTEGRATION.md   # The extension API
@@ -115,6 +142,7 @@ Atmos/
 | `npm run test:services` | Service contract tests |
 | `npm run test:permissions` | Checks each bundled extension's code against its declared permissions |
 | `cd plugins/audio-player && node --test tests/*.test.cjs` | Audio Player tests |
+| `cd plugins/matrix-chat && npm test` | Matrix Chat tests (`npm run check:browser` adds the message-sanitizer attack checks in a browser) |
 | `node scripts/e2e/<name>.cjs` | End-to-end checks in a throwaway profile (Linux/macOS/WSL; see `scripts/e2e/README.md`) |
 
 ## Licence
