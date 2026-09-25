@@ -82,6 +82,7 @@ const ELECTRON_TEXT = {
   shell: 'Open files, folders and links in other apps',
   clipboard: 'Use the clipboard from the main process',
   net: 'Make network requests from the main process',
+  safeStorage: 'Encrypt data with your system\u2019s secure storage',
 };
 const BROWSER_TEXT = {
   geolocation: 'Use your location',

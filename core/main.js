@@ -761,6 +761,13 @@ function _registerAtmosExtProtocol() {
           headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': csp },
         });
       }
+      // An empty document in the shared first-party origin, for Core's own
+      // one-time storage cleanup (see _cleanUpSharedOriginStorage).
+      if (rel === '/__atmos/blank.html' && host === frames.FIRST_PARTY_HOST) {
+        return new Response('<!doctype html><title></title>', {
+          headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': "default-src 'none'" },
+        });
+      }
       if (_SDK_FILES[rel]) {
         if (!owners.length) return new Response('Not found', { status: 404 });
         const filePath = path.join(_SDK_DIR, _SDK_FILES[rel]);
@@ -923,6 +930,44 @@ function _installBrowserPermissions(activeEntries) {
   for (const [origin, allowed] of byOrigin) console.log(`[main] browser permissions for ${origin}:`, [...allowed].join(', '));
 }
 
+/**
+ * First-party extensions that moved to an origin of their own ("isolation":
+ * "origin") may have left databases in the shared first-party origin, where
+ * every other first-party extension can read them. Delete the ones each
+ * declares ("legacyStorage.sharedOriginIndexedDB") once, from a hidden page
+ * in that origin; nothing else there is touched. Done jobs are recorded, so
+ * this runs again only if an extension's list changes.
+ */
+async function _cleanUpSharedOriginStorage() {
+  const markerPath = path.join(app.getPath('userData'), 'shared-origin-cleanup.json');
+  let done = {};
+  try { done = JSON.parse(fs.readFileSync(markerPath, 'utf8')) || {}; } catch { /* first run */ }
+  const jobs = _framedEntries()
+    .map(entry => ({ key: `${entry.kind}:${entry.id}`, patterns: frames.sharedOriginCleanupPatterns(entry) }))
+    .filter(job => job.patterns.length && JSON.stringify(done[job.key]) !== JSON.stringify(job.patterns));
+  if (!jobs.length) return;
+
+  const { WebContentsView } = require('electron');
+  const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await view.webContents.loadURL(`${frames.SCHEME}://${frames.FIRST_PARTY_HOST}/__atmos/blank.html`);
+    for (const job of jobs) {
+      // An isolated world shares the page's origin (so its storage) but not
+      // its script restrictions; the page itself runs no script.
+      const deleted = await view.webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: frames.sharedOriginCleanupScript(job.patterns) }]);
+      console.log(`[main] removed ${job.key}'s old shared-origin storage:`, (deleted || []).join(', ') || 'none');
+      done[job.key] = job.patterns;
+    }
+    const temporary = `${markerPath}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(done, null, 2));
+    fs.renameSync(temporary, markerPath);
+  } catch (error) {
+    console.error('[main] shared-origin storage cleanup failed (will retry next launch):', error);
+  } finally {
+    view.webContents.close();
+  }
+}
+
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 const hasInstanceLock = app.requestSingleInstanceLock();
@@ -967,6 +1012,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   _registerAtmosAppProtocol();
   _registerAtmosExtProtocol();
   createWindow();
+  void _cleanUpSharedOriginStorage();
 });
 
 app.on('window-all-closed', () => {

@@ -20,6 +20,33 @@ test('origins: one per third-party extension, one shared by first-party', () => 
   assert.equal(frames.frameOrigin(entry('first-party')), 'atmos-ext://first-party');
 });
 
+test('isolation: a first-party extension may ask for an origin of its own', () => {
+  const isolated = entry('first-party', { manifest: { runtime: 'frame', isolation: 'origin' } });
+  assert.equal(frames.frameOrigin(isolated), 'atmos-ext://first-party-plugin-hello');
+  assert.equal(frames.frameOrigin(entry('first-party', { kind: 'service', manifest: { isolation: 'origin' } })), 'atmos-ext://first-party-service-hello');
+  // Only first-party: a third-party extension is isolated already, and can't pick a first-party host.
+  assert.equal(frames.frameOrigin(entry('third-party', { manifest: { isolation: 'origin' } })), 'atmos-ext://plugin-hello');
+  assert.equal(frames.frameOrigin(entry('first-party', { manifest: { isolation: 'yes' } })), 'atmos-ext://first-party');
+});
+
+test('isolation: only declared, isolated extensions clean up the shared origin', () => {
+  const legacyStorage = { sharedOriginIndexedDB: ['matrix-js-sdk*', 'exact-name', 'ab*', '*', 'x*y'] };
+  assert.deepEqual(frames.sharedOriginCleanupPatterns(entry('first-party', { manifest: { isolation: 'origin', legacyStorage } })), ['matrix-js-sdk*', 'exact-name']);
+  assert.deepEqual(frames.sharedOriginCleanupPatterns(entry('first-party', { manifest: { legacyStorage } })), []);
+  assert.deepEqual(frames.sharedOriginCleanupPatterns(entry('third-party', { manifest: { isolation: 'origin', legacyStorage } })), []);
+});
+
+test('isolation: the cleanup script deletes only matching databases', async () => {
+  const deleted = [];
+  const fakeIndexedDB = {
+    databases: async () => [{ name: 'matrix-js-sdk::matrix-sdk-crypto' }, { name: 'another-extension' }, { name: 'exact-name' }, { name: 'exact-name-2' }],
+    deleteDatabase(name) { deleted.push(name); const request = {}; setImmediate(() => request.onsuccess()); return request; },
+  };
+  const run = new Function('indexedDB', `return ${frames.sharedOriginCleanupScript(['matrix-js-sdk*', 'exact-name'])};`);
+  assert.deepEqual(await run(fakeIndexedDB), ['matrix-js-sdk::matrix-sdk-crypto', 'exact-name']);
+  assert.deepEqual(deleted, ['matrix-js-sdk::matrix-sdk-crypto', 'exact-name']);
+});
+
 test('CSP allows only declared hosts and never other Atmos schemes', () => {
   const csp = frames.frameCsp({ permissions: { network: ['api.example.net', '*.cdn.example'] }, inlineScriptHashes: ['abc'] });
   const directive = name => csp.split('; ').find(part => part.startsWith(`${name} `));

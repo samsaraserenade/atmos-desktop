@@ -13,6 +13,10 @@
  *
  * Origins
  *   atmos-ext://first-party         shared by framed first-party extensions
+ *   atmos-ext://first-party-plugin-<id>
+ *                                   a first-party extension with
+ *                                   "isolation": "origin" (one that keeps
+ *                                   secrets, such as keys, in its storage)
  *   atmos-ext://plugin-<id>         one per third-party plugin
  *   atmos-ext://service-<id>        one per third-party service
  *
@@ -59,8 +63,48 @@ function resolveRuntime(entry) {
   return entry.manifest?.runtime === 'frame' ? 'frame' : 'page';
 }
 
+/**
+ * A first-party extension that keeps secrets in its frames' storage (keys,
+ * tokens) asks for an origin of its own with "isolation": "origin", so the
+ * other first-party extensions — which share one origin, and so one storage
+ * partition and one set of windows — can't read its storage or script its
+ * frames.
+ */
+function isIsolated(entry) {
+  return entry.tier === 'first-party' && entry.manifest?.isolation === 'origin';
+}
+
 function frameHost(entry) {
-  return entry.tier === 'third-party' ? `${entry.kind}-${entry.id}` : FIRST_PARTY_HOST;
+  if (entry.tier === 'third-party') return `${entry.kind}-${entry.id}`;
+  return isIsolated(entry) ? `${FIRST_PARTY_HOST}-${entry.kind}-${entry.id}` : FIRST_PARTY_HOST;
+}
+
+/**
+ * Database names (or "prefix*" of at least 4 characters) an isolated
+ * extension left in the shared first-party origin before it moved out,
+ * from "legacyStorage.sharedOriginIndexedDB". Core deletes them once.
+ */
+function sharedOriginCleanupPatterns(entry) {
+  if (!isIsolated(entry)) return [];
+  const declared = entry.manifest?.legacyStorage?.sharedOriginIndexedDB;
+  return Array.isArray(declared)
+    ? declared.filter(item => typeof item === 'string' && item.length <= 100
+      && (!item.includes('*') || (item.indexOf('*') === item.length - 1 && item.length > 4)))
+    : [];
+}
+
+/** Script run in the shared first-party origin: deletes the databases matching
+ *  `patterns` (exact names, or "prefix*"), and resolves the names deleted. */
+function sharedOriginCleanupScript(patterns) {
+  return `(async patterns => {
+    const matches = name => patterns.some(p => p.endsWith('*') ? name.startsWith(p.slice(0, -1)) : name === p);
+    const names = (await indexedDB.databases()).map(db => db.name).filter(name => name && matches(name));
+    await Promise.all(names.map(name => new Promise(resolve => {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = request.onerror = request.onblocked = () => resolve();
+    })));
+    return names;
+  })(${JSON.stringify(patterns)})`;
 }
 
 function frameOrigin(entry) {
@@ -250,7 +294,8 @@ function frameDocument() {
 
 module.exports = {
   SCHEME, FIRST_PARTY_HOST, SURFACES, UNSERVED_DIRS, IMPORT_MAP_HASH,
-  isLibrary, resolveRuntime, frameHost, frameOrigin, extensionPath,
+  isLibrary, isIsolated, resolveRuntime, frameHost, frameOrigin, extensionPath,
+  sharedOriginCleanupPatterns, sharedOriginCleanupScript,
   frameCsp, framePermissionsPolicy, describeContributions, frameDocument,
   safeRelative, plainLabel, networkSources,
 };

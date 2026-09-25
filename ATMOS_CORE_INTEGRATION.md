@@ -181,9 +181,10 @@ section 18.
 | `auditExclude` | Folders the permission audit skips | 18 |
 | `displayName` | Name shown in Settings and, for framed extensions, the default label | 9, 19 |
 | `runtime` | `"frame"` moves a first-party extension into frames | 19 |
+| `isolation` | `"origin"` gives a framed first-party extension an origin of its own, for one that keeps secrets (keys, tokens) in its storage | 19 |
 | `contributes` | Labels, icons and entry files for framed surfaces | 19 |
 | `library` | `true` on a service that is a library: imported by consumers, no lifecycle, UI or state of its own | 19 |
-| `legacyStorage` | Databases a migrating first-party extension may copy from the page | 19 |
+| `legacyStorage` | Databases a migrating first-party extension may copy from the page; with `isolation`, `"sharedOriginIndexedDB"` lists databases it left in the shared first-party origin, which Core deletes once | 19 |
 
 `apiVersion` is the newest core API the extension targets. `requires` may be
 an object of capability names and minimum versions, or an array of names when
@@ -1242,6 +1243,14 @@ Each third-party extension has its own origin (`atmos-ext://plugin-<id>` or
 `atmos-ext://first-party`. An origin is a storage partition and a process,
 so a frame may use `localStorage` and IndexedDB for larger data, and its
 frames can share them.
+
+Sharing an origin means sharing storage and being able to script each
+other's frames, so a first-party extension that keeps secrets there
+(encryption keys or sign-in tokens, say) sets `"isolation": "origin"` and gets
+`atmos-ext://first-party-<kind>-<id>`. Moving out leaves its old databases
+behind in the shared origin: list them in `"legacyStorage": {
+"sharedOriginIndexedDB": ["name", "prefix*"] }` and Core deletes them once,
+from a hidden page in that origin, touching nothing else there.
 
 A frame cannot:
 
