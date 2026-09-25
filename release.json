@@ -1,12 +1,14 @@
 {
   "$comment": "What is released: the extensions an installer bundles (npm run build; scripts/after-pack.cjs drops the rest) and what scripts/export-release.cjs copies into the public repo. Add a plugin, and any service only it needs, when you release it. System services (audio, location, wallpaper) are part of Atmos and always listed.",
   "plugins": [
-    "audio-player"
+    "audio-player",
+    "matrix-chat"
   ],
   "services": [
     "audio",
     "location",
     "media-metadata",
-    "wallpaper"
+    "wallpaper",
+    "fullscreen-viewer"
   ]
 }

@@ -9,6 +9,7 @@ frames.
 |---|---|
 | `frames.cjs` | Installs `fixtures/` as third-party extensions and approves them, then: panel, sidebar and settings frames; isolation from the Atmos page; CSP refusing undeclared hosts and Atmos's own schemes; blocked navigation and pop-ups; SDK state, events, service calls and a library service (Media Metadata's client); Core context menus; split layouts; theme sync; state surviving a restart; memory per process. |
 | `audio-player.cjs` | The background layer and Audio Player in frames: Wallpaper carrying over Background's settings and image; Audio Player carrying over its settings, folders, library and waveforms from the page; the Music panel in Atmos's drawer; double-clicking an album playing it from the Audio service; the Queue, Now Playing and Library widgets; playback carrying on under another panel and into the next track; Space; album and waveform menus with icons, ranges and toggles; docking the bar; Escape twice from inside the frame; wheel on the workspace; a library rescan; everything after a restart. |
+| `matrix-chat.cjs` | Matrix Chat in frames against a fake homeserver (`fake-homeserver.cjs`): the one-time fresh start (the old device signed out, the page's old key store deleted, display preferences kept); the Rooms widget beside Chat only; signing in from the panel; opening a room from the widget; Atmos drawing the panel and composer glass; sending; an incoming message shown and pinging on the Audio service; the message menu's quick-reaction row reacting; Delete asking first; signed in again after a restart with no second fresh start. |
 | `security.cjs` | Approval, re-approval after a change, the `main.cjs` ban, tamper detection on a copy of the bundled extensions with `integrity.json`, link and `window.open` handling, browser permissions. |
 
 ## Running
@@ -21,6 +22,7 @@ npm install --no-save playwright-core
 node scripts/e2e/frames.cjs      # JSON report on stdout, screenshots in .tmp/e2e/frames
 node scripts/e2e/security.cjs    # screenshots in .tmp/e2e/security
 node scripts/e2e/audio-player.cjs # screenshots in .tmp/e2e/audio-player
+node scripts/e2e/matrix-chat.cjs  # screenshots in .tmp/e2e/matrix-chat
 ```
 
 They use the Electron from `devDependencies`; set `ELECTRON_PATH` to use
@@ -39,6 +41,12 @@ The output is a JSON report, not pass/fail. What to expect:
   - `settingsFrame` is `"Greeting"`;
   - `tile.presentation` is `"tile"`;
   - `visitsAfterRestart` is one more than `tile.visits` (each panel mount counts as a visit).
+- `matrix-chat.cjs`:
+  - `freshStart.oldTokenSignedOut` is `true`, `freshStart.state` has no sessions, `framesFreshStart: true` and the seeded `showUsernames`/`chatScale`, and `freshStart.pageDatabases` no longer lists `matrix-js-sdk::matrix-sdk-crypto`;
+  - `widgetScope` is `{ shownWithChat: true, hiddenElsewhere: true }`;
+  - `signedIn`, `widgetListsRoom`, `roomOpened`, `sent`, `sentShown`, `incomingShown`, `reacted` and `notRedacted` are `true`;
+  - `glass` is a `panel` piece above a 54 px `shell` piece, `ping.source` is `"ping"`, `quickRow` starts with 👍 and `deleteAsks` is `"Delete this message? Delete Message Cancel"`;
+  - every `afterRestart` entry is `true`, and `errors` is empty (matrix-js-sdk's push-rule notes about the fake server are filtered out). Set `NO_PROXY=127.0.0.1` if your shell has an HTTP proxy.
 - `audio-player.cjs`:
   - `list.surfaces` has the drawer panel, the three widgets and `boot:audio-player:keys=Space`; `list.wallpaper` and `list.audio` are `"system"` and `list.background` is `false`;
   - `wallpaper` shows `mode: "wallpaper"`, `vignette: 40`, `brightness: 80`, a `blob:` image, `movedAsset: true`, `oldAsset: false`;

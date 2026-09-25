@@ -1,0 +1,2709 @@
+/**
+ * js/plugins/matrix-chat/assets/styles.css
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Styles for the .mx-* classes emitted by ui/login.js, ui/room-list.js, and
+ * ui/room-view.js. Nothing in plugin-loader.js's convention loads CSS
+ * automatically (only settings.js/panel.js/boot.js/persist.js are
+ * discovered), so this file is injected manually via a <link> tag panel.js
+ * adds at module-load time — see that file's top-level injectStyles() call.
+ *
+ * DESIGN LANGUAGE, DELIBERATE: matched to the sidebar's other panels
+ * (balance/watchlist/now-playing) rather than to any generic chat-app
+ * look — near-mono surfaces, hairline dividers, tabular-numeric figures,
+ * uppercase micro-labels, and color spent only on the one or two things
+ * per screen that are actually active (the primary send action, an
+ * unread/live state). Nothing here introduces a card, a shadow, or a
+ * gradient — the sibling panels don't have any, so this shouldn't either.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+/* Variables live on :root as well as the plugin's own containers.
+   .mx-reaction-picker, .mx-mention-menu, and the full emoji browser
+   (emoji-browser.js's createEmojiBrowser()) are all position:fixed
+   popovers appended straight to document.body — see each rule's own
+   comment further down — so they sit outside .mx-room-view's subtree
+   entirely. A custom property only cascades to actual descendants, so
+   from inside one of those popovers var(--mx-fg) etc. had nothing to
+   resolve to and fell back to the initial/inherited value, which on a
+   plain document.body is black — hence reply/edit action text, mention
+   autocomplete rows, and the emoji browser all rendering black instead
+   of white. Declaring the same custom properties on :root too (values
+   identical, so nothing changes for anything already inside
+   .mx-room-view) gives those body-level popovers something to inherit. */
+:root,
+.mx-login,
+.mx-layout,
+.mx-room-list,
+.mx-room-view {
+  --mx-fg: var(--text-color, #e6e6e6);
+  --mx-fg-muted: rgba(255, 255, 255, 0.52);
+  --mx-fg-faint: rgba(255, 255, 255, 0.34);
+  --mx-hairline: rgba(255, 255, 255, 0.07);
+  --mx-hairline-strong: rgba(255, 255, 255, 0.14);
+  --mx-surface: rgba(255, 255, 255, 0.035);
+  --mx-surface-hover: rgba(255, 255, 255, 0.065);
+  /* Was var(--mx-price-good, #7d9dff) — tracked panel.js/price-color.js's
+     shared bullish/bearish hue so this plugin's "active" color matched
+     the sidebar's other panels. Decoupled on request: plain white now,
+     independent of price-color.js entirely. -soft/-strong still derive
+     from this via color-mix() below, so every accent usage in this file
+     (buttons, focus rings, unread dots, the reply/edit ring, etc) picks
+     up white automatically — nothing else in this file needed to change. */
+  --mx-accent: #ffffff;
+  --mx-accent-soft: color-mix(in srgb, var(--mx-accent) 16%, transparent);
+  --mx-accent-strong: color-mix(in srgb, var(--mx-accent) 55%, transparent);
+  /* Atmos's semantic colors (--color-positive/-negative/-neutral) reach
+     every frame; status and destructive actions use them. */
+  --mx-danger: var(--color-negative, #f87171);
+  --mx-positive: var(--color-positive, #34d399);
+  --mx-radius: 4px;
+  --mx-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+.mx-login,
+.mx-layout,
+.mx-room-list,
+.mx-room-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: inherit;
+  color: var(--mx-fg);
+  font-size: 13px;
+}
+
+.mx-room-view {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Stop panel paint immediately above the fixed-height shell composer, so
+   Shell Opacity can reach the wallpaper instead of another dark layer. */
+/* The panel's glass (above the composer) and the composer's shell glass are
+   drawn by Atmos under this frame, where data-atmos-glass says (a frame's
+   own backdrop-filter can't reach the wallpaper). */
+
+/* ---- Shared: uppercase micro-label, used for the room-view eyebrow ---- */
+
+.mx-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mx-fg-faint);
+}
+
+/* ---- Login ---- */
+
+.mx-login {
+  padding: 16px;
+  gap: 10px;
+}
+
+.mx-login-title {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mx-fg-faint);
+}
+
+.mx-login-session-notice {
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--mx-danger) 45%, transparent);
+  border-radius: var(--mx-radius);
+  background: color-mix(in srgb, var(--mx-danger) 10%, transparent);
+  color: var(--mx-fg-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.mx-login-saved {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mx-login-saved-label {
+  color: var(--mx-fg-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.mx-login-saved-row {
+  display: flex;
+  gap: 6px;
+}
+
+.mx-login-saved-account,
+.mx-login-saved-remove {
+  border: 1px solid var(--mx-hairline-strong);
+  border-radius: var(--mx-radius);
+  background: var(--mx-surface);
+  color: var(--mx-fg-muted);
+  cursor: pointer;
+}
+
+.mx-login-saved-account {
+  min-width: 0;
+  flex: 1;
+  padding: 7px 9px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.mx-login-saved-account span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mx-login-saved-account small {
+  color: var(--mx-fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mx-login-saved-remove {
+  width: 32px;
+  flex: 0 0 32px;
+  font-size: 16px;
+}
+
+.mx-login-saved-account:hover,
+.mx-login-saved-remove:hover {
+  background: var(--mx-surface-hover);
+  color: var(--mx-fg);
+}
+
+.mx-login-saved-account:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mx-login-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mx-fg-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mx-login-divider::before,
+.mx-login-divider::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background: var(--mx-hairline);
+}
+
+.mx-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--mx-fg-muted);
+}
+
+.mx-field input {
+  padding: 8px 10px;
+  border-radius: var(--mx-radius);
+  border: 1px solid var(--mx-hairline-strong);
+  background: var(--mx-surface);
+  color: inherit;
+  font-size: 13px;
+}
+
+.mx-field input:focus {
+  outline: none;
+  border-color: var(--mx-accent-strong);
+}
+
+.mx-btn {
+  padding: 7px 12px;
+  border-radius: var(--mx-radius);
+  border: 1px solid var(--mx-hairline-strong);
+  background: transparent;
+  color: var(--mx-fg-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  /* Centers an icon (e.g. the send button's SVG) the same way a plain
+     text label already reads as centered by default — without this an
+     inline SVG child sits on the text baseline instead of the button's
+     visual middle. Harmless for every existing text-only .mx-btn: a
+     single text-node child in a flex row still lands dead center. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+
+.mx-btn:hover {
+  background: var(--mx-surface-hover);
+  color: var(--mx-fg);
+}
+
+.mx-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mx-btn.primary {
+  background: var(--mx-accent-soft);
+  border-color: var(--mx-accent-strong);
+  color: var(--mx-fg);
+}
+
+.mx-btn.primary:hover {
+  background: rgba(125, 157, 255, 0.26);
+}
+
+.mx-error {
+  color: var(--mx-danger);
+  font-size: 11.5px;
+}
+
+/* ---- Layout: persistent sidebar + main pane ----
+   panel.js builds this once per login (see its enterLoggedInLayout()):
+   .mx-layout holds .mx-sidebar (room-list.js's rail+channel-pane,
+   mounted once and only ever repainted, never destroyed, while a
+   session lasts) beside .mx-main (whatever room-view.js renders for the
+   selected room, or the empty-state placeholder when none is selected —
+   this is the only part swapped on every room switch). Replaces the
+   single full-width .mx-room-list this panel used to show on its own
+   before a room was opened; the room list is now always visible
+   alongside whichever room is open, not something you navigate away
+   from and back to. */
+
+.mx-layout {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 0;
+  /* Glass: drawn by Atmos; the room view (or the empty view) and its
+     message bar carry it. */
+}
+
+/* Navigation hosted by the Atmos accordion, independent of the chat pane. */
+.mx-atmos-rooms { height: 100%; min-height: 0; min-width: 0; }
+.mx-atmos-rooms .mx-room-list { flex-direction: column; }
+.mx-atmos-rooms .mx-rail {
+  width: auto; flex-direction: row; align-items: center;
+  border-right: 0; border-bottom: 1px solid var(--mx-hairline);
+}
+.mx-atmos-rooms .mx-rail-items {
+  flex-direction: row; min-width: 0; gap: 8px; padding: 8px;
+  overflow-x: auto; overflow-y: hidden;
+}
+.mx-atmos-rooms .mx-rail-item { flex-shrink: 0; }
+.mx-atmos-rooms .mx-rail-settings-btn { margin: 0 4px; }
+.mx-atmos-rooms .mx-channel-pane { min-height: 0; margin-left: 0; }
+.mx-atmos-rooms .mx-channel-rows { min-height: 0; }
+
+
+.mx-sidebar {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 280px;
+  min-height: 0;
+  border-right: 1px solid var(--mx-hairline);
+  /* The sidebar and chat are separate backdrop-filter layers, so even
+     with the same blur radius their boundary can read as an abrupt change
+     in the sampled wallpaper. A small shadow softens that transition and
+     deliberately overlaps the later-painted main pane via z-index. */
+  box-shadow: 3px 0 7px rgba(0, 0, 0, 0.18);
+  overflow: hidden; /* .mx-room-list's own children handle their own scrolling */
+}
+
+.mx-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Hides the hairline seam that can appear right where .mx-sidebar
+     meets .mx-main now that .mx-channel-pane/.mx-room-view each have
+     their own backdrop-filter (see each panel's own blur comment):
+     browsers promote a backdrop-filter element to its own composited
+     layer, and where two such layers sit edge-to-edge their
+     anti-aliased edges don't always meet pixel-perfectly, leaving a
+     sliver gap.
+
+     A previous attempt at this fixed it by painting an opaque color on
+     .mx-layout, directly behind both panels — wrong fix: backdrop-filter
+     blurs/reveals whatever is *immediately behind* the element in the
+     render tree, so that opaque layer became the thing being revealed
+     through a panel's own transparency instead of the host page/wallpaper
+     behind the whole app, defeating the point of the opacity slider
+     entirely (panels stopped looking see-through at any setting).
+
+     This instead overlaps .mx-main 1px onto .mx-sidebar's edge with no
+     new paint layer involved — .mx-main is later in DOM order, so it
+     already paints on top, and this 1px of its own (still translucent)
+     edge simply covers wherever the seam would otherwise show, rather
+     than exposing anything opaque underneath. */
+  margin-left: -1px;
+}
+
+.mx-main-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mx-fg-faint);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ---- Room list: server rail + channel pane ----
+   room-list.js builds this from Matrix's own Space hierarchy — see that
+   file's header comment. The rail (.mx-rail) is a slim vertical strip of
+   icons: one per real space, one per non-DM room joined outside any
+   space (its own single-channel pseudo-space icon), plus a single
+   pinned-first "Direct Messages" icon (.mx-rail-avatar-generic below)
+   covering only actual DMs, however many there are. The pane
+   (.mx-channel-pane) shows the channel rows for whichever rail entry is
+   selected. .mx-room-row/.mx-room-avatar/etc below are the channel rows
+   themselves — same classes whether the row is one of several channels
+   under a space, the single row under a solo pseudo-space, or one of
+   the rows under the Direct Messages pane. */
+
+.mx-room-list {
+  flex: 1;
+  display: flex;
+  /* Overrides the column direction set on this same selector by the
+     shared .mx-login/.mx-room-list/.mx-room-view block up top (that
+     block is written for a single vertical stack of content — right
+     for a login form or a plain scrolling list, wrong here now that
+     this element holds the rail and the channel pane *side by side*).
+     Without this, flex-direction simply falls through from that
+     earlier rule since this one never re-declares it, and the rail
+     ends up stacked above the pane instead of beside it. */
+  flex-direction: row;
+  min-height: 0; /* lets both children's own overflow-y: auto actually engage */
+}
+
+.mx-room-list > .mx-empty {
+  flex: 1;
+  align-self: center;
+}
+
+.mx-empty {
+  padding: 16px;
+  color: var(--mx-fg-faint);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* .mx-rail is now a column of two pieces: the scrollable .mx-rail-items
+   (every space/pseudo-space/DM icon) filling the available height, and
+   the settings button (see .mx-rail-settings-btn below) pinned below it
+   at a fixed spot at the bottom of the sidebar — rather than the rail
+   itself scrolling, which would let the settings button scroll out of
+   view along with everything else the moment there are enough spaces to
+   need it. min-height: 0 is what lets .mx-rail-items' own
+   overflow-y: auto actually engage inside this column instead of the
+   column just growing to fit all its content (same fix .mx-room-list
+   needs for its own row-direction children, just for a nested column
+   here instead). */
+.mx-rail {
+  flex-shrink: 0;
+  width: 52px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--mx-hairline);
+  /* Panel background opacity (state owned by
+     settings-menu.js as getRailOpacity/setRailOpacity/
+     onRailOpacityChanged, applied here live by room-list.js's paint()
+     as --mx-rail-opacity). Set on mount and
+     kept current by a subscription, as a plain 0–1 number rather than a percentage — color-mix()'s own
+     percentage argument is built from it via calc(N * 100%) below, so
+     this and the other two panel-opacity variables (--mx-room-list-
+     opacity on .mx-channel-pane, --mx-room-view-opacity on
+     .mx-room-view, both further down) all share one "0 = fully
+     transparent, 1 = solid black" unit instead of each panel taking a
+     differently-scaled input.
+
+     Falls back to 0 (today's fully-transparent look) so this renders
+     identically to before these sliders existed until JS actually sets
+     a value. Plain #000 for now rather than
+     var(--mx-bg, #14151a) (this plugin's usual host-background guess,
+     still used as-is elsewhere in this file) — TEMPORARY, pending
+     swapping this whole background for core sidebar's own blur
+     treatment instead of a flat color. */
+  /* Panel background blur (state owned by
+     settings-menu.js as getRailBlur/setRailBlur/onRailBlurChanged,
+     applied here live by room-list.js's paint() as --mx-rail-blur, in
+     px). Same blur(Npx) saturate(180%) recipe already used by this
+     plugin's own popovers (.mx-settings-menu, #ctx-menu, the emoji
+     browser — see further down this file) and by core's own
+     #settings-drawer — not a new house style, just made adjustable and
+     per-panel instead of a fixed 30px. Falls back to 0px (no blur,
+     today's look) so this renders identically to before this slider
+     existed until JS actually sets a value, same "default = current
+     behavior" reasoning --mx-rail-opacity's own fallback follows above.
+     Only takes visible effect once the color-mix() background above is
+     non-transparent enough to sit in front of anything to actually
+     blur — an --mx-rail-opacity of 0 with a nonzero blur is a legitimate
+     (if pointless-looking) combination, not a bug. */
+}
+
+.mx-rail-items {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  overflow-y: auto;
+  /* Scroll still works via overflow-y: auto above — this only hides the
+     visible track/thumb. Same pair used throughout for scrollable
+     panes (.mx-channel-rows, .mx-timeline). */
+  scrollbar-width: none;
+}
+
+.mx-rail-items::-webkit-scrollbar {
+  display: none;
+}
+
+/* Settings entry point (opens .mx-settings-menu — see settings-menu.js's
+   openSettingsMenu()), pinned at the bottom of the rail rather than
+   living inside .mx-rail-items so it never scrolls away. Same circular
+   footprint as a real .mx-rail-item so it reads as part of the same
+   button family, just visually quieter (muted glyph, no swatch fill,
+   no active-indicator bar) since it isn't a selectable destination the
+   way a space/DM icon is. */
+.mx-rail-settings-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 10px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--mx-fg-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.mx-rail-settings-btn:hover {
+  background: var(--mx-surface-hover);
+  color: var(--mx-fg);
+}
+
+.mx-rail-item {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.12s ease;
+}
+
+/* Images are natively draggable in every browser regardless of an
+   ancestor's draggable="true" — starting a drag on the avatar <img>
+   itself would hijack the gesture from .mx-rail-item's own dragstart
+   handler (room-list.js) and drag the image out instead of reordering
+   the rail. Disabling the browser's built-in image drag lets the
+   gesture fall through to the button. */
+.mx-rail-item img {
+  -webkit-user-drag: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Applied to the source item for the duration of its own drag
+   (room-list.js dragstart/dragend) so it reads as "lifted" rather
+   than looking like a second, stationary copy sitting next to the
+   cursor. */
+.mx-rail-item-dragging {
+  opacity: 0.35;
+}
+
+/* Applied to whichever item is currently under the pointer as a drop
+   target (room-list.js dragover/dragleave/drop) — a same accent-bar
+   language as .mx-rail-item.active::before, but full-height, so it
+   reads as "insert here" rather than borrowing the active state's
+   own indicator. */
+.mx-rail-item-drag-over::after {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 0;
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--mx-accent);
+  opacity: 0.5;
+}
+
+/* Active indicator: a left-edge accent bar rather than a filled
+   background or a card — consistent with color being spent only on the
+   one or two active things per screen (see this file's top-of-file
+   note), not a highlighted-row treatment borrowed from a generic
+   chat-app rail. */
+.mx-rail-item::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  border-radius: 0 2px 2px 0;
+  background: var(--mx-accent);
+  transform: translateY(-50%);
+  transition: height 0.12s ease;
+}
+
+.mx-rail-item.active::before {
+  height: 22px;
+}
+
+.mx-rail-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: hsl(var(--mx-avatar-hue, 220), 40%, 32%);
+  overflow: hidden;
+  opacity: 0.7;
+  filter: saturate(0);
+  transform: scale(1);
+  transition: opacity 0.12s ease, filter 0.12s ease, transform 0.12s ease;
+}
+
+.mx-rail-item.active .mx-rail-avatar {
+  opacity: 1;
+  filter: saturate(1);
+  transform: scale(1.15);
+}
+
+.mx-rail-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The synthetic Direct-Messages rail entry has no single backing room
+   (room-list.js's entry.iconRoom is null for it), so it can't take the
+   deterministic per-room hue the other swatches use — a flat neutral
+   surface instead, same family as .mx-surface/.mx-btn rather than a
+   colored circle that would misleadingly suggest one specific room. */
+.mx-rail-avatar-generic {
+  background: var(--mx-surface-hover);
+}
+
+.mx-rail-unread-dot {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mx-accent);
+  border: 2px solid var(--mx-bg, #14151a);
+}
+
+.mx-channel-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* Same seam fix as .mx-main's own comment — .mx-channel-pane paints
+     after (and so on top of) .mx-rail, so overlapping its own edge over
+     .mx-rail's by 1px hides any backdrop-filter compositing seam between
+     these two without adding any new paint layer behind either. */
+  margin-left: -1px;
+  /* Room list panel opacity — see .mx-rail's own comment above for the
+     full reasoning; same color-mix()/calc() approach, applied here as
+     --mx-room-list-opacity by room-list.js's paint(). */
+  /* Room list panel blur — see .mx-rail's own comment above for the full
+     reasoning; same blur(Npx) saturate(180%) approach, applied here as
+     --mx-room-list-blur by room-list.js's paint(). */
+}
+
+.mx-channel-pane-header {
+  flex-shrink: 0;
+  padding: 8px 14px 6px;
+}
+
+.mx-channel-rows {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.mx-channel-rows::-webkit-scrollbar {
+  display: none;
+}
+
+.mx-channel-rows > .mx-empty {
+  padding-top: 24px;
+}
+
+/* Spaces are lightweight accordions inside the single Core-owned Matrix
+   Rooms accordion. They intentionally do not reuse .fin-section: Core must
+   continue to see one draggable/resizable sidebar contribution, not a set
+   of independently managed sections. */
+.mx-space-group {
+  border-bottom: 1px solid var(--mx-hairline);
+}
+
+.mx-space-group-toggle {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--mx-fg-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mx-space-group-toggle:hover { background: var(--mx-surface); color: var(--mx-fg); }
+.mx-space-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .055em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mx-space-group-count { flex-shrink: 0; color: var(--mx-fg-faint); font-size: 9px; }
+.mx-space-group-chevron {
+  flex-shrink: 0;
+  color: var(--mx-fg-faint);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform .16s ease;
+}
+.mx-space-group.open .mx-space-group-chevron { transform: rotate(90deg); }
+.mx-space-group-rooms[hidden] { display: none; }
+.mx-space-group-dragging { opacity: .35; }
+.mx-space-group-drag-over { box-shadow: inset 0 2px 0 var(--mx-accent); }
+
+/* Rooms in a space you're not in yet: faded, with a Join button. */
+.mx-space-more-heading { padding: 8px 14px 4px; }
+.mx-room-row-unjoined { cursor: default; }
+.mx-room-row-unjoined .mx-room-avatar { opacity: .55; }
+.mx-room-row-unjoined .mx-room-name { color: var(--mx-fg-muted); }
+.mx-room-row-unjoined .mx-room-preview-error { color: var(--mx-danger); }
+.mx-room-join {
+  flex: 0 0 auto; align-self: center; padding: 3px 8px; border: 1px solid var(--mx-hairline-strong); border-radius: 5px;
+  background: transparent; color: var(--mx-fg-muted); font: inherit; font-size: 10px; cursor: pointer;
+}
+.mx-room-join:hover { background: var(--mx-surface-hover); color: var(--mx-fg); }
+.mx-room-join:disabled { opacity: .5; cursor: default; }
+.mx-room-join-note { flex: 0 0 auto; align-self: center; color: var(--mx-fg-faint); font-size: 9.5px; }
+
+
+.mx-room-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--mx-hairline);
+  cursor: pointer;
+}
+
+.mx-room-row:hover {
+  background: var(--mx-surface);
+}
+
+.mx-request-heading {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 14px 6px;
+}
+
+.mx-request-row { cursor: default; align-items: flex-start; }
+.mx-request-row > .mx-room-avatar { margin-top: 2px; }
+.mx-request-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.mx-request-actions button {
+  font: inherit;
+  font-size: 11px;
+  color: var(--mx-fg-muted);
+  background: transparent;
+  border: 1px solid var(--mx-hairline-strong);
+  border-radius: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.mx-request-actions button[data-request-action="accept"] { color: var(--mx-fg); background: var(--mx-surface); }
+.mx-request-actions button:hover { background: var(--mx-surface); color: var(--mx-fg); }
+.mx-request-actions button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.mx-request-actions button:disabled { opacity: .5; cursor: wait; }
+.mx-request-error { margin-top: 6px; font-size: 11px; color: var(--mx-fg-muted); overflow-wrap: anywhere; }
+
+/* Initial swatch shown immediately, synchronously, for every row —
+   room-list.js's getAvatarUrl() then fetches the real photo (if any)
+   fire-and-forget and swaps it in, so this never blocks paint on a
+   network round trip; a room with no avatar set keeps this
+   permanently. --mx-avatar-hue is set inline per-row from the room id. */
+.mx-room-avatar {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: hsl(var(--mx-avatar-hue, 220), 40%, 32%);
+  overflow: hidden;
+  opacity: 0.7;
+  filter: saturate(0);
+  transform: scale(1);
+  transition: opacity 0.12s ease, filter 0.12s ease, transform 0.12s ease;
+}
+
+.mx-room-row.active .mx-room-avatar {
+  opacity: 1;
+  filter: saturate(1);
+  transform: scale(1.15);
+}
+
+.mx-room-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* DM fallback (channelRowHtml's isDM class, room-list.js): no hue
+   swatch, just the initial, per-request. A hairline ring stands in for
+   the color as the only thing giving the letter a visible edge against
+   the row — same hairline-on-transparent language the rest of this
+   file's near-mono surfaces already use, rather than inventing a new
+   fill. Still overridden by getAvatarUrl's real-photo swap-in the same
+   way the colored default is (hydrateAvatars sets background:
+   transparent there regardless of which fallback class is present). */
+.mx-room-avatar-dm {
+  box-sizing: border-box; /* keeps this at the same 26px as a photo avatar despite the added border */
+  background: transparent;
+  border: 1px solid var(--mx-hairline-strong);
+  color: var(--mx-fg-muted);
+}
+
+.mx-room-main {
+  flex: 1;
+  min-width: 0; /* lets the preview's text-overflow ellipsis actually engage */
+}
+
+.mx-room-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mx-room-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mx-room-time {
+  flex-shrink: 0;
+  font-family: var(--mx-mono);
+  font-size: 10.5px;
+  color: var(--mx-fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.mx-room-preview {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--mx-fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Room view ---- */
+
+.mx-room-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--mx-hairline);
+}
+
+.mx-room-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mx-room-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mx-room-subtitle {
+  font-size: 10.5px;
+  color: var(--mx-fg-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mx-timeline {
+  flex: 1;
+  overflow-y: auto;
+  /* Reserve a right-side gutter for read-receipt profile icons. */
+  padding: 12px 46px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* Scroll still works via overflow-y: auto above — this only hides the
+     visible track/thumb. Same pair as .mx-room-list above. */
+  scrollbar-width: none;
+}
+
+.mx-timeline::-webkit-scrollbar {
+  display: none;
+}
+
+.mx-msg {
+  position: relative; /* anchors .mx-msg-receipts and .mx-msg::before's hover wash */
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  border-radius: var(--mx-radius);
+  /* Negative margin + matching padding: pulls the row's own box all
+     the way to .mx-timeline's left edge, canceling out that container's
+     12px left padding, without moving anything inside .mx-msg itself
+     (avatar/gutter and text stay exactly where they were — margin and
+     padding net to zero for them). This is what lets the hover wash
+     below reach flush against the sidebar with no gap, and reach under
+     .mx-msg-hover-time in the gutter instead of stopping short of it. */
+  margin-left: -12px;
+  padding-left: 12px;
+}
+
+/* The hover wash lives on a pseudo-element rather than .mx-msg's own
+   background so it can be taller than the row itself (top/bottom < 0)
+   without that extra height pushing into flex layout — position:
+   absolute takes it out of flow entirely, so .mx-timeline's row gap is
+   untouched. 2px is deliberately small: a grouped message only has 4px
+   of clearance to the row above it (10px flex gap minus the -6px
+   .mx-msg-grouped pulls up by), so 2px+2px is as far as this can grow
+   before two adjacent hovered rows' washes could touch.
+   Left is flush (0, not the row's own border-radius) so the wash reads
+   as pinned to the sidebar's edge rather than floating free of it. The
+   right edge extends through the timeline's reserved 46px receipt gutter
+   and stays square, so the wash reaches the full width of the chat. */
+.mx-msg::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 0;
+  right: -46px;
+  border-radius: 0;
+  background: transparent;
+  transition: background 0.12s ease;
+  pointer-events: none; /* purely decorative — never steals hover/click from the row or its children */
+}
+
+/* Half-strength version of --mx-accent-soft, kept local to hover rather
+   than dimming the shared token — that token also drives the reply-jump
+   flash and a few other :hover states below, and this request was just
+   about the continuous hover wash reading as too strong next to those. */
+.mx-msg:hover::before {
+  background: color-mix(in srgb, var(--mx-accent) 8%, transparent);
+}
+
+/* Bundled message (see isGroupedWithPrevious in room-view.js): pulled up
+   toward the block above it so it reads as part of the same group
+   rather than getting the same 10px gap as a genuinely new sender/time.
+   Negative enough to close most of .mx-timeline's flex `gap`, not all of
+   it — a little breathing room still separates lines within a block.
+   Only touches margin-top, so .mx-msg-receipts' `right: -34px` (relative
+   to this row's own box) still lands in exactly the same place it does
+   on an unbundled row. */
+.mx-msg-grouped {
+  margin-top: -6px;
+}
+
+/* Sender initial, same deterministic-hue logic as .mx-room-avatar but
+   backed by a real fetched photo when one resolves — see
+   hydrateSenderAvatars() in room-view.js, which fills an <img> in here
+   the same way hydrateReceipts() fills the receipt stack. Sized and
+   positioned so a still-loading (empty) avatar doesn't shift the
+   message body once the image lands. */
+.mx-msg-avatar {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  margin-top: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mx-msg-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+
+/* Stand-in for .mx-msg-avatar on a bundled message — same footprint (so
+   the body below still lines up with the block's real avatar above it)
+   but nothing to show most of the time. Hovering the row reveals this
+   message's own timestamp instead, same idea as Discord surfacing a
+   bundled message's time only on hover rather than repeating it on
+   every line. */
+.mx-msg-gutter {
+  flex-shrink: 0;
+  width: 38px;
+  height: 18px;
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mx-msg-hover-time {
+  display: none;
+  font-family: var(--mx-mono);
+  font-size: 9.5px;
+  color: var(--mx-fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.mx-msg-grouped:hover .mx-msg-hover-time {
+  display: block;
+}
+
+.mx-msg-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.mx-msg-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 1px;
+}
+
+.mx-msg-sender {
+  font-weight: 600;
+  color: var(--mx-fg);
+}
+
+.mx-msg-time {
+  font-family: var(--mx-mono);
+  font-size: 10.5px;
+  color: var(--mx-fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Read-receipt avatar stack ---- */
+
+.mx-msg-receipts {
+  position: absolute;
+  right: -34px;
+  /* A receipt avatar is 21px including its border; 8.5px centers it
+     against the sender avatar's 38px footprint at the start of the row. */
+  top: 8.5px;
+  display: flex;
+  align-items: center;
+}
+
+.mx-msg-receipts:empty { display: none; }
+
+/* Grouped messages replace the 38px sender avatar with an 18px timestamp
+   gutter, so center viewed-by icons against that slimmer first line. */
+.mx-msg-grouped .mx-msg-receipts { top: -1.5px; }
+
+.mx-receipt-avatar {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 2px solid var(--mx-bg, #14151a);
+  object-fit: cover;
+  background: #444;
+  display: block;
+}
+
+.mx-receipt-avatar + .mx-receipt-avatar { margin-left: -7px; }
+
+.mx-receipt-overflow {
+  font-family: var(--mx-mono);
+  font-size: 10px;
+  color: var(--mx-fg-faint);
+  margin-left: 3px;         /* stack now grows rightward, so the "+N" label sits at the outer (right) end */
+  white-space: nowrap;
+}
+
+.mx-msg-body {
+  word-break: break-word;
+  color: var(--mx-fg);
+  font-family: inherit;
+}
+
+.mx-msg-edited {
+  font-size: 10.5px;
+  color: var(--mx-fg-faint);
+  font-weight: 400;
+  margin-left: 5px;
+}
+
+/* ---- Reply quote block (renderReplyQuoteHtml in room-view.js) ---- */
+
+.mx-msg-reply-quote {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-bottom: 3px;
+  padding: 3px 8px;
+  border-left: 2px solid var(--mx-hairline-strong);
+  border-radius: 0 var(--mx-radius) var(--mx-radius) 0;
+  background: var(--mx-surface);
+  font-size: 12px;
+  color: var(--mx-fg-muted);
+  cursor: pointer;
+  max-width: fit-content;
+}
+
+.mx-msg-reply-quote:hover {
+  border-left-color: var(--mx-accent);
+  background: var(--mx-surface-hover);
+}
+
+.mx-msg-reply-sender {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--mx-fg);
+}
+
+.mx-msg-reply-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Brief flash when jumping to a message via a reply quote's click — long
+   enough to register as "here", short enough not to linger and look like
+   an unread/highlighted state. */
+.mx-msg-highlight {
+  animation: mx-msg-highlight-flash 1.1s ease-out;
+}
+
+@keyframes mx-msg-highlight-flash {
+  0% { background: var(--mx-accent-soft); }
+  100% { background: transparent; }
+}
+
+/* ---- Reaction pills ---- */
+
+.mx-msg-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  /* Empty (no reactions on this message) most of the time — :empty
+     collapses the row entirely rather than leaving a few pixels of dead
+     margin-top under every single message. */
+}
+
+.mx-msg-reactions:empty {
+  margin-top: 0;
+}
+
+.mx-reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--mx-hairline-strong);
+  background: var(--mx-surface);
+  color: var(--mx-fg);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.mx-reaction-pill:hover {
+  background: var(--mx-surface-hover);
+}
+
+/* Reactions the local user has already added themselves — accent border
+   so "which of these are mine (click to remove)" reads at a glance,
+   same purpose the -mine/selected treatment serves elsewhere in this
+   plugin's rail (see .mx-rail-item.active in the room-list section). */
+.mx-reaction-pill-mine {
+  border-color: var(--mx-accent, #fff);
+  background: color-mix(in srgb, var(--mx-accent, #fff) 16%, var(--mx-surface));
+}
+
+.mx-reaction-count {
+  font-family: var(--mx-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--mx-fg-faint);
+}
+
+.mx-reaction-pill-mine .mx-reaction-count {
+  color: inherit;
+}
+
+/* ---- Quick-react row ----
+   The emoji row + "more" button opened alongside a message's right-click
+   menu (room-view.js's openReactionPicker(), src/ui/context-menu.js) — a
+   custom widget, not a plain action list, so it's still built and styled
+   here and handed to Core's openMenu() (js/core/context-menu.js) as
+   `before`. The menu surface itself, and the Reply/Edit/Delete/... action
+   rows below the divider, are Core's own .ctx-menu-surface/.ctx-item now
+   (index.html) — this plugin (and room-list.js's "Leave" menu) used to
+   define its own .mx-reaction-picker/.mx-reaction-picker-action rules
+   hand-matched to Core's #ctx-menu; those are gone, superseded by the
+   shared classes every migrated menu in the app now renders through. */
+.mx-reaction-picker-row {
+  display: flex;
+  gap: 2px;
+}
+
+.mx-reaction-picker-divider {
+  height: 1px;
+  margin: 3px 2px;
+  background: var(--mx-hairline);
+}
+
+.mx-reaction-picker-emoji {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 16px;
+  border-radius: var(--mx-radius);
+  line-height: 1;
+}
+
+.mx-reaction-picker-emoji:hover {
+  background: var(--mx-surface-hover);
+}
+
+/* The "+" escape hatch to the full browser (emoji-browser.js) — same
+   footprint as the quick-react buttons it sits alongside, but muted
+   until hovered so it doesn't visually compete with the actual emoji. */
+.mx-reaction-picker-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: var(--mx-radius);
+  line-height: 1;
+  color: var(--mx-fg-muted);
+}
+
+.mx-reaction-picker-more:hover {
+  background: var(--mx-surface-hover);
+  color: var(--mx-fg);
+}
+
+/* .mx-context-menu-icon/.mx-context-menu-label used to style menuAction()'s
+   button markup — removed along with menuAction() itself (menu-icons.js);
+   every migrated action row's icon now renders via Core's own .ctx-ico
+   (index.html), sized/styled inline per svg the same way other plugin menu
+   icons already do. */
+
+/* ---- @mention autocomplete (room-view.js's mentionEl) ----
+   Opened by typing "@" in the composer. It is the same popover as the rev/
+   command list (.mx-palette, below): appended to document.body so
+   roomViewEl's backdrop-filter can't clip it, flush above the bar. */
+
+/* ---- Settings menu (settings-menu.js's openSettingsMenu) ----
+   Opened from .mx-rail-settings-btn at the bottom of the sidebar. Same
+   "material" as .mx-reaction-picker/.mx-emoji-browser above — matched
+   to the app's own #ctx-menu rather than the plugin's own faint
+   --mx-surface tint, and position: fixed for the same reason those are:
+   anchored in viewport coordinates, appended into a sibling of
+   whatever scrolling pane the gear button lives in so that pane's own
+   overflow-y: auto can't clip it. Discord-style: an account header up
+   top, then preference rows, then a destructive action at the bottom —
+   not just the single toggle row this used to be. */
+.mx-settings-menu {
+  position: fixed;
+  z-index: 20;
+  width: 270px;
+  max-height: calc(100vh - 8px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 4px;
+  border-radius: var(--mx-radius);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(var(--surface-rgb, 18,18,20), var(--shell-opacity, .88));
+  backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+}
+.mx-settings-menu::-webkit-scrollbar { display: none; }
+.mx-settings-menu-embedded {
+  position: static;
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border-radius: 12px;
+  background: rgba(22,22,24,.5);
+  box-shadow: none;
+}
+
+.mx-settings-section {
+  border-bottom: 1px solid var(--mx-hairline);
+}
+.mx-settings-section > summary {
+  position: relative;
+  padding: 9px 26px 9px 9px;
+  list-style: none;
+  color: var(--mx-fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+.mx-settings-section > summary::-webkit-details-marker { display: none; }
+.mx-settings-section > summary::after {
+  content: '›';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--mx-fg-faint);
+  font-size: 16px;
+  transition: transform .14s ease;
+}
+.mx-settings-section[open] > summary { color: var(--mx-fg); }
+.mx-settings-section[open] > summary::after { transform: translateY(-50%) rotate(90deg); }
+.mx-settings-section-body { padding: 0 2px 7px; }
+
+/* Account switcher — one small avatar per state.matrixSessions entry
+   (see client.js's "Multi-account support" section), plus a dashed "+"
+   circle to add another. Sits above the account header rather than
+   replacing it: the header below still shows the ACTIVE account's full
+   name/id/homeserver, this row is purely for picking a different one.
+   Wraps onto a second line rather than scrolling/truncating once there
+   are enough accounts to fill the 240px width — this menu has no
+   horizontal scroll anywhere else, and a handful of saved accounts is
+   the expected case, not dozens. */
+.mx-settings-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 4px;
+}
+
+.mx-settings-switcher-item {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* Non-active entries read as slightly recessed (same opacity language
+   .mx-rail-avatar uses for an unselected rail icon) until hovered, so
+   the active one — full opacity, ringed below — reads as the obvious
+   "you are here" without needing a label. Active entries get
+   data-action="" (see settings-menu.js), not the pointer cursor/hover
+   treatment, since clicking your own current account is a no-op. */
+.mx-settings-switcher-item[data-action='switch-account'] {
+  opacity: 0.7;
+  transition: opacity 0.12s ease;
+}
+
+.mx-settings-switcher-item[data-action='switch-account']:hover {
+  opacity: 1;
+}
+
+.mx-settings-switcher-item.active {
+  cursor: default;
+  outline: 2px solid var(--mx-accent-strong);
+  outline-offset: 2px;
+}
+
+.mx-settings-switcher-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: hsl(var(--mx-avatar-hue, 220), 40%, 32%);
+  overflow: hidden;
+}
+
+.mx-settings-switcher-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Hidden until the item itself is hovered — same "reveal an action on
+   hover" language a file manager uses for a remove/close affordance,
+   rather than permanently cluttering every avatar with a visible ×.
+   Never rendered at all for the active entry (see settings-menu.js —
+   removing the account you're currently using isn't offered here). */
+.mx-settings-switcher-remove {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--mx-hairline-strong);
+  background: rgba(20, 20, 22, 0.92);
+  color: var(--mx-fg-muted);
+  font-size: 11px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.mx-settings-switcher-item:hover .mx-settings-switcher-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Same destructive red as .mx-settings-logout:hover — removing a saved
+   account is the same "leaves the account" action, just for one that
+   isn't the active one. */
+.mx-settings-switcher-remove:hover {
+  background: color-mix(in srgb, var(--mx-danger) 85%, transparent);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* Dashed border (rather than the solid hairline every other control in
+   this menu uses) marks this specifically as an "add" affordance —
+   same visual convention as an empty-slot placeholder elsewhere in the
+   app, distinct from every filled avatar circle next to it. */
+.mx-settings-switcher-add {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px dashed var(--mx-hairline-strong);
+  background: transparent;
+  color: var(--mx-fg-muted);
+  font-size: 15px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.mx-settings-switcher-add:hover {
+  background: var(--mx-surface-hover);
+  color: var(--mx-fg);
+  border-color: var(--mx-fg-muted);
+}
+
+/* Status line for the in-progress/failure states of switchAccount() (see
+   settings-menu.js) — same neutral-by-default, :empty-collapses,
+   error-modifier treatment as .mx-settings-recovery-status just below,
+   reused rather than duplicated with a different default color since
+   this covers the exact same "Switching…" / failure-message shape. */
+.mx-settings-switcher-status {
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--mx-fg-muted);
+}
+
+.mx-settings-switcher-status:empty {
+  display: none;
+}
+
+.mx-settings-switcher-status.mx-settings-switcher-status-error {
+  color: var(--mx-danger);
+}
+
+/* Wrapper for the inline "add another account" form — login.js's
+   renderLogin() reused as-is (see settings-menu.js), just toggled via
+   [hidden] like the recovery-key form below. */
+.mx-settings-add-account {
+  padding: 2px 8px 8px;
+}
+
+/* .mx-login is normally a full-height, generously-padded standalone
+   pane (see the Login section up top) — reused here inside a 240px
+   popover row, it needs to give up both of those or it reads as a
+   pane-within-a-pane rather than part of this menu. Nothing else about
+   login.js's markup/behavior changes; this is purely a nested-context
+   override, scoped to .mx-settings-add-account so the real full-page
+   login view is completely unaffected. */
+.mx-settings-add-account .mx-login {
+  height: auto;
+  padding: 0;
+  gap: 8px;
+}
+
+.mx-settings-add-account .mx-login-title {
+  margin: 0 0 2px;
+}
+
+/* Account header — avatar + name/id/homeserver stack, same avatar
+   fallback (initial + hue swatch, replaced with a real photo once
+   fetchAvatarBytes resolves) as every other avatar in this plugin. */
+.mx-settings-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px;
+}
+
+.mx-settings-avatar {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: hsl(var(--mx-avatar-hue, 220), 40%, 32%);
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+}
+
+.mx-settings-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mx-settings-avatar-edit { cursor: pointer; }
+.mx-settings-avatar-edit > span {
+  position: absolute;
+  inset: auto 0 0;
+  padding: 2px 0 3px;
+  background: rgba(0,0,0,.72);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.mx-settings-avatar-edit:hover > span,
+.mx-settings-avatar-edit:focus-visible > span { opacity: 1; }
+
+.mx-settings-profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px 4px;
+}
+.mx-settings-profile-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--mx-fg-muted);
+  font-size: 10px;
+}
+.mx-settings-profile-name {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mx-fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  text-overflow: ellipsis;
+}
+.mx-settings-profile-name:hover { background: rgba(255,255,255,.035); }
+.mx-settings-profile-name:focus { border-color: var(--mx-hairline-strong); background: var(--mx-surface); }
+.mx-settings-profile-save {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--mx-hairline-strong);
+  border-radius: 7px;
+  background: var(--mx-surface);
+  color: var(--mx-fg);
+  cursor: pointer;
+}
+.mx-settings-profile-save svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.mx-settings-profile-save:hover { background: var(--mx-surface-hover); }
+.mx-settings-profile-save:disabled { opacity: .45; cursor: default; }
+.mx-settings-profile-status {
+  color: var(--mx-fg-muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.mx-settings-profile-status:empty { display: none; }
+.mx-settings-profile-status-error { color: var(--mx-danger); }
+
+.mx-settings-account-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mx-settings-account-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mx-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mx-settings-account-id,
+.mx-settings-account-hs {
+  font-size: 11px;
+  color: var(--mx-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mx-settings-divider {
+  height: 1px;
+  margin: 4px 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mx-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+}
+
+.mx-settings-label {
+  font-size: 12px;
+  color: var(--mx-fg);
+}
+
+/* ---- rev/ commands in the message bar (ui/command-bar.js) ----
+   A list that opens above the bar, in the same popover material as the
+   @mention list (room-view.js uses these classes too): the commands, then
+   what one can act on.
+   rev/room and rev/space add a row of option chips. */
+.mx-palette {
+  position: fixed; z-index: 20; box-sizing: border-box; display: flex; flex-direction: column;
+  max-height: min(60vh, 460px); color: var(--mx-fg); font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1); border-bottom: 0; border-radius: 8px 8px 0 0;
+  background: rgba(22, 22, 24, 0.82);
+  backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+}
+.mx-palette-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; scrollbar-width: none; }
+.mx-palette-list::-webkit-scrollbar { display: none; }
+.mx-palette-heading { padding: 8px 10px 4px; color: var(--mx-fg-faint); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; }
+.mx-palette-note { padding: 8px 10px; color: var(--mx-fg-muted); font-size: 11.5px; line-height: 1.45; }
+.mx-palette-item {
+  box-sizing: border-box; display: flex; align-items: center; gap: 12px; width: 100%; padding: 7px 10px;
+  border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.mx-palette-item:hover, .mx-palette-item.active { background: rgba(var(--ink-rgb, 255,255,255), .08); }
+.mx-palette-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mx-palette-item-title { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.mx-palette-item-hint { color: var(--mx-fg-faint); font-size: 11px; }
+.mx-palette-item-sub { overflow: hidden; color: var(--mx-fg-faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.mx-palette-item-action {
+  flex: 0 0 auto; padding: 2px 8px; border: 1px solid var(--mx-hairline-strong); border-radius: 5px;
+  color: var(--mx-fg-muted); font-size: 10.5px; visibility: hidden;
+}
+.mx-palette-item.active .mx-palette-item-action, .mx-palette-item:hover .mx-palette-item-action { visibility: visible; }
+.mx-palette-item.danger .mx-palette-item-title, .mx-palette-item.danger .mx-palette-item-action { color: var(--mx-danger); }
+.mx-palette-item.danger .mx-palette-item-action { border-color: color-mix(in srgb, var(--mx-danger) 40%, transparent); }
+.mx-palette-status { padding: 8px 14px 0; color: var(--mx-fg-muted); font-size: 11px; }
+.mx-palette-status-error { color: var(--mx-danger); }
+.mx-palette-foot { padding: 5px 14px 6px; border-top: 1px solid var(--mx-hairline); color: var(--mx-fg-faint); font-size: 10px; }
+.mx-palette-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px 4px; }
+.mx-palette-chip-group { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--mx-hairline); border-radius: 999px; }
+.mx-palette-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid var(--mx-hairline-strong);
+  border-radius: 999px; background: transparent; color: var(--mx-fg-muted); font: inherit; font-size: 10.5px; cursor: pointer; white-space: nowrap;
+}
+.mx-palette-chip-group .mx-palette-chip { border-color: transparent; }
+.mx-palette-chip:hover { color: var(--mx-fg); }
+.mx-palette-chip.on { background: rgba(var(--ink-rgb, 255,255,255), .1); color: var(--mx-fg); }
+.mx-palette-chip-select span, .mx-palette-chip-alias span { color: var(--mx-fg-faint); }
+.mx-palette-chip select, .mx-palette-chip input {
+  width: auto; padding: 0; border: 0; background: transparent; color: var(--mx-fg); font: inherit; font-size: 10.5px; outline: none; cursor: pointer;
+}
+.mx-palette-chip select option { background: #1b1c21; }
+.mx-palette-chip-alias { cursor: text; }
+/* The bar itself while it holds a command. */
+.mx-composer.mx-composer-command { box-shadow: inset 0 1px 0 rgba(var(--ink-rgb, 255,255,255), .22); }
+
+/* ---- No room open (ui/empty-view.js) ---- */
+.mx-empty-timeline { display: flex; align-items: center; justify-content: center; }
+.mx-empty-view-hint { max-width: 360px; padding: 24px; color: var(--mx-fg-faint); font-size: 12px; line-height: 1.6; text-align: center; }
+.mx-empty-view-hint p { margin: 0 0 4px; }
+.mx-empty-view-hint p:first-child { color: var(--mx-fg-muted); font-size: 13px; }
+.mx-empty-view-hint kbd, .mx-empty-view .mx-composer input { font-family: inherit; }
+.mx-empty-view-hint kbd { padding: 1px 5px; border: 1px solid var(--mx-hairline-strong); border-radius: 4px; color: var(--mx-fg-muted); }
+.mx-empty-view .mx-composer { padding-left: 18px; }
+
+/* ---- Matrix Account sidebar widget (sidebar-account.js) ----
+   ui/settings-menu.js's sections, always open, laid out for a sidebar:
+   Atmos-style uppercase headings over hairline-separated groups. */
+.mx-atmos-account { padding: 2px 10px 10px; }
+.mx-atmos-account .mx-settings-menu-embedded {
+  border: 0; border-radius: 0; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
+  box-shadow: none; padding: 0; width: auto; max-width: none;
+}
+.mx-atmos-account .mx-settings-section { padding: 0 0 8px; border-bottom: 0; }
+.mx-atmos-account .mx-settings-section + .mx-settings-section { border-top: 1px solid var(--mx-hairline); }
+.mx-atmos-account .mx-settings-section > summary { padding: 10px 0 6px; color: var(--mx-fg-faint); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; cursor: default; }
+.mx-atmos-account .mx-settings-section:first-child > summary { display: none; }
+.mx-atmos-account .mx-settings-section > summary::after { display: none; }
+.mx-atmos-account .mx-settings-section-body { padding: 0 0 2px; }
+.mx-atmos-account .mx-settings-account { padding: 8px 0 6px; }
+.mx-atmos-account .mx-settings-row { padding: 5px 0; }
+.mx-atmos-account .mx-settings-switcher { gap: 6px; padding: 2px 0 4px; }
+.mx-atmos-account .mx-settings-device-verification { gap: 6px; padding: 2px 0 6px; }
+.mx-atmos-account .mx-settings-recovery-form { padding: 2px 0 6px; }
+.mx-atmos-account .mx-settings-logout { margin: 6px 0 0; padding-left: 0; }
+
+
+/* ---- Who sent this (trust-service.js) ----
+   A line under a message whose sender can't be confirmed, and a notice
+   above the message bar when someone's identity changed. */
+.mx-msg-trust:empty { display: none; }
+.mx-msg-trust { display: flex; align-items: baseline; gap: 5px; margin-top: 3px; font-size: 11px; line-height: 1.35; }
+.mx-msg-trust-warning { color: var(--mx-fg-muted); }
+.mx-msg-trust-danger { color: var(--mx-danger); }
+.mx-msg-trust-icon { flex: none; }
+.mx-identity-notice {
+  display: flex; align-items: center; gap: 10px; margin: 0 12px 6px; padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--mx-danger) 45%, transparent); border-radius: 8px;
+  background: color-mix(in srgb, var(--mx-danger) 10%, rgba(18,18,20,.85)); color: var(--mx-fg); font-size: 11.5px; line-height: 1.4;
+}
+.mx-identity-notice[hidden] { display: none; }
+.mx-identity-notice-text { flex: 1; min-width: 0; }
+.mx-identity-notice-ok {
+  flex: none; padding: 4px 12px; border: 1px solid var(--mx-hairline-strong); border-radius: 6px;
+  background: transparent; color: var(--mx-fg); font: inherit; font-weight: 600; cursor: pointer;
+}
+.mx-identity-notice-ok:hover { background: var(--mx-surface-hover); }
+.mx-identity-notice-ok:disabled { opacity: .5; cursor: default; }
+
+/* ---- Matrix Account widget layout (ui/settings-menu.js) ----
+   Accounts on top, then the profile, one security card, log out. */
+.mx-acct { display: flex; flex-direction: column; }
+.mx-atmos-account .mx-acct .mx-settings-switcher { padding: 6px 0 2px; }
+.mx-acct .mx-settings-switcher-status:empty { display: none; }
+.mx-acct .mx-settings-add-account { padding: 4px 0 8px; }
+.mx-acct-profile { padding: 2px 0 8px; border-bottom: 1px solid var(--mx-hairline); }
+.mx-atmos-account .mx-acct .mx-settings-account { padding: 8px 0 2px; }
+.mx-acct-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; color: var(--mx-fg-faint); font-size: 10.5px; }
+.mx-acct-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mx-acct-link {
+  padding: 0; border: 0; background: none; color: var(--mx-fg-muted); font: inherit; font-size: 10.5px;
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.mx-acct-link:hover { color: var(--mx-fg); }
+.mx-acct .mx-settings-profile-status { padding-top: 4px; }
+
+.mx-acct-security { padding: 4px 0 8px; border-bottom: 1px solid var(--mx-hairline); }
+.mx-acct-heading { padding: 8px 0 8px; color: var(--mx-fg-faint); font-size: 9px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+.mx-acct-card { display: flex; flex-direction: column; gap: 8px; }
+.mx-acct-card[hidden], .mx-acct [hidden] { display: none !important; }
+.mx-acct-title { color: var(--mx-fg); font-size: 12.5px; font-weight: 650; }
+.mx-acct-copy { color: var(--mx-fg-muted); font-size: 11px; line-height: 1.45; }
+.mx-acct-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mx-acct-primary,
+.mx-acct-secondary {
+  padding: 6px 11px; border: 1px solid var(--mx-hairline-strong); border-radius: var(--mx-radius);
+  background: transparent; color: var(--mx-fg); font-family: inherit; font-size: 11.5px; font-weight: 500; line-height: 1.2; cursor: pointer;
+}
+.mx-acct-primary { align-self: flex-start; border-color: var(--mx-accent-strong); background: var(--mx-accent-soft); font-weight: 600; }
+.mx-acct-secondary:hover { background: var(--mx-surface-hover); }
+.mx-acct-primary:disabled, .mx-acct-secondary:disabled { opacity: .45; cursor: default; }
+.mx-acct-card > .mx-acct-link { align-self: flex-start; }
+.mx-acct-input {
+  padding: 7px 9px; border: 1px solid var(--mx-hairline-strong); border-radius: var(--mx-radius);
+  background: var(--mx-surface); color: inherit; font: 12px var(--mx-mono);
+}
+.mx-acct-input:focus { outline: none; border-color: var(--mx-accent-strong); }
+.mx-acct-input:disabled { opacity: .5; }
+.mx-acct-check { display: flex; align-items: center; gap: 7px; color: var(--mx-fg-muted); font-size: 11.5px; cursor: pointer; }
+.mx-acct-verified { flex-direction: row; align-items: center; justify-content: space-between; }
+.mx-acct-device-id { margin-top: 2px; color: var(--mx-fg-faint); font: 10px/1.3 var(--mx-mono); word-break: break-all; }
+.mx-acct .mx-settings-sas { display: flex; flex-direction: column; gap: 8px; }
+.mx-acct .mx-settings-sas-emoji { margin: 0; }
+.mx-acct-status { padding-top: 8px; color: var(--mx-fg-muted); font-size: 11px; line-height: 1.4; }
+.mx-acct-status:empty { display: none; }
+.mx-acct-status-error { color: var(--mx-danger); }
+.mx-settings-recovery-key {
+  display: block; padding: 9px 10px; border: 1px solid var(--mx-hairline-strong); border-radius: var(--mx-radius);
+  background: var(--mx-surface); color: var(--mx-fg); font: 12px/1.6 var(--mx-mono); word-spacing: 2px;
+  user-select: all; overflow-wrap: anywhere;
+}
+
+/* Pill switch — deliberately not a checkbox: everything else in this
+   settings menu (and the reaction-picker's own action rows) reads as a
+   dark, near-native menu, and a browser-default checkbox would look
+   foreign dropped into it. .active (on when showUsernames is true, see
+   settings-menu.js) slides the knob right and swaps the track to
+   --mx-accent, same on/active color language .mx-rail-item.active and
+   .mx-reaction-pill-mine already use elsewhere in this plugin. */
+.mx-settings-toggle {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 17px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--mx-surface-hover);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.mx-settings-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--mx-fg-muted);
+  transition: left 0.15s ease, background 0.15s ease;
+}
+
+.mx-settings-toggle.active {
+  background: var(--mx-accent-strong);
+}
+
+.mx-settings-toggle.active::after {
+  left: 15px;
+  background: #fff;
+}
+
+/* Chat scale used to have a row + custom slider here. The control moved
+   to its own sidebar section, so its
+   styling lives there now; ui/settings-menu.js still owns the
+   preference itself. */
+
+/* Recovery-key entry — a collapsed toggle button that reveals a small
+   inline form (input + submit + status line) in place, rather than a
+   separate popover/modal. Sits between the preference rows and Log out:
+   not a preference (nothing here persists beyond the one restore call)
+   and not destructive, so it gets its own visual language rather than
+   borrowing .mx-settings-row/.mx-settings-logout wholesale. */
+.mx-settings-recovery-toggle {
+  display: block;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: calc(var(--mx-radius) - 2px);
+  background: transparent;
+  color: var(--mx-fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.mx-settings-recovery-toggle:hover {
+  background: var(--mx-surface-hover);
+  color: var(--mx-fg);
+}
+
+.mx-settings-device-verification {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 3px 8px 10px;
+}
+
+.mx-settings-device-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mx-settings-device-title { color: var(--mx-fg); font-size: 12.5px; font-weight: 650; }
+.mx-settings-device-id { margin-top: 2px; color: var(--mx-fg-faint); font: 10px/1.3 var(--mx-mono); word-break: break-all; }
+.mx-settings-device-copy,
+.mx-settings-sas-copy { color: var(--mx-fg-faint); font-size: 11px; line-height: 1.4; }
+
+.mx-settings-device-badge {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid var(--mx-hairline-strong);
+  border-radius: 999px;
+  color: var(--mx-fg-faint);
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.mx-settings-device-badge.verified { border-color: color-mix(in srgb, var(--mx-positive) 40%, transparent); color: var(--mx-positive); background: color-mix(in srgb, var(--mx-positive) 10%, transparent); }
+.mx-settings-device-verify,
+.mx-settings-sas-actions button {
+  align-self: flex-start;
+  padding: 6px 11px;
+  border: 1px solid var(--mx-accent-strong);
+  border-radius: var(--mx-radius);
+  background: var(--mx-accent-soft);
+  color: var(--mx-fg);
+  font: 600 11.5px/1.2 var(--app-font, inherit);
+  cursor: pointer;
+}
+.mx-settings-device-verify:disabled,
+.mx-settings-sas-actions button:disabled { opacity: .45; cursor: default; }
+.mx-settings-device-status { min-height: 15px; color: var(--mx-fg-muted); font-size: 11px; line-height: 1.35; }
+.mx-settings-device-status:empty { display: none; }
+.mx-settings-device-status-error { color: var(--mx-danger); }
+
+.mx-settings-sas {
+  padding: 10px;
+  border: 1px solid var(--mx-hairline-strong);
+  border-radius: var(--mx-radius);
+  background: var(--mx-surface);
+}
+.mx-settings-sas-title { color: var(--mx-fg); font-size: 12px; font-weight: 650; }
+.mx-settings-sas-emoji { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin: 10px 0; }
+.mx-settings-sas-item { min-width: 0; text-align: center; }
+.mx-settings-sas-item span { display: block; font-size: 22px; line-height: 1.2; }
+.mx-settings-sas-item small { display: block; margin-top: 3px; overflow: hidden; color: var(--mx-fg-faint); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.mx-settings-sas-actions { display: flex; gap: 6px; }
+.mx-settings-sas-actions .mx-settings-sas-mismatch { border-color: var(--mx-hairline-strong); background: transparent; color: var(--mx-fg-muted); }
+.mx-settings-security-divider { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; color: var(--mx-fg-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.mx-settings-security-divider::before,
+.mx-settings-security-divider::after { content: ''; height: 1px; flex: 1; background: var(--mx-hairline); }
+
+.mx-settings-security-divider,
+.mx-settings-recovery-form {
+  display: none;
+}
+
+.mx-settings-security-verified .mx-settings-device-copy,
+.mx-settings-security-verified .mx-settings-device-verify,
+.mx-settings-security-verified .mx-settings-device-status,
+.mx-settings-security-verified .mx-settings-sas,
+.mx-settings-security-verified .mx-settings-security-divider,
+.mx-settings-security-verified .mx-settings-recovery-form {
+  display: none;
+}
+
+.mx-settings-recovery-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 8px 8px;
+}
+
+.mx-settings-recovery-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--mx-fg-faint);
+}
+
+/* Same look as .mx-field input (login.js's own inputs) — kept as its
+   own rule rather than sharing that class since this lives outside a
+   .mx-field wrapper (no separate <label> row here, just the hint text
+   above). */
+.mx-settings-recovery-input {
+  padding: 7px 9px;
+  border-radius: var(--mx-radius);
+  border: 1px solid var(--mx-hairline-strong);
+  background: var(--mx-surface);
+  color: inherit;
+  font-size: 12.5px;
+  font-family: var(--mx-mono);
+}
+
+.mx-settings-recovery-input:focus {
+  outline: none;
+  border-color: var(--mx-accent-strong);
+}
+
+.mx-settings-recovery-input:disabled {
+  opacity: 0.5;
+}
+
+.mx-settings-recovery-file-input {
+  display: none;
+}
+
+.mx-settings-recovery-submit {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border-radius: var(--mx-radius);
+  border: 1px solid var(--mx-accent-strong);
+  background: var(--mx-accent-soft);
+  color: var(--mx-fg);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.mx-settings-recovery-submit:hover {
+  background: rgba(125, 157, 255, 0.26);
+}
+
+.mx-settings-recovery-submit:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Neutral by default (covers the "Restoring…" in-progress state and
+   the success message alike) — only the failure case gets .mx-error's
+   --mx-danger color, via the modifier class settings-menu.js adds
+   alongside it. Empty :empty rule keeps the form's own gap from adding
+   visible space before any status text actually exists. */
+.mx-settings-recovery-status {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--mx-fg-muted);
+}
+
+.mx-settings-recovery-status:empty {
+  display: none;
+}
+
+.mx-settings-recovery-status.mx-settings-recovery-status-error {
+  color: var(--mx-danger);
+}
+
+/* Log out — the one destructive action in this menu, styled apart from
+   the rest (red text, hover fill) same warning-color language a
+   destructive-action button gets anywhere else a design system
+   distinguishes "leaves the account" from an ordinary preference. */
+.mx-settings-logout {
+  display: block;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: calc(var(--mx-radius) - 2px);
+  background: transparent;
+  color: var(--mx-danger);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.mx-settings-logout:hover {
+  background: color-mix(in srgb, var(--mx-danger) 12%, transparent);
+}
+
+/* Press and hold to log out: a bar fills the button (Atmos's semantic
+   negative colour, like a menu's hold rows); letting go early empties it. */
+.mx-settings-logout {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+  user-select: none;
+}
+.mx-settings-logout > span { position: relative; z-index: 1; }
+.mx-settings-logout::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: color-mix(in srgb, var(--mx-danger) 26%, transparent);
+  pointer-events: none;
+  transition: width .12s ease;
+}
+.mx-settings-logout.mx-holding::after { width: 100%; transition: width var(--mx-hold-ms, 900ms) linear; }
+.mx-settings-hold-hint { font-size: 9px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; opacity: .6; }
+
+/* ---- Full emoji browser (emoji-browser.js) ----
+   Opened from .mx-reaction-picker-more — position: fixed for the same
+   reason .mx-reaction-picker is (anchored in viewport coordinates,
+   appended into .mx-room-view so .mx-timeline's overflow can't clip it).
+   Fixed width/height rather than shrink-to-fit content, since the grid's
+   row count varies with search results and category size — a widget
+   that resizes itself on every keystroke would be distracting. */
+.mx-emoji-browser {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  height: 320px;
+  /* This remains a softly rounded floating panel even though the composer
+     it opens from is now a full-width boxed section. */
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  /* Same #ctx-menu-matched treatment as .mx-reaction-picker just above —
+     this popover opens from that menu's "+" button, so it should read
+     as the same surface, not switch back to the faint --mx-surface tint. */
+  background: rgba(var(--surface-rgb, 18,18,20), var(--shell-opacity, .88));
+  backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--shell-blur, 30px)) saturate(180%);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  overflow: hidden;
+}
+
+.mx-emoji-browser-search {
+  margin: 8px 8px 4px;
+  padding: 8px 10px;
+  border-radius: var(--mx-radius);
+  border: 1px solid var(--mx-hairline-strong);
+  background: var(--mx-surface-hover);
+  color: inherit;
+  font-size: 13px;
+}
+
+.mx-emoji-browser-search:focus {
+  outline: none;
+  border-color: var(--mx-accent-strong);
+}
+
+.mx-emoji-browser-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--mx-hairline);
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* old Edge */
+}
+
+.mx-emoji-browser-tabs::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Electron */
+}
+
+.mx-emoji-browser-tab {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: var(--mx-radius);
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.mx-emoji-browser-tab:hover {
+  background: var(--mx-surface-hover);
+  opacity: 0.8;
+}
+
+.mx-emoji-browser-tab-active {
+  background: var(--mx-accent-soft);
+  opacity: 1;
+}
+
+.mx-emoji-browser-grid {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 2px;
+  padding: 6px 8px 8px;
+  overflow-y: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* old Edge */
+}
+
+.mx-emoji-browser-grid::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Electron */
+}
+
+.mx-emoji-browser-cell {
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 17px;
+  border-radius: var(--mx-radius);
+  line-height: 1;
+}
+
+.mx-emoji-browser-cell:hover {
+  background: var(--mx-surface-hover);
+}
+
+.mx-emoji-browser-empty {
+  width: 100%;
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--mx-fg-faint);
+}
+
+/* ---- Received media attachments ---- */
+
+.mx-msg-media {
+  display: block;
+  max-width: 280px;
+  max-height: 280px;
+  border-radius: var(--mx-radius);
+  margin-top: 4px;
+}
+
+.mx-msg-image {
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  background: var(--mx-surface);
+  cursor: zoom-in;
+}
+
+.mx-msg-video {
+  width: 280px;
+  background: var(--mx-surface);
+}
+
+.mx-msg-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 10px;
+  border-radius: var(--mx-radius);
+  border: 1px solid var(--mx-hairline-strong);
+  background: var(--mx-surface);
+  font-size: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.mx-msg-file:hover {
+  background: var(--mx-surface-hover);
+}
+
+/* Caption text sent alongside an attachment (see renderEventBody in
+   room-view.js) — same look as a plain text body, just pulled down
+   under the media/file element it belongs to rather than sitting flush
+   against it like the sender/timestamp meta line does. */
+.mx-msg-caption {
+  display: block;
+  margin-top: 4px;
+  word-break: break-word;
+  color: var(--mx-fg);
+}
+
+/* ---- Pending attachments tray ---- */
+
+/* .mx-pending-tray sets display:flex unconditionally below, which (per
+   cascade rules) overrides the browser's own [hidden] { display: none }
+   — origin beats specificity, so an author style always wins over a
+   same-specificity UA style regardless of source order. Without this,
+   toggling the `hidden` attribute in room-view.js has no visible effect
+   and the tray sits there as an empty flex box with its own padding. */
+.mx-pending-tray[hidden] {
+  display: none;
+}
+
+.mx-pending-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.mx-pending-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+  padding: 4px 8px 4px 4px;
+  border-radius: var(--mx-radius);
+  border: 1px solid var(--mx-hairline-strong);
+  background: var(--mx-surface);
+  font-size: 12px;
+}
+
+.mx-pending-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mx-pending-thumb-generic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.mx-pending-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--mx-fg-muted);
+}
+
+.mx-pending-remove {
+  flex-shrink: 0;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--mx-hairline-strong);
+  background: transparent;
+  color: var(--mx-fg-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mx-pending-remove:hover {
+  background: rgba(255, 100, 100, 0.25);
+  border-color: rgba(255, 100, 100, 0.5);
+  color: #fff;
+}
+
+/* Whole-panel highlight while a drag is over the room view, so it's clear
+   dropping will stage the file(s) rather than nothing happening.
+   Previously `background: color-mix(in srgb, var(--mx-accent) 3%,
+   transparent)` outright, which (being the more specific selector) fully
+   replaced .mx-room-view's own opacity-slider background for as long as
+   the drag lasted — the panel would flash back to looking like its
+   opacity was reset to near-0 mid-drag, since backdrop-filter stayed put
+   (never overridden) but the color behind it did not. Nesting the same
+   3% accent mix *around* the existing --mx-room-view-opacity formula
+   (rather than instead of it) keeps whatever tint/opacity the user has
+   set as the base, with the accent highlight layered on top of it —
+   same visual "something's about to happen here" cue, without it
+   momentarily overriding the panel's own settings. */
+.mx-room-view.mx-drag-over {
+  outline: 1px dashed var(--mx-accent-strong);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--mx-accent) 6%, transparent);
+}
+
+/* ---- Fullscreen media viewer ---- */
+
+/* position: fixed (not absolute) so this covers the actual viewport
+   rather than just .mx-room-view's own box — same reasoning
+   .mx-reaction-picker above gives for using fixed instead of relying on
+   .mx-room-view's positioning. Was absolute/inset:0 before, which meant
+   "fullscreen" only ever covered the chat pane itself, not the app
+   panel as a whole (e.g. the sidebar stayed visible alongside it). */
+.mx-fs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.92);
+}
+
+.mx-fs-media {
+  max-width: 92%;
+  max-height: 92%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Zoom transforms (see fullscreen-viewer.js's zoomAt) land on the img/
+     video itself, not this wrapper — overflow stays visible so a zoomed-in
+     image isn't hard-clipped to its own unscaled box. */
+  overflow: visible;
+}
+
+.mx-fs-media img,
+.mx-fs-media video {
+  max-width: 100%;
+  max-height: 85vh;
+  object-fit: contain;
+  /* transform-origin/transform are set inline by fullscreen-viewer.js's
+     zoomAt() on every shift+wheel tick — nothing to declare here beyond
+     a transition so a mouse-up settle (rather than every intermediate
+     tick) doesn't feel like a hard jump cut. */
+  transition: transform 60ms linear;
+}
+
+/* ---- Reply/edit context bar (above the composer) ---- */
+
+/* Same cascade gotcha as .mx-pending-tray above: display:flex on the
+   base rule overrides the UA's [hidden] { display: none }, so the
+   `hidden` attribute room-view.js toggles on this element (whenever
+   there's no active reply/edit) was doing nothing — the bar still
+   rendered as an empty flex row, and its own border-top + padding is
+   exactly the phantom "splitter" and gap showing above the composer
+   even outside the reply/edit feature. */
+.mx-composer-context[hidden] {
+  display: none;
+}
+
+.mx-composer-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--mx-hairline);
+  font-size: 12px;
+  color: var(--mx-fg-muted);
+}
+
+.mx-composer-context-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mx-composer-context-cancel {
+  flex-shrink: 0;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--mx-hairline-strong);
+  background: transparent;
+  color: var(--mx-fg-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mx-composer-context-cancel:hover {
+  background: rgba(255, 100, 100, 0.25);
+  border-color: rgba(255, 100, 100, 0.5);
+  color: #fff;
+}
+
+.mx-composer {
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 54px;
+  align-items: center;
+  gap: 2px;
+  height: 54px;
+  min-height: 54px;
+  margin: 0;
+  padding: 0 18px 0 14px;
+  border: 0;
+  border-radius: 0;
+  /* Shell glass drawn by Atmos under the frame (data-atmos-glass="shell"). */
+  /* Paint the splitter inside the 54px surface. A real top border becomes
+     part of the flex item's box and leaves the content visually one pixel
+     lower than the adjacent Atmos sidebar section. */
+  box-shadow: inset 0 1px 0 rgba(var(--ink-rgb, 255,255,255), .09);
+}
+
+/* The composer is a fixed-height, edge-to-edge section rather than a
+   floating rounded control. Its height, non-shrinking flex basis, asymmetric
+   horizontal padding, and top divider mirror audio-player's media bar. */
+
+/* Accent-tinted inset ring while composing a reply/edit, same "color spent
+   only on what's active" treatment .mx-rail-item.active uses — a quiet
+   but unmissable reminder of which mode Enter will send as, without
+   needing to re-read the context bar's text above it. */
+.mx-composer.mx-composer-replying,
+.mx-composer.mx-composer-editing {
+  box-shadow:
+    inset 0 1px 0 rgba(var(--ink-rgb, 255,255,255), .09),
+    inset 0 0 0 1px var(--mx-accent);
+}
+
+.mx-composer input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.mx-composer input:focus {
+  outline: none;
+}
+
+/* ---- Composer icon buttons (attach / emoji / send) ---- */
+/* Deliberately not .mx-btn — those are square-ish with a visible
+   border, right for a settings row or a modal action, but too heavy
+   packed three-across inside a pill-shaped composer. These are plain
+   circular ghost buttons instead: no border of their own (the pill
+   around them already reads as the boundary), color only on hover,
+   except the send button, which keeps a permanent accent tint per this
+   file's own header note about reserving color for the one active
+   action per screen. */
+
+.mx-composer-icon-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--mx-fg-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s ease, color 0.1s ease, opacity 0.1s ease;
+}
+
+.mx-composer-icon-btn:hover {
+  background: var(--mx-surface-hover);
+  color: var(--mx-fg);
+}
+
+.mx-composer-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Raster icon can't take currentColor like the inline SVGs — it's
+   already drawn white, so muted/active is done with opacity instead. */
+.mx-composer-emoji-icon {
+  display: block;
+  opacity: 0.75;
+  transition: opacity 0.1s ease;
+}
+
+/* Keep the emoji and send artwork purely presentational. Without this,
+   Chromium can turn a slightly-missed click into an image drag. */
+#mx-composer-emoji img,
+#mx-composer-send svg {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.mx-composer-icon-btn:hover .mx-composer-emoji-icon {
+  opacity: 1;
+}
+
+.mx-composer-send-btn {
+  color: var(--mx-accent);
+}
+
+.mx-composer-send-btn:hover {
+  background: var(--mx-accent-soft);
+  color: var(--mx-fg);
+}
+
+/* Sign-in uses the same monochrome surfaces and fine borders as chat. */
+.mx-login {
+  box-sizing: border-box;
+  min-height: 0;
+  padding: clamp(20px, 5vw, 72px);
+  overflow: auto;
+  background: radial-gradient(ellipse at 50% 20%, rgba(255,255,255,.045), transparent 65%);
+  backdrop-filter: saturate(0%) brightness(25%);
+  -webkit-backdrop-filter: saturate(0%) brightness(25%);
+  font-family: var(--app-font-family, 'Segoe UI', Roboto, Helvetica, sans-serif);
+}
+.mx-login input,
+.mx-login button,
+.mx-login select,
+.mx-login textarea { font-family: inherit; }
+.mx-login-card {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 420px;
+  margin: auto;
+  padding: clamp(22px, 4vw, 38px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  border: 1px solid var(--mx-hairline-strong);
+  border-radius: 16px;
+  background: rgba(18,18,20,.78);
+  box-shadow: 0 24px 80px rgba(0,0,0,.18);
+}
+.mx-login-header { margin-bottom: 8px; }
+.mx-login .mx-login-title {
+  margin: 0; color: var(--mx-fg); font-size: clamp(25px, 3vw, 32px);
+  font-weight: 500; line-height: 1.18; letter-spacing: -.045em; text-transform: none;
+  font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+}
+.mx-login-subtitle { margin: 12px 0 0; color: var(--mx-fg-muted); font-size: 12px; line-height: 1.6; }
+.mx-login .mx-field { gap: 8px; font-size: 11px; }
+.mx-login .mx-field input {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px;
+  padding: 11px 13px; border-radius: 8px; color: var(--mx-fg);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.mx-login .mx-field input::placeholder { color: var(--mx-fg-faint); }
+.mx-login .mx-field input:focus {
+  border-color: rgba(255,255,255,.4); background: rgba(255,255,255,.055);
+  box-shadow: 0 0 0 3px rgba(255,255,255,.045);
+}
+.mx-login .mx-btn.primary {
+  min-height: 44px; margin-top: 4px; border-radius: 8px;
+  background: #e6e6e6; border-color: #e6e6e6; color: #18181b; font-weight: 600;
+}
+.mx-login .mx-btn.primary:hover:not(:disabled) { background: #fff; border-color: #fff; }
+.mx-login button:focus-visible { outline: 2px solid var(--mx-fg); outline-offset: 3px; }
+.mx-login .mx-login-saved-account { flex-direction: column; align-items: flex-start; gap: 4px; padding: 11px 12px; border-radius: 8px; }
+.mx-login .mx-login-saved-account span,
+.mx-login .mx-login-saved-account small { max-width: 100%; white-space: nowrap; }
+.mx-login .mx-login-saved-remove { border-radius: 8px; }
+.mx-login .mx-error,
+.mx-login .mx-login-session-notice { overflow-wrap: anywhere; line-height: 1.5; }
+.mx-login-compact {
+  height: auto; padding: 0; background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.mx-login-compact .mx-login-card { max-width: none; padding: 20px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.mx-login-compact .mx-login-title { font-size: 25px; }
+@media (max-width: 420px) {
+  .mx-login { padding: 14px; }
+  .mx-login-card { padding: 22px; }
+  .mx-login-compact { padding: 0; }
+}
+.mx-login .mx-homeserver-field { flex-direction: row; align-items: center; gap: 12px; color: var(--mx-fg-faint); font-size: 10px; }
+.mx-login .mx-homeserver-field input { flex: 1; min-height: 28px; padding: 5px 8px; font-size: 11px; background: transparent; border-color: var(--mx-hairline); color: var(--mx-fg-muted); }
+.mx-login [hidden] { display: none !important; }
+/* OAuth sign-in (login.js): server-aware buttons, the browser wait, and the
+   (i) explainer for people who don't have a Matrix account yet. */
+.mx-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mx-login-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.mx-login-info-btn {
+  flex: 0 0 auto; display: inline-grid; place-items: center; width: 28px; height: 28px; margin-top: 2px;
+  padding: 0; border: 1px solid var(--mx-hairline-strong); border-radius: 50%;
+  background: transparent; color: var(--mx-fg-muted); cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.mx-login-info-btn:hover, .mx-login-info-btn[aria-expanded="true"] { background: var(--mx-surface-hover); color: var(--mx-fg); border-color: rgba(255,255,255,.3); }
+.mx-login-info {
+  display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
+  border: 1px solid var(--mx-hairline-strong); border-radius: 10px; background: rgba(255,255,255,.03);
+  color: var(--mx-fg-muted); font-size: 12px; line-height: 1.6;
+}
+.mx-login-info h4 { margin: 0; color: var(--mx-fg); font-size: 13px; font-weight: 600; }
+.mx-login-info p, .mx-login-info ul { margin: 0; }
+.mx-login-info ul { padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.mx-login-info strong { color: var(--mx-fg); font-weight: 600; }
+.mx-login-info-note { color: var(--mx-fg-faint); font-size: 11px; }
+.mx-login-actions, .mx-login-password, .mx-login-waiting { display: flex; flex-direction: column; gap: 12px; }
+.mx-login .mx-login-secondary { min-height: 44px; border-radius: 8px; color: var(--mx-fg); font-weight: 500; }
+.mx-login-link {
+  align-self: center; padding: 2px 4px; border: 0; background: none; cursor: pointer;
+  color: var(--mx-fg-muted); font-size: 11.5px; text-decoration: underline; text-underline-offset: 3px;
+}
+.mx-login-link:hover { color: var(--mx-fg); }
+.mx-login-info .mx-login-link { align-self: flex-start; padding: 0; }
+.mx-login-status { margin: 0; color: var(--mx-fg-muted); font-size: 12px; text-align: center; }
+.mx-login-waiting { padding: 14px 16px; border: 1px solid var(--mx-hairline-strong); border-radius: 10px; background: rgba(255,255,255,.03); }
+.mx-login-waiting p { margin: 0; }
+.mx-login-waiting-title { color: var(--mx-fg); font-size: 13px; font-weight: 600; }
+.mx-login-waiting-text { color: var(--mx-fg-muted); font-size: 12px; line-height: 1.6; }
+.mx-login-signup-note { margin: 0; color: var(--mx-fg-muted); font-size: 11.5px; line-height: 1.6; }
+
+.mx-login .mx-field input:disabled { opacity: .55; }
+
+/* ── In frames ─────────────────────────────────────────────────────────
+   The Rooms widget (sidebar.js) carries its DMs / Spaces / Home switcher
+   at the top of its body; the panel frame fills its panel. */
+html:has(body.mx-frame-panel), body.mx-frame-panel, .mx-panel-root { height: 100%; margin: 0; overflow: hidden; }
+body.mx-frame-rooms { margin: 0; }
+.mx-rooms-signed-out {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; color: var(--mx-fg-muted); font-size: 11px;
+}
+.mx-rooms-signed-out button {
+  padding: 3px 8px; border: 1px solid var(--mx-hairline-strong); border-radius: 4px;
+  background: transparent; color: var(--mx-fg); font: inherit; cursor: pointer;
+}
+.mx-rooms-signed-out button:hover { background: var(--mx-surface-hover); }

@@ -1,0 +1,83 @@
+{
+  "apiVersion": 3,
+  "tier": "first-party",
+  "runtime": "frame",
+  "isolation": "origin",
+  "displayName": "Matrix Chat",
+  "requires": {
+    "extensions.manifest": 1,
+    "extensions.frames": 3
+  },
+  "contributes": {
+    "panel": {
+      "label": "Chat",
+      "icon": "icon.svg",
+      "glass": true
+    },
+    "sidebar": [
+      {
+        "legacyId": "matrix-chat-rooms",
+        "label": "Matrix Chat",
+        "icon": "icon.svg",
+        "order": 41,
+        "defaultHeight": 300,
+        "showIn": [
+          "matrix-chat"
+        ]
+      },
+      {
+        "id": "account",
+        "entry": "sidebar-account.js",
+        "label": "Matrix Account",
+        "icon": "icon-account.svg",
+        "order": 42,
+        "resizable": false,
+        "showIn": [
+          "matrix-chat"
+        ]
+      }
+    ],
+    "boot": {
+      "entry": "boot.js"
+    }
+  },
+  "legacyStorage": {
+    "deleteIndexedDB": [
+      "matrix-js-sdk*"
+    ],
+    "sharedOriginIndexedDB": [
+      "matrix-js-sdk*"
+    ]
+  },
+  "permissions": {
+    "network": [
+      "github.com",
+      "matrix.org",
+      "matrix.to"
+    ],
+    "browser": [
+      "wasm"
+    ],
+    "node": [
+      "crypto",
+      "electron",
+      "fs",
+      "http",
+      "path"
+    ],
+    "electron": [
+      "net",
+      "dialog",
+      "app",
+      "BrowserWindow",
+      "shell",
+      "safeStorage"
+    ],
+    "ipc": true,
+    "invokes": [
+      "service:audio",
+      "service:wallpaper",
+      "service:fullscreen-viewer"
+    ]
+  }
+}

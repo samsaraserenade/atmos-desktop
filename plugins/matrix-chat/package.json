@@ -1,0 +1,15 @@
+{
+  "dependencies": {
+    "matrix-encrypt-attachment": "^1.0.3",
+    "matrix-js-sdk": "^42.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node --preserve-symlinks --preserve-symlinks-main --test tests/*.test.mjs tests/*.test.cjs tests/request-checks.mjs tests/memory-checks.mjs",
+    "check": "node --preserve-symlinks --preserve-symlinks-main build/check.mjs",
+    "check:browser": "node --preserve-symlinks --preserve-symlinks-main build/browser-check.mjs"
+  }
+}

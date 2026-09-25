@@ -1,0 +1,9 @@
+{
+  "apiVersion": 2,
+  "tier": "first-party",
+  "requires": {
+    "extensions.manifest": 1
+  },
+  "permissions": {},
+  "library": true
+}

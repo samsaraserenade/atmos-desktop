@@ -1,0 +1,74 @@
+export const matrixState = { railOrder: [] };
+export let rooms = [];
+export const setRooms = value => { rooms = value; };
+const listeners = new Map();
+const subscribe = name => callback => {
+  if (!listeners.has(name)) listeners.set(name, new Set());
+  listeners.get(name).add(callback);
+  return () => listeners.get(name).delete(callback);
+};
+export const emit = (name, ...args) => { for (const callback of [...(listeners.get(name) || [])]) callback(...args); };
+export const listenerCount = () => [...listeners.values()].reduce((n, set) => n + set.size, 0);
+export const onAccountChange = subscribe('account');
+export const onTimeline = subscribe('timeline');
+export const onReceipt = subscribe('receipt');
+export const onUnreadNotifications = subscribe('unread');
+export const onSync = subscribe('sync');
+export const onRoom = subscribe('room');
+export const onShowUsernamesChanged = subscribe('names');
+export const getRooms = () => rooms;
+export const getDirectRoomIds = () => new Set(rooms.map(room => room.roomId));
+export const getUserId = () => '@self:test';
+export const getShowUsernames = () => false;
+export const fetchMediaBytes = async () => new ArrayBuffer(0);
+export const leaveRoom = async () => {};
+export const acceptDirectRequest = async () => {};
+export const getInvites = () => [];
+export const acceptInvite = async () => {};
+export const declineInvite = async () => {};
+export const onPanelRequest = subscribe('request');
+export const takePanelRequest = () => null;
+export const renderSettingsDashboard = () => () => {};
+export const renderEmptyView = element => { element.textContent = 'EMPTY'; return () => {}; };
+export const spaceChildren = { rooms: [] };
+export const joinedChildren = [];
+export const canAddToSpace = () => true;
+export const getRoomPermissions = () => ({ canRename: true, canChangeAvatar: true, canRemoveFromSpace: true, canLeave: true });
+export const setRoomName = async () => {};
+export const setRoomAvatar = async () => {};
+export const removeRoomAvatar = async () => {};
+export const removeFromSpace = async () => {};
+export const getSpaceChildren = async () => ({ rooms: spaceChildren.rooms, nextBatch: null });
+export const joinSpaceRoom = async (roomId, via) => { joinedChildren.push([roomId, via]); };
+export const isSettingsMenuOpen = () => false;
+export const openMenu = () => {};
+export const closeOpenMenu = () => {};
+export default {
+  contextMenu: { open: async () => null, close: async () => {} },
+  surface: { trackGlass: () => () => {} },
+  panel: { show: async () => {} },
+};
+let view = { type: 'none' };
+export const currentView = () => view;
+export const onViewChange = subscribe('view');
+export const showRoom = roomId => { view = { type: 'room', roomId }; emit('view', view); };
+export const showNone = () => { view = { type: 'none' }; emit('view', view); };
+export const save = () => {};
+export let panelPlugin;
+export const registerPanelPlugin = (_id, plugin) => { panelPlugin = plugin; };
+export const registerSection = () => {};
+export const unregisterSection = () => {};
+let loggedIn = false;
+export const hasSession = () => loggedIn;
+export const setLoggedIn = value => { loggedIn = value; };
+export const getPanelOpacity = () => 0;
+export const getPanelBlur = () => 0;
+export const onPanelOpacityChanged = subscribe('opacity');
+export const onPanelBlurChanged = subscribe('blur');
+export let finishLogin;
+export const renderLogin = (element, { onSuccess }) => {
+  element.textContent = 'LOGIN'; finishLogin = onSuccess; return () => {};
+};
+export const renderRoomView = element => { element.textContent = 'ROOM'; return () => {}; };
+export const confirmInMenu = async () => false;
+export const tellInMenu = () => {};

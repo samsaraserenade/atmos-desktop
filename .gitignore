@@ -25,5 +25,6 @@ backups/
 _to_delete/
 
 # Private runtime data — never commit
+plugins/matrix-chat/data/
 *.docx
 .sync-test-marker.txt
