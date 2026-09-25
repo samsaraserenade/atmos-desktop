@@ -10,18 +10,66 @@
   <img alt="Atmos: the settings window over a blurred workspace" src="docs/images/atmos.jpg" width="100%">
 </p>
 
-Atmos is a modular desktop environment for Windows: a full-screen workspace
-with your wallpaper behind everything, a sidebar of widgets, and panels you
-arrange however you like. Everything you use inside it is an extension, and
-the core is built to make extensions safe, consistent and pleasant to live
-with.
+# Atmos
 
-It ships with a music player and an end-to-end encrypted chat client, so
-it's useful from the first launch.
+**A modular desktop workspace where your tools live together.**
 
-## The core
+Atmos is a personal desktop environment for Windows, built around extensions.
+Instead of opening dozens of separate applications, Atmos provides a unified
+workspace where your tools, services and workflows can exist together.
 
-Atmos Core is the environment itself. It owns the shell, and extensions fill it.
+Built with Electron, Atmos combines the flexibility of web technologies with
+the feeling of a native desktop environment.
+
+## Why Atmos?
+
+Modern computing is fragmented.
+
+Your music is in one app. Your messages are somewhere else. Your tools and
+services rarely understand one another.
+
+Atmos explores a different approach:
+
+**What if your applications were parts of one environment instead of isolated
+windows?**
+
+Atmos provides the foundation:
+
+- A shared workspace
+- A consistent design system
+- Extensions instead of standalone apps
+- Services that extensions can build upon
+- A secure model for third-party additions
+
+---
+
+## Features
+
+### Extensions
+
+Atmos is built around extensions. They can add panels, sidebar widgets,
+background tasks, shared services and custom workflows.
+
+First-party extensions integrate deeply with Atmos, while third-party
+extensions run through a permission-based SDK.
+
+### A desktop built for extensions
+
+Unlike traditional applications where every feature ships as one large
+codebase, Atmos separates the environment from the experiences inside it:
+
+```text
+core/       Desktop runtime, panels, layouts, appearance, permissions and SDK
+plugins/    User-facing extensions
+services/   Shared capabilities
+scripts/    Development, testing and release tooling
+```
+
+Core provides the environment. Extensions provide the experiences.
+
+### The workspace
+
+Atmos Core owns the shell, and extensions fill it.
 
 - **Panels and layouts.** Show one panel full screen, split two side by side
   or stacked, run four in a grid, or float them as windows you can move,
@@ -45,9 +93,12 @@ Atmos Core is the environment itself. It owns the shell, and extensions fill it.
 - **Persistence.** Settings, layouts and each extension's state survive
   restarts, and your data is kept when you uninstall.
 
-## Extensions, safely
+---
 
-Atmos is designed so that you can install things you didn't write.
+## Security model
+
+Extensions should be powerful without requiring unlimited access. Atmos is
+designed so that you can safely install things you did not write.
 
 - **Sandboxed.** Every plugin runs in its own isolated frame and reaches
   Atmos only through the Atmos SDK. It can't see Atmos, other extensions
@@ -63,19 +114,27 @@ Atmos is designed so that you can install things you didn't write.
 - **Built-in services.** Extensions share capabilities from Atmos (audio,
   wallpaper, location, media tags) rather than each reimplementing them.
 
-## Ships with
+---
+
+## Included extensions
 
 ### Audio Player
 
-Add your music folders and browse your library as albums, with a player
-that lives in a drawer at the bottom of the screen, a waveform seek bar, a
-queue that remembers where you were, and Now Playing, Queue and Library
-widgets for the sidebar. Space plays and pauses from anywhere in Atmos.
+A complete local music experience inside Atmos.
+
+Features:
+
+- Local music libraries and album browsing
+- Queue management and persistent playback
+- Metadata handling
+- A waveform seek bar
+- Now Playing, Queue and Library sidebar widgets
+- Global play and pause controls
 
 ### Matrix Chat
 
-A chat client for [Matrix](https://matrix.org), the open, federated
-messaging network, so you can talk to anyone on any Matrix app.
+A secure chat experience built directly into the workspace using
+[Matrix](https://matrix.org), the open, federated messaging protocol.
 
 - **Sign in or create an account** on your homeserver's own page, in your
   browser (matrix.org and any server using the Matrix Authentication
@@ -96,23 +155,64 @@ messaging network, so you can talk to anyone on any Matrix app.
   `rev/create-room`, `rev/create-space`, `rev/invite`, `rev/leave` and
   `rev/notifications`.
 
-## Install
+---
+
+## Architecture
+
+Atmos is built around three layers.
+
+### Core
+
+The runtime that powers Atmos. It manages windows, panels, layouts,
+appearance, the sidebar, notifications, permissions and the extension
+lifecycle.
+
+### Plugins
+
+User experiences built on top of Atmos. Plugins can provide interfaces,
+widgets, background processes and custom functionality.
+
+### Services
+
+Reusable capabilities shared between extensions, including audio, wallpaper,
+location, media metadata and full-screen viewing.
+
+---
+
+## Installation
 
 Download `Atmos Setup <version>.exe` from the
 [Releases](../../releases) page and run it. Atmos keeps your settings in
 `%APPDATA%\atmos`; uninstalling leaves them.
 
-## Run from source
+## Development
 
-```sh
+Requirements:
+
+- Node.js
+- npm
+- Windows for packaged builds
+
+Install dependencies and run Atmos:
+
+```bash
 npm install
 npm start
 ```
 
-`npm run build` makes the Windows installer (`dist/`), and
-`npm run build:portable` makes a portable build.
+Build the Windows installer:
 
-## Build an extension
+```bash
+npm run build
+```
+
+Create a portable build:
+
+```bash
+npm run build:portable
+```
+
+### Build an extension
 
 Put a folder in `%APPDATA%\atmos\plugins\<id>\` (or `services\<id>\`) with
 an `extension.json` declaring its permissions, write its panel, widgets or
@@ -122,7 +222,7 @@ Settings waiting for your approval. The smallest working example is
 [ATMOS_CORE_INTEGRATION.md](ATMOS_CORE_INTEGRATION.md) (§ 18 security,
 § 19 the Atmos SDK).
 
-## Repository layout
+### Repository layout
 
 ```text
 Atmos/
@@ -134,7 +234,7 @@ Atmos/
 └── ATMOS_CORE_INTEGRATION.md   # The extension API
 ```
 
-## Tests
+### Tests
 
 | Command | What it does |
 |---|---|
@@ -145,19 +245,46 @@ Atmos/
 | `cd plugins/matrix-chat && npm test` | Matrix Chat tests (`npm run check:browser` adds the message-sanitizer attack checks in a browser) |
 | `node scripts/e2e/<name>.cjs` | End-to-end checks in a throwaway profile (Linux/macOS/WSL; see `scripts/e2e/README.md`) |
 
-## Licence
+---
 
-Atmos is licensed under the [Apache License, Version 2.0](LICENSE).
-Copyright 2026 hashy; see [NOTICE](NOTICE).
+## Project status
 
-## Rev
+Atmos is actively evolving. The current focus is:
 
-Rev is the companion of Atmos — a tiny creature born from a modular world.
+- Strengthening the extension architecture
+- Expanding the SDK
+- Improving security boundaries
+- Building more first-party extensions
+- Preparing the foundation for a wider extension ecosystem
 
-The Rev token: https://pump.fun/coin/5dw5MXrnW4wbqerxhUr4jAg92BeRjnux7Nf5RKHhpump
+---
+
+## Philosophy
+
+Atmos is not trying to replace every application.
+
+It is exploring a different question:
+
+**What happens when applications stop being isolated tools and become parts of
+a shared environment?**
+
+---
 
 ## Community
 
-Follow Atmos development:
+Follow Atmos development on [X](https://x.com/atmosdesktop).
 
-- X: https://x.com/atmosdesktop
+### Official token
+
+Atmos has an official Rev community token. This listing is included to help
+users identify the authentic token and avoid impersonators.
+
+- Contract address: `5dw5MXrnW4wbqerxhUr4jAg92BeRjnux7Nf5RKHhpump`
+- [View the official listing](https://pump.fun/coin/5dw5MXrnW4wbqerxhUr4jAg92BeRjnux7Nf5RKHhpump)
+
+The token is not required to download, use or contribute to Atmos.
+
+## License
+
+Atmos is licensed under the [Apache License, Version 2.0](LICENSE).
+Copyright 2026 hashy; see [NOTICE](NOTICE).
