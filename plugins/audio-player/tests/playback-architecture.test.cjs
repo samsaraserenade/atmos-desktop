@@ -151,9 +151,21 @@ test('async directory handlers preserve direct-file and recursive-tree semantics
   fs.writeFileSync(path.join(dir, 'album', 'track.flac'), '');
   fs.writeFileSync(path.join(dir, 'ignore.txt'), '');
   const handlers = {};
-  require('../main.cjs')({ handle: (name, fn) => { handlers[name] = fn; }, registerResourceProvider() {} });
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-userdata-'));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  let media = null;
+  require('../main.cjs')({ handle: (name, fn) => { handlers[name] = fn; }, registerResourceProvider: (_name, fn) => { media = fn; }, app: { getPath: () => userData } });
+  const stream = pathname => media({ request: new Request('atmos-resource://audio-player-media/x'), pathname });
+  assert.equal((await stream(path.join(dir, 'root.mp3'))).status, 403, 'no streaming outside the library');
+  // Outside the folders you picked, nothing is readable.
+  await assert.rejects(handlers['list-files'](null, dir, ['mp3']), /not in your music library/);
+  await assert.rejects(async () => handlers['directory-exists'](null, dir), /not in your music library/);
+  handlers['adopt-folders'](null, [dir]);
+  assert.equal(handlers['directory-exists'](null, dir), true);
   const files = await handlers['list-files'](null, dir, ['mp3', 'flac']);
   assert.deepEqual(files, [path.join(dir, 'root.mp3')]);
+  assert.equal((await stream(path.join(dir, 'root.mp3'))).status, 200, 'tracks in the library stream');
+  assert.equal((await stream(path.join(dir, '..', 'elsewhere.mp3'))).status, 403, '.. cannot leave the library');
   const tree = await handlers['list-dir-tree'](null, dir, ['mp3', 'flac']);
   assert.equal(tree.length, 2);
   assert.ok(tree.every(entry => entry.hasMatchingFiles));

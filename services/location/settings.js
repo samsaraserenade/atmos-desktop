@@ -49,7 +49,9 @@ registerSettingsPanel('location', {
     const render = () => {
       const location = getLocation();
       const set = location.lat !== null;
-      current.textContent = set ? (location.label || 'Custom') : 'Not set. Shared with extensions that ask for it';
+      current.textContent = set
+        ? (location.label || 'Custom')
+        : 'Not set. Atmos only reads your location when you press Detect';
       reset.hidden = !set;
     };
 

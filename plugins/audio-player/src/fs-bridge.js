@@ -5,7 +5,12 @@ import atmos from 'atmos-sdk';
 const invoke = (name, ...args) => atmos.invoke('plugin:audio-player', name, ...args);
 
 export const audioFs = {
+  /** The native folder dialog; the folder you pick becomes readable (main.cjs). */
   chooseFolder: () => invoke('choose-folder'),
+  /** Tell the main process which picked folders the library still uses; it forgets the rest. */
+  keepFolders: folders => invoke('keep-folders', folders),
+  /** Once per install: hand over the folders an existing library already had. */
+  adoptFolders: folders => invoke('adopt-folders', folders),
   chooseCover: mediaPath => invoke('choose-cover', mediaPath),
   directoryExists: folderPath => invoke('directory-exists', folderPath),
   listDirTree: (folderPath, extensions) => invoke('list-dir-tree', folderPath, extensions),

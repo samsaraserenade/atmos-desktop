@@ -7,6 +7,7 @@ const { createExtensionPreferences } = require('./js/core/extension-preferences.
 const { createExtensionCatalog } = require('./js/core/extension-catalog.cjs');
 const { createExtensionTrust } = require('./js/core/extension-trust.cjs');
 const { BASELINE_BROWSER } = require('./js/core/extension-permissions.cjs');
+const { createLocationGate } = require('./js/core/location-gate.cjs');
 const frames = require('./js/core/extension-frames.cjs');
 const { resolveContainedPath } = require('./js/core/path-security.cjs');
 
@@ -907,6 +908,15 @@ app.on('web-contents-created', (_, contents) => {
   });
 });
 
+// Location stays off until you press Detect (see location-gate.cjs).
+const _locationGate = createLocationGate({ appOrigin: _APP_ORIGIN });
+ipcMain.handle('location:allow-detect', event => {
+  // Only the Atmos page itself (not a frame inside it) opens the gate.
+  if (event.senderFrame !== event.sender.mainFrame || !_isAppUrl(event.senderFrame?.url)) return false;
+  _locationGate.open();
+  return true;
+});
+
 function _installBrowserPermissions(activeEntries) {
   // The Atmos page gets what page-runtime extensions declare; each frame
   // origin gets what its own extension(s) declare.
@@ -917,7 +927,8 @@ function _installBrowserPermissions(activeEntries) {
     for (const name of _trust.get(entry)?.permissions.browser || []) byOrigin.get(origin).add(name);
   }
   const allowedFor = url => byOrigin.get(_originOf(url)) || null;
-  const granted = (permission, url) => allowedFor(url)?.has(permission) === true;
+  const granted = (permission, url) => allowedFor(url)?.has(permission) === true
+    && _locationGate.allows(permission, _originOf(url));
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const url = details?.requestingUrl || contents?.getURL?.();
     const ok = granted(permission, url);

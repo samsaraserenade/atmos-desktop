@@ -9,7 +9,7 @@ audio-player/
 ├── sidebar.js           # "Now Playing" widget
 ├── sidebar-queue.js     # "Queue" widget (or the album picked in the grid)
 ├── sidebar-library.js   # "Library" widget: folders, rescans, scan progress
-├── main.cjs             # Folder dialogs, directory walks, tag fallbacks, media server
+├── main.cjs             # Folder dialogs, directory walks, tag fallbacks, media server (your folders only)
 ├── assets/              # panel.css (panel + Queue/Library widgets), sidebar.css (Now Playing)
 └── src/
     ├── engine.js        # Queue, shuffle/repeat, restore, waveforms; exposes methods
@@ -21,6 +21,15 @@ audio-player/
     ├── store.js         # IndexedDB: library, waveform cache, opened files
     └── …                # metadata grouping, waveform loader, fs bridge, templates
 ```
+
+**Only your music folders.** `main.cjs` runs with your account's rights,
+so it's kept to the folders you picked (`src/library-roots.cjs`, saved as
+`audio-player/library-folders.json` in Atmos's data folder). The folder
+dialog adds one; after any library change the engine reports the folders it
+still uses (`keep-folders`, which can only remove). Every listing, tag or
+cover read, "show in folder" and streamed track outside them is refused. On
+the first launch with this list, the folders an existing library already had
+are handed over once (`adopt-folders`). It never writes to your music.
 
 **Where the sound comes from.** The engine doesn't play anything itself: it
 loads tracks into its channel of Atmos's Audio service (`atmos.audio`),

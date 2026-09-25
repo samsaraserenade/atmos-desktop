@@ -66,6 +66,7 @@
       "stream"
     ],
     "electron": [
+      "app",
       "BrowserWindow",
       "dialog",
       "shell"

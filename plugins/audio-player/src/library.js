@@ -87,9 +87,27 @@ function _loadElectronFolders() {
   });
 }
 
+// The folders you picked (each entry's rootPath; older entries without one
+// use their own path). The main process may read only inside these.
+function _libraryRoots() {
+  const seen = new Set();
+  const roots = [];
+  for (const folder of _electronFolders) {
+    const root = folder.rootPath || folder.path;
+    const key = _pathKey(root);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    roots.push(root);
+  }
+  return roots;
+}
+
 function _saveElectronFolders() {
   audioState.electronFolders = _electronFolders.map(folder => ({ ...folder }));
   save('electronFolders');
+  // A removed folder stops being readable. (Only ever shrinks the main
+  // process's list; adding happens in its folder dialog.)
+  audioFs.keepFolders(_libraryRoots()).catch(error => console.warn('[audio-player] could not update the readable folders:', error));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -494,6 +512,10 @@ export function getFilePath(fileKey) {
  */
 export async function reconnectFolders() {
   _electronFolders = _loadElectronFolders();
+  // First launch with folder checks: the main process takes over the
+  // folders this library already had (it ignores this on every later launch).
+  try { await audioFs.adoptFolders(_libraryRoots()); }
+  catch (error) { console.warn('[audio-player] could not hand over library folders:', error); }
   // Persist the normalized list so any legacy duplicate registrations are
   // repaired once rather than being loaded again on every launch.
   if (_electronFolders.length !== (audioState.electronFolders?.length || 0)) _saveElectronFolders();

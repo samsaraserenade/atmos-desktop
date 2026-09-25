@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('atmosCore', {
   approveExtension: (kind, id, fingerprint) => ipcRenderer.invoke('extensions:approve', kind, id, fingerprint),
   revokeExtensionApproval: (kind, id)     => ipcRenderer.invoke('extensions:revoke', kind, id),
   toggleFullscreen: ()                   => ipcRenderer.invoke('toggle-fullscreen'),
+  // Location is off until the person presses Detect (location-gate.cjs).
+  allowLocationDetect: ()                => ipcRenderer.invoke('location:allow-detect'),
   isFullscreen:     ()                   => ipcRenderer.invoke('is-fullscreen'),
   onFullscreenChange: callback => {
     const listener = (_event, fullscreen) => callback(fullscreen);

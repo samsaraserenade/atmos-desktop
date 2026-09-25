@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { serveMedia } = require('./src/media-resource.cjs');
+const { createLibraryRoots } = require('./src/library-roots.cjs');
 
 const AUDIO_EXTENSIONS = new Set(['mp3', 'flac', 'ogg', 'wav', 'm4a', 'aac', 'opus', 'wma']);
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif']);
@@ -262,11 +263,23 @@ function readTagFallback(filePath) {
 }
 
 module.exports = context => {
+  // Only the folders you picked may be read (src/library-roots.cjs). Every
+  // path-taking handler below checks against them.
+  const roots = createLibraryRoots({
+    fs, path, file: path.join(context.app.getPath('userData'), 'audio-player', 'library-folders.json'),
+  });
+
   context.handle('choose-folder', async event => {
     const owner = context.BrowserWindow.fromWebContents(event.sender);
     const result = await context.dialog.showOpenDialog(owner || undefined, { properties: ['openDirectory'] });
-    return result.canceled ? null : result.filePaths[0];
+    if (result.canceled || !result.filePaths[0]) return null;
+    return roots.add(result.filePaths[0]);
   });
+
+  // Keep only the folders the library still uses (can only remove).
+  context.handle('keep-folders', (_event, folders) => roots.keepOnly(folders));
+  // Once: take over the folders an existing library already had.
+  context.handle('adopt-folders', (_event, folders) => roots.adopt(folders));
 
   context.handle('choose-cover', async (event, mediaPath) => {
     const owner = context.BrowserWindow.fromWebContents(event.sender);
@@ -293,24 +306,29 @@ module.exports = context => {
   });
 
   context.handle('list-files', async (_event, folderPath, extensions) =>
-    listFiles(await checkedDirectory(folderPath), checkedExtensions(extensions)));
+    listFiles(await checkedDirectory(roots.check(folderPath)), checkedExtensions(extensions)));
 
   context.handle('list-dir-tree', async (_event, folderPath, extensions) =>
-    listDirTree(await checkedDirectory(folderPath), checkedExtensions(extensions)));
+    listDirTree(await checkedDirectory(roots.check(folderPath)), checkedExtensions(extensions)));
 
-  context.handle('directory-exists', (_event, folderPath) => directoryExists(folderPath));
+  // Outside the library this is an error, not "missing": the library treats
+  // a missing folder as deleted and drops it, which must never happen just
+  // because a folder isn't on the list.
+  context.handle('directory-exists', (_event, folderPath) => directoryExists(roots.check(folderPath)));
 
   context.handle('show-item', (_event, filePath) => {
-    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('A valid absolute file path is required.');
-    context.shell.showItemInFolder(path.resolve(filePath));
+    context.shell.showItemInFolder(roots.check(filePath));
     return true;
   });
 
-  context.handle('read-cover-sidecar', (_event, filePath) => readCoverSidecar(filePath));
-  context.handle('read-tag-fallback', (_event, filePath) => readTagFallback(filePath));
+  context.handle('read-cover-sidecar', (_event, filePath) => readCoverSidecar(roots.check(filePath)));
+  context.handle('read-tag-fallback', (_event, filePath) => readTagFallback(roots.check(filePath)));
 
-  context.registerResourceProvider('audio-player-media', ({ request, pathname }) =>
-    serveMedia(request, pathname, AUDIO_EXTENSIONS, contentType));
+  context.registerResourceProvider('audio-player-media', ({ request, pathname }) => (
+    roots.contains(pathname)
+      ? serveMedia(request, pathname, AUDIO_EXTENSIONS, contentType)
+      : new Response('Not in your music library', { status: 403 })
+  ));
 };
 
 // Pure helpers exposed for regression tests; Atmos still consumes the function above.

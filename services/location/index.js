@@ -54,8 +54,13 @@ function commit(next) {
  * Detect the user's location via the browser Geolocation API, then reverse
  * geocode it to a human-readable label. Resolves with the new location, or
  * rejects with an Error (also emitted as 'location:error') on failure.
+ *
+ * Only for an explicit request (Settings' Detect button): Atmos refuses the
+ * page's location permission at every other time, and this asks the main
+ * process to allow it for this one detection (core/js/core/location-gate.cjs).
  */
-export function detectLocation() {
+export async function detectLocation() {
+  await window.atmosCore?.allowLocationDetect?.();
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       const message = 'Geolocation not supported by this browser.';
