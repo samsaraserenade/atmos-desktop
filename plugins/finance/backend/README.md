@@ -207,3 +207,11 @@ restart `atmos-portfolio`, and pair Finance again.
 `GET /v1/info` (token required) is what Finance's Test button calls: the
 server's name, version, API version, number of sources and last update.
 `GET /health` needs no token and says only that the service is up.
+
+## Licence
+
+This backend is licensed under the [GNU Affero General Public License,
+version 3](LICENSE) (the rest of Atmos is GPLv3; see the repository's
+NOTICE). You can run, change and self-host it freely. If you run a modified
+version for other people over a network, you must offer them its source
+under the same licence.

@@ -323,5 +323,19 @@ The token is not required to download, use or contribute to Atmos.
 
 ## License
 
-Atmos is licensed under the [Apache License, Version 2.0](LICENSE).
-Copyright 2026 hashy; see [NOTICE](NOTICE).
+Atmos is free software under the [GNU General Public License, version 3](LICENSE),
+with the [Atmos Extension Exception](LICENSE-EXCEPTION.md). Copyright 2026
+hashy; see [NOTICE](NOTICE).
+
+- **Atmos itself stays open.** Anyone who distributes Atmos, or a modified
+  version of it, has to share the source under the same licence.
+- **Extensions are yours to license.** A plugin or service that works with
+  Atmos only through the Atmos SDK and extension interface can use any
+  licence, including a paid, closed one. The SDK (`core/js/sdk/`) is MIT, so
+  you can bundle it freely.
+- **The Finance portfolio server** (`plugins/finance/backend/`) is under the
+  [GNU Affero GPL, version 3](plugins/finance/backend/LICENSE): if you run a
+  modified copy for other people, you must offer them its source.
+
+Releases up to 0.10.0 were published under the Apache License 2.0 and stay
+available under it.

@@ -978,6 +978,18 @@ first-party extension into frames makes its renderer-side `network`,
   stop someone who can also rewrite `integrity.json` (or `core/`). That needs
   a signed installer and app.
 
+### Licensing your extension
+
+Atmos is licensed under the GPLv3 with the Atmos Extension Exception
+(`LICENSE-EXCEPTION.md`). An extension that is your own code and works with
+Atmos only through the extension interface — the SDK, `extension.json`,
+and the plugins and services it reaches through the SDK — can be licensed
+however you like, including closed and paid. The SDK itself
+(`core/js/sdk/`) is MIT, so bundling or copying it is fine. What stays
+under the GPLv3: Atmos and modified versions of it, code copied from Atmos
+(other than the SDK and documentation examples), and an extension that
+reaches into Atmos's internal modules instead of the SDK.
+
 ## 19. Atmos SDK and framed extensions
 
 Third-party extensions — and first-party ones that set `"runtime": "frame"`
