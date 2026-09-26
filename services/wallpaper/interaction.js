@@ -38,7 +38,7 @@ function refreshHitTesting() {
 
 export function applyWallpaperPresentation(state = wallpaperState) {
   if (!active) return;
-  const background = transparentWindowActive && state.mode === 'transparent' ? 'transparent' : '#050505';
+  const background = transparentWindowActive && state.mode === 'transparent' ? 'transparent' : '#000';
   document.documentElement.style.background = 'transparent';
   document.body.style.background = background;
   refreshHitTesting();

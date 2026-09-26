@@ -5,14 +5,13 @@ import { applyWallpaperPresentation, isTransparentWindowActive } from './interac
 
 const events = createEventScope('wallpaper');
 const temporary = new Map();
-export const DEFAULT_IMAGE = 'https://images.unsplash.com/photo-1503416997304-7f8b4a73b6e7?q=80&w=2000';
 const ASSET_KEY = 'wallpaper:image';
 // Where the image was kept before: as the Background plugin, and before that.
 const LEGACY_ASSET_KEYS = ['background:wallpaper', 'background'];
 
 let imageEl = null;
 let overlayEl = null;
-let persistentImage = DEFAULT_IMAGE;
+let persistentImage = '';
 let persistentObjectUrl = null;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value)));

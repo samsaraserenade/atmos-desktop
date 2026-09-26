@@ -1,7 +1,7 @@
 // Wallpaper's section of Settings → Appearance. Uses the Appearance page's
 // shared row classes (.sa-row, .sa-slider…, styled in Core's index.html).
 import { wallpaperState } from './persist.js';
-import { DEFAULT_IMAGE, getPersistentState, removeWallpaper, setState, setWallpaper, subscribe } from './engine.js';
+import { getPersistentState, removeWallpaper, setState, setWallpaper, subscribe } from './engine.js';
 
 const adjustments = [
   ['opacity', 'Opacity', 0, 100, '%'],
@@ -53,7 +53,7 @@ export function mountControls(body, context) {
   const renderImage = () => {
     const image = getPersistentState().image;
     const hasImage = !!image;
-    imageStatus.textContent = !hasImage ? 'None' : image === DEFAULT_IMAGE ? 'The default image' : 'Your own image';
+    imageStatus.textContent = hasImage ? 'Your own image' : 'None';
     removeButton.hidden = !hasImage;
   };
   context.listen(body.querySelector('.wallpaper-choose'), 'click', () => input.click());

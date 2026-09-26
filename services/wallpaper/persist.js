@@ -5,8 +5,8 @@ import {
 export const wallpaperState = registerStateNamespace('wallpaper', {
   version: 2,
   defaults: {
-    mode: 'transparent',
-    opacity: 0,
+    mode: 'wallpaper',
+    opacity: 100,
     parallaxStrength: 50,
     glassBlur: 0,
     glassSaturation: 60,

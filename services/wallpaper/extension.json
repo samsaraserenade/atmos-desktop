@@ -12,9 +12,6 @@
     "settings.appearance-contributions": 1
   },
   "permissions": {
-    "network": [
-      "images.unsplash.com"
-    ],
     "browser": [
       "clipboard-read"
     ]

@@ -3,6 +3,7 @@
   inset: -10%;
   width: 120%;
   height: 120%;
+  background-color: #000;
   background-position: center;
   background-size: cover;
   will-change: transform;
