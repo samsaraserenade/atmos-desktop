@@ -1,0 +1,24 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(__dirname + '/../src/drag-preview.js', 'utf8').replace('export ', '');
+const timers = new Map(); let next = 0;
+const sandbox = vm.createContext({ setTimeout(fn) { timers.set(++next, fn); return next; }, clearTimeout(id) { timers.delete(id); } });
+vm.runInContext(source, sandbox);
+const handlers = {}, previews = [], commits = []; let cleanup;
+const element = { value: '0' };
+sandbox.bindDragPreview(element, { listen(el, type, fn) { handlers[type] = fn; }, onCleanup(fn) { cleanup = fn; } }, value => previews.push(value), value => commits.push(value));
+for (let i = 1; i <= 100; i++) { element.value = String(i); handlers.input(); }
+assert.equal(previews.length, 100);
+assert.equal(timers.size, 1);
+assert.deepEqual(commits, []);
+[...timers.values()][0]();
+assert.deepEqual(commits, ['100']);
+element.value = '37'; handlers.input(); handlers.change();
+assert.deepEqual(commits, ['100', '37']);
+assert.equal(timers.size, 0);
+handlers.change(); assert.equal(commits.length, 2);
+element.value = '42'; handlers.input(); cleanup();
+assert.deepEqual(commits, ['100', '37', '42']);
+assert.equal(timers.size, 0);
+console.log('Passed: drag bursts coalesce, preview stays immediate, final values flush without duplicates');

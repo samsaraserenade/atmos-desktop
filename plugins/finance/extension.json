@@ -1,0 +1,123 @@
+{
+  "apiVersion": 3,
+  "tier": "first-party",
+  "runtime": "frame",
+  "displayName": "Finance",
+  "requires": {
+    "extensions.frames": 3
+  },
+  "contributes": {
+    "panel": {
+      "entry": "frame-panel.js",
+      "legacyId": "portfolio-tracker",
+      "label": "Finance",
+      "icon": "icons/portfolio-tracker.svg",
+      "shortcut": "]",
+      "shortcutToggles": true
+    },
+    "sidebar": [
+      {
+        "entry": "frame-widget-balance.js",
+        "legacyId": "portfolio-balance-ticker",
+        "label": "Balance",
+        "icon": "icons/portfolio-balance-ticker.svg",
+        "order": -110
+      },
+      {
+        "id": "performance",
+        "entry": "frame-widget-performance.js",
+        "legacyId": "portfolio-balance",
+        "label": "Performance",
+        "icon": "icons/portfolio-balance.svg",
+        "order": -100
+      },
+      {
+        "id": "connections",
+        "entry": "frame-widget-connections.js",
+        "legacyId": "portfolio-connections",
+        "label": "Portfolio Connections",
+        "icon": "icons/portfolio-connections.svg",
+        "order": -80
+      },
+      {
+        "id": "spot",
+        "entry": "frame-widget-spot.js",
+        "legacyId": "portfolio-positions",
+        "label": "Spot",
+        "icon": "icons/portfolio-positions.svg",
+        "order": 0
+      },
+      {
+        "id": "allocation",
+        "entry": "frame-widget-allocation.js",
+        "legacyId": "portfolio-allocation",
+        "label": "Allocation",
+        "icon": "icons/portfolio-balance.svg",
+        "order": -70
+      },
+      {
+        "id": "futures",
+        "entry": "frame-widget-futures.js",
+        "legacyId": "portfolio-futures",
+        "label": "Futures",
+        "icon": "icons/portfolio-futures.svg",
+        "order": 1
+      },
+      {
+        "id": "watchlist",
+        "entry": "frame-widget-watchlist.js",
+        "legacyId": "markets",
+        "label": "Watchlist",
+        "icon": "icons/markets.svg",
+        "order": 10
+      }
+    ],
+    "boot": {
+      "entry": "frame-engine.js"
+    }
+  },
+  "legacyStorage": {
+    "state": [
+      "portfolio-tracker",
+      "markets",
+      "watchlist",
+      "currency"
+    ],
+    "indexedDB": [
+      {
+        "name": "samsara_db",
+        "keys": [
+          "portfolio-tracker:*",
+          "chart-history",
+          "chart-hidden"
+        ]
+      }
+    ],
+    "localStorage": [
+      "atmos:charting-*"
+    ]
+  },
+  "permissions": {
+    "network": [
+      "api.binance.com",
+      "api.coingecko.com",
+      "api.dexscreener.com",
+      "cdn.moneyconvert.net"
+    ],
+    "node": [
+      "electron",
+      "fs",
+      "path"
+    ],
+    "electron": [
+      "app",
+      "safeStorage"
+    ],
+    "ipc": true,
+    "invokes": [
+      "service:charting",
+      "service:currency",
+      "service:market-data"
+    ]
+  }
+}

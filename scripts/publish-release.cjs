@@ -89,12 +89,12 @@ function main() {
       ['npm', ['run', '-s', 'test:core']],
       ['npm', ['run', '-s', 'test:services']],
       ['npm', ['run', '-s', 'test:permissions']],
-      ...release.plugins.filter(id => fs.existsSync(path.join(dest, 'plugins', id, 'tests')))
-        .map(id => ['node', ['--test', ...fs.readdirSync(path.join(dest, 'plugins', id, 'tests'))
-          .filter(name => name.endsWith('.test.cjs')).map(name => path.join('plugins', id, 'tests', name))]]),
+      // A plugin's tests/ and any <folder>/tests/ one level down (Finance's
+      // markets/tests); ES-module tests need --experimental-vm-modules.
+      ...release.plugins.map(id => ['node', ['--experimental-vm-modules', '--test', ...pluginTests(dest, id)]]),
     ];
     for (const [cmd, args] of tests) {
-      if (cmd === 'node' && args.length === 1) continue;
+      if (cmd === 'node' && !args.some(arg => arg.endsWith('.test.cjs'))) continue;
       const result = spawnSync(cmd, args, { cwd: dest, encoding: 'utf8', shell: process.platform === 'win32' });
       if (result.status !== 0) {
         console.error((result.stdout || '').split('\n').filter(line => /^not ok|^# (pass|fail)/.test(line)).join('\n'));
@@ -119,6 +119,20 @@ function main() {
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
   }
+}
+
+/** A released plugin's test files: tests/*.test.cjs and <folder>/tests/*.test.cjs. */
+function pluginTests(dest, id) {
+  const root = path.join(dest, 'plugins', id);
+  const dirs = ['tests'];
+  if (fs.existsSync(root)) {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory() && !['tests', 'node_modules'].includes(entry.name) && !entry.name.startsWith('.')) dirs.push(path.join(entry.name, 'tests'));
+    }
+  }
+  return dirs.filter(dir => fs.existsSync(path.join(root, dir)))
+    .flatMap(dir => fs.readdirSync(path.join(root, dir)).filter(name => name.endsWith('.test.cjs'))
+      .map(name => path.join('plugins', id, dir, name)));
 }
 
 function installGuard(dest, terms) {

@@ -1,0 +1,10 @@
+{
+  "id": "charting",
+  "name": "Atmos Charting",
+  "version": "1.2.0",
+  "description": "Reusable SVG time-series charts with shared, live chart and Samsara settings.",
+  "rendererApi": "api.js",
+  "apiVersion": 2,
+  "rendererApiVersion": 2,
+  "chartTypes": ["line", "candlestick", "heiken-ashi"]
+}

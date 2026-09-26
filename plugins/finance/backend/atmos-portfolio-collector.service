@@ -1,0 +1,34 @@
+[Unit]
+Description=Atmos Portfolio Collectors
+After=network-online.target atmos-portfolio.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=atmos-portfolio
+Group=atmos-portfolio
+EnvironmentFile=/etc/atmos-portfolio.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=ATMOS_PORTFOLIO_SOURCES=/etc/atmos-portfolio-sources.json
+ExecStart=/usr/bin/python3 /opt/atmos-portfolio/collectors.py
+Restart=on-failure
+RestartSec=15s
+StateDirectory=atmos-portfolio
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+MemoryMax=192M
+CPUQuota=35%
+ReadWritePaths=/var/lib/atmos-portfolio
+
+[Install]
+WantedBy=multi-user.target

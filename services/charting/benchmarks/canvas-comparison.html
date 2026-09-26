@@ -1,0 +1,221 @@
+<!doctype html><meta charset="utf-8"><title>Chart renderer benchmark</title>
+<style>body{background:#10141d;color:#e1e7f0;font:14px system-ui;margin:20px}button{padding:10px 20px}#stage{position:relative;width:1100px;height:460px;background:#141b26;max-width:100%}svg,canvas{position:absolute;inset:0;width:100%;height:100%}#overlay{pointer-events:none;transform:translateZ(0)}pre{white-space:pre-wrap}td,th{text-align:right;padding:6px 14px}th:first-child,td:first-child{text-align:left}</style>
+<h1>SVG / Canvas candle benchmark</h1><p>250, 1,000 and 5,000 visible candles · 3 repetitions · 60 measured frames per case</p>
+<button id="run">Run benchmark</button><p id="status">Ready. Keep this tab visible during the run.</p>
+<div id="stage"><svg id="svg" viewBox="0 0 1100 460"></svg><canvas id="canvas"></canvas><svg id="overlay" viewBox="0 0 1100 460"><path id="cross" stroke="#a6b3c4" stroke-dasharray="3 3" fill="none"/></svg></div><pre id="result"></pre>
+<script>
+const BUCKET_STEPS_MS = [
+  15_000, 30_000, 60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000,
+  60 * 60_000, 4 * 60 * 60_000, 24 * 60 * 60_000,
+];
+
+function metadataOf(point) {
+  const { t, time, timestamp, v, value, price, close, c, start, end, t0, t1, open, o, high, h, low, l, ...metadata } = point || {};
+  return metadata;
+}
+
+// Preserve the same metadata and OHLC rules as a full bucket rebuild.
+function appendCandleSample(candle, point, bucketMs) {
+  const value = Number(point.v ?? point.value ?? point.close);
+  return { ...metadataOf(candle), ...metadataOf(point), t0: candle.t0,
+    t1: candle.t0 + bucketMs, o: candle.o,
+    h: Math.max(candle.h, value), l: Math.min(candle.l, value), c: value };
+}
+
+function pickBucketMs(points, targetCandles = 60) {
+  if (points.length < 2) return BUCKET_STEPS_MS[0];
+  const span = points[points.length - 1].t - points[0].t;
+  if (span <= 0) return BUCKET_STEPS_MS[0];
+  return BUCKET_STEPS_MS.find(step => span / step <= targetCandles) || BUCKET_STEPS_MS[BUCKET_STEPS_MS.length - 1];
+}
+
+function bucketHistory(points, bucketMs) {
+  if (!Array.isArray(points) || !points.length) return [];
+  if (!Number.isFinite(bucketMs) || bucketMs <= 0) throw new TypeError('bucketMs must be positive');
+  const buckets = new Map();
+  for (const point of points) {
+    const t = Number(point.t ?? point.time ?? point.timestamp);
+    const v = Number(point.v ?? point.value ?? point.close);
+    if (!Number.isFinite(t) || !Number.isFinite(v)) continue;
+    const t0 = Math.floor(t / bucketMs) * bucketMs;
+    let candle = buckets.get(t0);
+    if (!candle) {
+      // Keep consumer metadata on derived candles. Canonical chart fields win,
+      // while later observations refresh metadata on the forming candle.
+      candle = { ...metadataOf(point), t0, t1: t0 + bucketMs, o: v, h: v, l: v, c: v };
+      buckets.set(t0, candle);
+    } else {
+      const open = candle.o;
+      const high = candle.h;
+      const low = candle.l;
+      Object.assign(candle, metadataOf(point));
+      candle.t0 = t0;
+      candle.t1 = t0 + bucketMs;
+      candle.o = open;
+      candle.h = Math.max(high, v);
+      candle.l = Math.min(low, v);
+      candle.c = v;
+    }
+  }
+  return [...buckets.values()].sort((a, b) => a.t0 - b.t0);
+}
+
+/**
+ * Convert regular OHLC candles into Heiken Ashi candles.
+ */
+function heikenAshiStep(previous, raw) {
+  const { t0, t1, o, h, l, c } = raw;
+  const close = (o + h + l + c) / 4;
+  const open = previous ? (previous.o + previous.c) / 2 : (o + c) / 2;
+  return { ...raw, t0, t1, o: open, h: Math.max(h, open, close), l: Math.min(l, open, close), c: close };
+}
+
+function heikenAshi(candles) {
+  const output = [];
+  let previous = null;
+  for (const candle of candles || []) {
+    previous = heikenAshiStep(previous, candle);
+    output.push(previous);
+  }
+  return output;
+}
+
+function computeCandleScale(candles, innerHeight, padTop, padPercent = 0.08) {
+  if (!candles.length) return { minP: 0, rngP: 1, yOf: () => padTop + innerHeight / 2 };
+  const minimum = Math.min(...candles.map(candle => candle.l));
+  const maximum = Math.max(...candles.map(candle => candle.h));
+  const range = maximum - minimum || Math.abs(minimum) * 0.002 || 1;
+  const minP = minimum - range * padPercent;
+  const rngP = range * (1 + padPercent * 2);
+  return { minP, rngP, yOf: value => padTop + innerHeight - ((value - minP) / rngP) * innerHeight };
+}
+
+function renderCandlesSVG({
+  candles, W, H, padLeft, padRight, padTop, padBottom,
+  colorUp, colorDown, opacity = 0.9, xOf = null, bodyWidth = null,
+  colorOf = null, yOf: suppliedYOf = null, bridgeFromPreviousClose = false,
+}) {
+  if (!candles.length) return '';
+  const innerWidth = W - padLeft - padRight;
+  const innerHeight = H - padTop - padBottom;
+  const yOf = suppliedYOf || computeCandleScale(candles, innerHeight, padTop).yOf;
+  const slotWidth = innerWidth / candles.length;
+  const width = Math.max(1, bodyWidth ?? slotWidth * 0.6);
+  let markup = '';
+  candles.forEach((candle, index) => {
+    const defaultColor = candle.c >= candle.o ? colorUp : colorDown;
+    const color = colorOf ? colorOf(candle, index, defaultColor) : defaultColor;
+    const x = xOf ? xOf(candle, index) : padLeft + slotWidth * (index + 0.5);
+    if (bridgeFromPreviousClose && index > 0 && candles[index - 1].c !== candle.o) {
+      const prior = candles[index - 1].c;
+      const top = yOf(Math.max(prior, candle.o));
+      const bottom = yOf(Math.min(prior, candle.o));
+      const bridgeDefault = candle.o >= prior ? colorUp : colorDown;
+      const bridgeColor = colorOf ? colorOf(candle, index, bridgeDefault) : bridgeDefault;
+      markup += `<rect class="tc-candle-bridge" x="${(x - width / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${width.toFixed(1)}" height="${Math.max(1, bottom - top).toFixed(1)}" fill="${bridgeColor}" opacity="${opacity}"/>`;
+    }
+    const wickTop = yOf(candle.h);
+    const wickBottom = yOf(candle.l);
+    const bodyTop = yOf(Math.max(candle.o, candle.c));
+    const bodyBottom = yOf(Math.min(candle.o, candle.c));
+    markup += `<line x1="${x.toFixed(1)}" y1="${wickTop.toFixed(1)}" x2="${x.toFixed(1)}" y2="${wickBottom.toFixed(1)}" stroke="${color}" stroke-width="1" opacity="${opacity}"/>`;
+    markup += `<rect x="${(x - width / 2).toFixed(1)}" y="${bodyTop.toFixed(1)}" width="${width.toFixed(1)}" height="${Math.max(1, bodyBottom - bodyTop).toFixed(1)}" fill="${color}" opacity="${opacity}"/>`;
+  });
+  return markup;
+}
+
+/**
+ * Same candle geometry/coloring as renderCandlesSVG, drawn straight onto a
+ * 2D canvas context instead of built as an SVG markup string. Used by
+ * chart-next.js's candle layer: at high candle counts, painting a few
+ * thousand fillRect/stroke calls onto one raster surface is cheap, while
+ * creating/diffing that many live SVG <line>/<rect> DOM nodes on every
+ * redraw is the expensive part -- this is the same reason the crosshair/
+ * axis/toolbar chrome stays SVG (low element count, benefits from real DOM)
+ * while the candle body layer moves here (high element count, benefits from
+ * having no DOM at all). The caller is expected to have already sized and
+ * scaled the canvas (devicePixelRatio) and to clearRect the *previous*
+ * frame's drawing itself only when needed -- this function always starts by
+ * clearing its own (W, H) region, since a partial/incremental candle redraw
+ * isn't meaningfully cheaper than a full one once you're already in canvas
+ * land (unlike the SVG string-diff this replaces, there's no "did anything
+ * change" shortcut available before painting -- the caller does that check
+ * up front instead, by only calling this when the draw key actually changed).
+ */
+function renderCandlesCanvas(ctx, {
+  candles, W, H, padLeft, padRight, padTop, padBottom,
+  colorUp, colorDown, opacity = 0.9, xOf = null, bodyWidth = null,
+  colorOf = null, yOf: suppliedYOf = null, bridgeFromPreviousClose = false,
+}) {
+  ctx.clearRect(0, 0, W, H);
+  if (!candles.length) return;
+  const innerWidth = W - padLeft - padRight;
+  const innerHeight = H - padTop - padBottom;
+  const yOf = suppliedYOf || computeCandleScale(candles, innerHeight, padTop).yOf;
+  const slotWidth = innerWidth / candles.length;
+  const width = Math.max(1, bodyWidth ?? slotWidth * 0.6);
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  candles.forEach((candle, index) => {
+    const defaultColor = candle.c >= candle.o ? colorUp : colorDown;
+    const color = colorOf ? colorOf(candle, index, defaultColor) : defaultColor;
+    const x = xOf ? xOf(candle, index) : padLeft + slotWidth * (index + 0.5);
+    if (bridgeFromPreviousClose && index > 0 && candles[index - 1].c !== candle.o) {
+      const prior = candles[index - 1].c;
+      const top = yOf(Math.max(prior, candle.o));
+      const bottom = yOf(Math.min(prior, candle.o));
+      const bridgeDefault = candle.o >= prior ? colorUp : colorDown;
+      const bridgeColor = colorOf ? colorOf(candle, index, bridgeDefault) : bridgeDefault;
+      ctx.fillStyle = bridgeColor;
+      ctx.fillRect(x - width / 2, top, width, Math.max(1, bottom - top));
+    }
+    const wickTop = yOf(candle.h);
+    const wickBottom = yOf(candle.l);
+    const bodyTop = yOf(Math.max(candle.o, candle.c));
+    const bodyBottom = yOf(Math.min(candle.o, candle.c));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, wickTop);
+    ctx.lineTo(x, wickBottom);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.fillRect(x - width / 2, bodyTop, width, Math.max(1, bodyBottom - bodyTop));
+  });
+  ctx.restore();
+}
+
+const W=1100,H=460, dpr=devicePixelRatio;
+const svg=document.querySelector('#svg'),canvas=document.querySelector('#canvas'),cross=document.querySelector('#cross'),status=document.querySelector('#status');
+canvas.width=W*dpr;canvas.height=H*dpr;const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
+const next=()=>new Promise(requestAnimationFrame);
+const stat=a=>{const b=[...a].sort((x,y)=>x-y);return {median:b[Math.floor(b.length*.5)],p95:b[Math.min(b.length-1,Math.floor(b.length*.95))],mean:b.reduce((x,y)=>x+y,0)/b.length,max:b.at(-1)}};
+const samples=[];let hidden=false;document.addEventListener('visibilitychange',()=>{if(document.hidden)hidden=true});
+function data(n){return Array.from({length:n},(_,i)=>{const o=100+15*Math.sin(i*.071),c=o+3*Math.sin(i*.43);return {t0:i*60000,t1:(i+1)*60000,o,c,h:Math.max(o,c)+2,l:Math.min(o,c)-2}})}
+function draw(mode,candles,shift){const args={candles,W,H,padLeft:4,padRight:56,padTop:8,padBottom:24,colorUp:'#39d98a',colorDown:'#ff647c',opacity:.9,xOf:(_,i)=>4+(i+.5)*(W-60)/candles.length+shift,yOf:p=>H-24-(p-75)/50*(H-32)};if(mode==='svg')svg.innerHTML=renderCandlesSVG(args);else renderCandlesCanvas(ctx,args)}
+async function runCase(mode,n,scenario,repeat){
+ status.textContent=mode.toUpperCase()+' · '+n+' candles · '+scenario+' · run '+(repeat+1);
+ svg.style.display=mode==='svg'?'':'none';canvas.style.display=mode==='canvas'?'':'none';svg.innerHTML='';ctx.clearRect(0,0,W,H);cross.setAttribute('d','');
+ const candles=data(n);draw(mode,candles,0);for(let i=0;i<12;i++)await next();
+ const cpu=[],frames=[];let prior=await next();
+ for(let i=0;i<60;i++){
+  const t=performance.now();
+  if(scenario==='redraw')draw(mode,candles,Math.sin(i*.14)*12);
+  if(scenario==='hover'){const x=50+i*16,y=100+(i*7)%250;cross.setAttribute('d','M 4 '+y+' H 1044 M '+x+' 8 V 436')}
+  cpu.push(performance.now()-t);const now=await next();frames.push(now-prior);prior=now;
+ }
+ samples.push({mode,n,scenario,repeat,cpu:stat(cpu),frame:stat(frames),cpuSamples:cpu,frameSamples:frames,svgNodes:mode==='svg'?svg.childElementCount:0});
+}
+document.querySelector('#run').onclick=async()=>{
+ document.querySelector('#run').disabled=true;hidden=false;samples.length=0;
+ try{
+  for(let repeat=0;repeat<3;repeat++)for(const n of [250,1000,5000])for(const scenario of ['redraw','hover'])for(const mode of (repeat%2?['canvas','svg']:['svg','canvas']))await runCase(mode,n,scenario,repeat);
+  const summary=[];for(const n of [250,1000,5000])for(const scenario of ['redraw','hover'])for(const mode of ['svg','canvas']){const cases=samples.filter(x=>x.n===n&&x.scenario===scenario&&x.mode===mode);summary.push({mode,n,scenario,cpu:stat(cases.flatMap(x=>x.cpuSamples)),frame:stat(cases.flatMap(x=>x.frameSamples))})}
+  const gl=document.createElement('canvas').getContext('webgl');const ext=gl?.getExtension('WEBGL_debug_renderer_info');
+  const result={date:new Date().toISOString(),userAgent:navigator.userAgent,dpr,width:W,height:H,hiddenDuringRun:hidden,gpu:ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):'unavailable',summary,samples};
+  document.querySelector('#result').textContent=summary.map(x=>x.n+' '+x.mode+' '+x.scenario+' | drawing median '+x.cpu.median.toFixed(2)+' ms / p95 '+x.cpu.p95.toFixed(2)+' ms | frame median '+x.frame.median.toFixed(2)+' ms / p95 '+x.frame.p95.toFixed(2)+' ms').join('\n');
+  await fetch('/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result)});
+  status.textContent='Complete. Results saved.'+(hidden?' WARNING: tab was hidden during this run.':'');
+ }catch(error){status.textContent='Failed: '+error.message}finally{document.querySelector('#run').disabled=false}
+};
+</script>

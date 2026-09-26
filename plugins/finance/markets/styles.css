@@ -1,0 +1,219 @@
+.mq-market, .mq-market * { box-sizing:border-box; }
+.mq-market {
+  position:relative; width:100%; height:100%; min-height:0; overflow:hidden;
+  color:rgb(var(--ink-rgb)); user-select:none;
+  font:14px/1.35 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif);
+}
+/* Flush-edge positioning for .mq-chart now lives in the charting service
+   itself (chart-next.js's default `edgeInset`), applied inline to the
+   element passed in as the chart container -- see chart-workspace.css's
+   equivalent note for .portfolio-chart-host. This used to duplicate that
+   rule with drifted values (a stray 16px top / 20px left gap the
+   portfolio chart never had). */
+
+.mq-tool-group { display:flex; gap:2px; position:relative; padding-left:4px; margin-left:1px; border-left:1px solid rgba(var(--ink-rgb),.085); }
+.mq-tool {
+  height:24px; padding:0 8px; border:1px solid transparent; border-radius:4px;
+  color:rgba(var(--ink-rgb),.58); background:transparent; cursor:pointer;
+  font:500 10px/1.35 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif); letter-spacing:.01em;
+  transition:color .12s,background .12s,border-color .12s;
+}
+.mq-tool:hover { color:rgba(var(--ink-rgb),.9); background:rgba(120,140,180,.1); }
+.mq-tool.is-active { color:rgba(var(--ink-rgb),.96); background:rgba(var(--ink-rgb),.13); border-color:rgba(var(--ink-rgb),.28); }
+.mq-ticker-form { display:flex; margin:0; padding:0; }
+.mq-ticker-input {
+  min-width:82px; max-width:200px; field-sizing:content; height:24px; padding:0 8px; border:1px solid transparent; border-radius:4px;
+  outline:0; color:rgba(var(--ink-rgb),.86); background:transparent; text-transform:uppercase;
+  font:500 10px/1.35 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif); letter-spacing:.01em;
+}
+.mq-ticker-input:hover { background:rgba(120,140,180,.1); }
+.mq-ticker-input:focus { border-color:rgba(var(--ink-rgb),.28); background:rgba(var(--ink-rgb),.08); color:rgba(var(--ink-rgb),.96); }
+.mq-ticker-input::placeholder { color:rgba(var(--ink-rgb),.36); }
+.mq-market.is-offline .mq-ticker-input { border-color:rgba(248,113,113,.5); }
+.mq-custom-interval-form { display:flex; margin:0; padding:0; }
+.mq-custom-interval-input {
+  width:48px; height:24px; padding:0 6px; border:1px solid transparent; border-radius:4px;
+  outline:0; color:rgba(var(--ink-rgb),.58); background:transparent; text-align:center;
+  font:500 10px/1.35 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif); transition:width .12s,color .12s,background .12s,border-color .12s;
+}
+.mq-custom-interval-input:hover { color:rgba(var(--ink-rgb),.9); background:rgba(120,140,180,.1); }
+.mq-custom-interval-input:focus { width:58px; color:rgba(var(--ink-rgb),.96); background:rgba(var(--ink-rgb),.08); border-color:rgba(var(--ink-rgb),.28); }
+.mq-custom-interval-input.is-active { color:rgba(var(--ink-rgb),.96); background:rgba(var(--ink-rgb),.13); border-color:rgba(var(--ink-rgb),.28); }
+.mq-custom-interval-input.is-invalid { border-color:rgba(248,113,113,.75); }
+.mq-custom-interval-input::placeholder { color:rgba(var(--ink-rgb),.4); }
+.mq-refresh-control {
+  display:flex; align-items:center; gap:3px; height:24px; padding-left:5px; margin-left:1px;
+  border-left:1px solid rgba(var(--ink-rgb),.085); color:rgba(var(--ink-rgb),.42);
+  font:500 9px/1.35 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif);
+}
+.mq-refresh-control.is-hidden { display:none; }
+.mq-refresh-select {
+  height:22px; padding:0 3px; border:1px solid transparent; border-radius:4px; outline:0;
+  color:rgba(var(--ink-rgb),.82); background:rgba(var(--ink-rgb),.05);
+  font:500 10px/1.35 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif); cursor:pointer;
+}
+.mq-refresh-select:hover,.mq-refresh-select:focus { border-color:rgba(var(--ink-rgb),.24); background:rgba(var(--ink-rgb),.1); }
+.mq-refresh-select option { color:rgb(var(--ink-rgb)); background:rgb(var(--surface-rgb)); }
+.mq-timeframes.is-hidden { display:none; }
+
+.portfolio-section-summary {
+  display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:0 14px;
+  border-bottom:1px solid rgba(var(--ink-rgb),.06); color:rgba(var(--ink-rgb),.52);
+}
+.portfolio-section-summary[data-futures-balance] { cursor:context-menu; }
+.portfolio-section-summary.is-excluded,
+.watchlist-row.is-excluded { opacity:.38; }
+.portfolio-section-summary.is-excluded .portfolio-section-summary-label,
+.portfolio-section-summary.is-excluded .portfolio-section-total,
+.watchlist-row.is-excluded .watchlist-row-symbol,
+.watchlist-row.is-excluded .watchlist-row-value { text-decoration:line-through; }
+.watchlist-row.is-partially-excluded { opacity:.68; }
+.portfolio-section-summary-label {
+  font-size:.62rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+}
+.portfolio-section-total {
+  color:rgba(var(--ink-rgb),.82); font:600 .68rem/1.2 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif);
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.watchlist-body-add { display:flex; align-items:center; padding:6px 14px; border-bottom:1px solid rgba(var(--ink-rgb),.06); }
+.watchlist-input {
+  width:100%; padding:4px 7px; border:1px solid rgba(var(--ink-rgb),.1); border-radius:5px;
+  outline:none; color:rgb(var(--ink-rgb)); background:rgba(var(--ink-rgb),.05); text-transform:uppercase;
+  font:inherit; font-size:.65rem; letter-spacing:.08em; transition:border-color .15s,width .2s;
+}
+.watchlist-input::placeholder { color:rgba(var(--ink-rgb),.2); text-transform:none; letter-spacing:normal; }
+.watchlist-input:focus { border-color:rgba(var(--ink-rgb),.28); background:rgba(var(--ink-rgb),.07); }
+.watchlist-input.err { border-color:#f87171; }
+.watchlist-rows { padding:0; }
+.watchlist-row { position:relative; display:flex; align-items:center; gap:8px; height:28px; min-height:28px; padding:0 14px; border-bottom:1px solid rgba(var(--ink-rgb),.04); cursor:pointer; transition:background .08s; }
+.watchlist-row:last-child { border-bottom:0; }
+.watchlist-row:hover { background:rgba(var(--ink-rgb),.04); }
+/* Ticker sits centered in the middle of the row, between the stake bar
+   (held rows only, left) and the change bar (right), both below. */
+.watchlist-row-symbol { flex:1; min-width:0; text-align:center; overflow:hidden; color:rgba(var(--ink-rgb),.65); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase; text-overflow:ellipsis; white-space:nowrap; }
+/* A held position (see markets/sidebar.js's is-held rows, sourced from your
+   actual portfolio holdings) gets its ticker text brightened to plain white
+   instead of the muted grey default — no separate hue, since cash no
+   longer appears in this list at all there's nothing left to color-code
+   against, just "yours" vs. "watching". */
+.watchlist-row-symbol.is-held { color:rgb(var(--ink-rgb)); }
+/* Both bars are painted directly on the row itself -- position:absolute
+   against .watchlist-row's own position:relative, inset flush to its
+   real top/bottom/side edges (the exact box that lights up on
+   .watchlist-row:hover above, and the same "fully filled to the
+   segment" look the cash:invested composition bar uses) rather than
+   confined to some smaller sub-box. The stake bar is pinned to the left
+   edge and grows rightward with account share; the change bar is
+   pinned to the right edge and grows leftward with today's % move. Both
+   sit at z-index:0, so every actual flex child (ticker, value, price,
+   remove button) needs position:relative + z-index:1 to stay above
+   them -- see the combined rule below. */
+.watchlist-row-alloc-bar { position:absolute; left:0; top:0; bottom:0; width:0; background:rgba(var(--ink-rgb),.07); pointer-events:none; z-index:0; transition:width .15s ease; }
+.watchlist-row-change-bar { position:absolute; right:0; top:0; bottom:0; width:0; background:transparent; pointer-events:none; z-index:0; transition:width .15s ease, background .15s ease; }
+.watchlist-row-symbol, .watchlist-row-value, .watchlist-row-price, .watchlist-row-remove { position:relative; z-index:1; }
+.watchlist-row-value,
+.watchlist-row-price { flex-shrink:0; min-width:52px; font:.65rem monospace; letter-spacing:.02em; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.watchlist-row-value { text-align:left; color:rgba(var(--ink-rgb),.8); }
+.watchlist-row-price { text-align:right; color:rgba(var(--ink-rgb),.7); }
+.watchlist-row-market { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); user-select:none; -webkit-user-select:none; touch-action:pan-y; }
+.watchlist-row-market .watchlist-row-price { min-width:0; text-align:left; color:rgba(var(--ink-rgb),.8); }
+.watchlist-row-change { position:relative; z-index:1; min-width:0; text-align:right; font:.65rem monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.watchlist-row-remove-bar { position:absolute; inset:0; z-index:0; pointer-events:none; background:var(--remove-color); transform:scaleX(0); transform-origin:left; }
+.watchlist-row-market.is-removing .watchlist-row-remove-bar { transform:scaleX(1); transition:transform 1000ms linear; }
+.watchlist-row-market:focus-visible { outline:1px solid rgba(var(--ink-rgb),.5); outline-offset:-1px; }
+/* Positions and Markets are separate accordions now (see markets/sidebar.js),
+   so there's no in-list seam to style — just an empty-state line for
+   Positions when you don't hold anything yet. */
+.watchlist-empty { display:flex; align-items:center; justify-content:center; height:28px; min-height:28px; padding:0 14px; color:rgba(var(--ink-rgb),.32); font-size:.7rem; text-align:center; }
+
+/* Futures accordion (see markets/sidebar.js's 'portfolio-futures' section)
+   — a leveraged position gets its own card instead of a plain watchlist
+   row, since it carries enough of its own numbers (funding, fees,
+   leverage, liquidation price) that a single ticker-row line has no room
+   for. Reuses .watchlist-empty for the no-positions state so a bare
+   "No open positions" line matches Spot's own empty state exactly. */
+.futures-rows { padding:0; display:flex; flex-direction:column; gap:1px; }
+.futures-card {
+  /* Vertical padding trimmed to 2px (from 9px) now that the header row
+     below carries an explicit 24px height of its own -- 2+24+2 = 28px,
+     matching .watchlist-row's own ~28px (6px padding + its text line) and
+     close enough to the long/short bar's flat 24px that all three read
+     as the same rhythm stacked on top of each other, instead of Futures
+     cards visibly running taller than everything above them. */
+  padding:2px 14px;
+  /* Same divider weight/color as .watchlist-row's border above, but drawn
+     as a top edge on every card (rather than a bottom edge on every card
+     but the last) so the very first position gets a splitter above it
+     too, same as every one after it -- one line per gap, no doubling. */
+  border-top:1px solid rgba(var(--ink-rgb),.04);
+  display:flex; flex-direction:column; gap:6px;
+}
+/* Closes off the bottom of the whole list -- the interior gaps are
+   already covered by each card's own border-top above. */
+.futures-card:last-child { border-bottom:1px solid rgba(var(--ink-rgb),.04); }
+/* Header is a single row now, laid out exactly like a Spot/watchlist row
+   (see .watchlist-row above): a fixed-width figure on each outer edge
+   with the identifying label centered and flexing between them. There's
+   no more Long/Short pill or separate leverage chip here — direction
+   reads from .futures-card-coin's own color (set inline from
+   colorForChange(), see sidebar.js's _directionalColor), same as how a
+   Spot row never spells out "gained"/"lost" next to its change bar
+   either. Leverage moved down into the data grid as its own stat. */
+/* Fixed height matches .pt-composition-bar's own flat 24px (see
+   assets/sidebar.css) exactly, rather than however tall its text line
+   happens to render at -- see .futures-card's padding comment above for
+   how the two add up to match .watchlist-row too. */
+.futures-card-header { position:relative; display:flex; align-items:center; gap:8px; height:24px; cursor:pointer; user-select:none; }
+/* Value and PnL are a fixed EQUAL width (not just a shared min-width) so
+   the two flanks always match regardless of how long "+$18.61 PnL" ends
+   up next to "$1,116" — a mismatched pair of flex-shrink:0 widths is what
+   was pushing .futures-card-coin's centered text off true-center before
+   (its flex:1 space was centered between two unequal-width neighbors,
+   not between the card's actual left/right edges). overflow/ellipsis is
+   just a safety net for an extreme value this width can't fit. */
+.futures-card-value, .futures-card-pnl {
+  flex-shrink:0; width:64px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-size:.65rem; font-variant-numeric:tabular-nums;
+}
+.futures-card-value { text-align:left; font-weight:600; color:rgba(var(--ink-rgb),.8); }
+.futures-card-pnl { text-align:right; color:rgba(var(--ink-rgb),.6); }
+.futures-card-coin {
+  flex:1; min-width:0; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-size:.7rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+}
+.futures-card-chevron {
+  /* Hidden -- the collapse/expand still works (the click handler is on
+     the whole .futures-card-header, see sidebar.js), this just stops
+     rendering the little arrow icon at the header's right edge. Kept in
+     the DOM (not removed from sidebar.js) rather than deleted outright,
+     in case a visible affordance is wanted back later. */
+  display:none;
+}
+.futures-card.is-collapsed .futures-card-chevron { transform:rotate(-90deg); }
+.futures-card.is-collapsed .futures-card-grid { display:none; }
+.futures-card-grid {
+  display:grid; grid-template-columns:1fr 1fr; gap:5px 10px;
+  padding-top:4px; border-top:1px solid rgba(var(--ink-rgb),.035);
+}
+.futures-card-stat { display:flex; flex-direction:column; gap:1px; }
+.futures-card-stat-label { font-size:.55rem; letter-spacing:.04em; text-transform:uppercase; color:rgba(var(--ink-rgb),.32); }
+.futures-card-stat-value { font-size:.65rem; font-variant-numeric:tabular-nums; color:rgba(var(--ink-rgb),.75); }
+
+
+@media (max-width:720px) {
+
+  .mq-timeframes [data-interval="15m"], .mq-timeframes [data-interval="4h"] { display:none; }
+}
+
+/* Keep controls in document flow so the plot never sits underneath them. */
+.mq-market { display:flex; flex-direction:column; }
+.mq-chart-surface { position:relative; flex:1; min-height:0; }
+
+/* Markets and Portfolio share one toolbar dock (see finance/panel.js's
+   showMode()). Sizing/color/hover/active/selected treatment for every
+   button in that dock — .mq-tool included — now lives in one place,
+   chart-workspace.css's `.finance-chart-stage .mq-toolbar button` rule
+   (!important, so it also wins over the shared charting service's own
+   inline styling), so swapping modes doesn't change the toolbar's look,
+   only its buttons. Nothing mq-tool-specific needs overriding here anymore. */
+.finance-chart-stage .mq-tool-group { align-items:center; }

@@ -1,0 +1,222 @@
+.finance-workspace, .finance-workspace * { box-sizing:border-box; }
+.finance-workspace { display:flex; flex-direction:column; width:100%; height:100%; min-height:0; color:rgb(var(--ink-rgb)); font:12px/1.4 var(--app-font-family, "Segoe UI", sans-serif); --finance-toolbar-h:54px; background:transparent; }
+.finance-indicators-button { font:inherit; color:inherit; background:transparent; border:1px solid rgba(var(--ink-rgb),.15); border-radius:5px; padding:6px 12px; cursor:pointer; }
+.finance-indicators-button[aria-expanded="true"] { background:rgba(var(--ink-rgb),.12); border-color:rgba(var(--ink-rgb),.35); }
+.finance-indicators-button:focus-visible, .finance-indicators :focus-visible { outline:2px solid #a8c7fa; outline-offset:3px; }
+.finance-chart-body { display:flex; flex:1; min-height:0; overflow:hidden; }
+.finance-chart-stage { flex:1; min-width:0; min-height:0; position:relative; container-type:inline-size; container-name:finance-chart; }
+.finance-indicators { box-sizing:border-box; flex:0 0 280px; padding:16px; overflow:auto; border-left:1px solid rgba(var(--ink-rgb),.1); background:rgba(var(--surface-rgb),var(--panel-opacity, var(--default-panel-opacity, .69))); backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%); -webkit-backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%); }
+.finance-indicators[hidden] { display:none; }
+.finance-indicators h2 { font-size:14px; margin:0 0 6px; }
+.finance-indicators p { font-size:11px; color:rgba(var(--ink-rgb),.55); margin:0 0 18px; }
+.finance-indicators .sd-row { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:34px; }
+.finance-axis-toggles { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.finance-axis-toggles .sd-row { gap:8px; }
+.finance-indicators .sd-slider-row { margin:10px 0; }
+.finance-indicators .sd-subhead { margin:12px 0 8px; font-weight:600; }
+@media (max-width:640px) {
+  .finance-chart-body { flex-direction:column; }
+  .finance-indicators { flex:0 1 45%; border-left:0; border-top:1px solid rgba(var(--ink-rgb),.1); }
+}
+.finance-portfolio-chart { display:flex; flex-direction:column; position:relative; width:100%; height:100%; min-height:0; }
+.finance-plot-surface { position:relative; flex:1; min-height:0; }
+/* Keep panel material on the plot, not the whole workspace. Painting Panel
+   Opacity behind this toolbar would compound its Shell Opacity. */
+.finance-workspace .finance-plot-surface,
+.finance-workspace .mq-chart-surface {
+  background:rgba(var(--surface-rgb),var(--panel-opacity, var(--default-panel-opacity, .69))) !important;
+  backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%);
+  -webkit-backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%);
+}
+/* Flush-edge positioning for .portfolio-chart-host (top/left flush, 20px
+   right / 14px bottom reserved for the price axis and toolbar) now lives
+   in the charting service itself (chart-next.js's default `edgeInset`),
+   applied inline to whatever element is passed in as the chart container
+   -- so it doesn't need restating here. */
+/* The cash/invested indicator now renders as a real pane inside the
+   shared charting engine itself (see total-chart.js's `panes` option and
+   src/indicators/cash-invested-pane.js) -- it's laid out and styled by
+   chart-next.js as part of the chart's own host element, not by this
+   stylesheet, so there's no separate .finance-ratio-pane block here
+   anymore. */
+.finance-portfolio-toolbar {
+  order:1; display:flex; align-items:center; flex-wrap:nowrap; flex:0 0 auto; gap:8px;
+  padding:8px 12px; min-height:var(--finance-toolbar-h,54px); max-height:none; overflow:visible;
+  border:0; box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.09);
+  background:rgba(var(--surface-rgb),var(--shell-opacity, .88)); backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%); -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
+  transition:transform .22s cubic-bezier(.22,1,.36,1), margin-bottom .22s cubic-bezier(.22,1,.36,1), opacity .18s ease;
+}
+
+/* The scrollable middle of the dock. Mode-specific button groups live in
+   here and grow/shrink to fill whatever room is left; the pinned action
+   buttons (Indicators/Layout, appended by panel.js's showMode()) are
+   siblings OUTSIDE this wrapper, so they're never the thing that gets
+   scrolled out of view when the dock is narrower than its content — that
+   silent clipping (and the resulting lopsided, "off-center" look once the
+   dock overflowed) was the toolbar's main problem before this. */
+.finance-toolbar-scroll {
+  display:flex; align-items:center; flex:1 1 auto; min-width:0; gap:8px;
+  overflow-x:auto; overflow-y:hidden; scrollbar-width:thin;
+}
+.finance-toolbar-scroll::-webkit-scrollbar { height:4px; }
+.finance-toolbar-scroll::-webkit-scrollbar-thumb { background:rgba(var(--ink-rgb),.16); border-radius:2px; }
+.finance-toolbar-scroll::-webkit-scrollbar-track { background:transparent; }
+.finance-portfolio-toolbar [data-portfolio-section] { font:inherit; padding:6px 8px; border:0; background:transparent; color:rgba(var(--ink-rgb),.45); cursor:pointer; }
+.finance-portfolio-toolbar [data-portfolio-section]:hover,
+.finance-portfolio-toolbar [data-portfolio-section][aria-pressed="true"] { color:rgb(var(--ink-rgb)); }
+.finance-portfolio-toolbar [data-portfolio-section]:focus-visible { outline:2px solid #a8c7fa; outline-offset:-2px; }
+.finance-portfolio-toolbar .finance-toolbar-scroll > div { display:flex; gap:2px; flex-shrink:0; padding-right:8px; border-right:1px solid rgba(var(--ink-rgb),.09); }
+.finance-portfolio-toolbar .finance-toolbar-scroll > div:last-child { padding-right:0; border-right:0; }
+/* Buttons stay flat text, no pill/box chrome — selection and hover are
+   color-only (grey -> white). !important beats the shared charting
+   service's own inline style.background/borderColor/color it sets on these
+   same buttons at runtime (chart-next.js's syncToolbar()); without it,
+   that inline styling would win over anything declared here. */
+/* Markets' own free-text ticker box is redundant now that the ticker
+   picker (finance-ticker-picker-button) shows the active symbol and can
+   jump to any symbol by typing — one merged control instead of two. The
+   input stays in the DOM (markets/panel.js still reads/writes it), just
+   not shown, so none of its existing sync logic needs touching. */
+.finance-workspace .mq-ticker-form { display:none; }
+
+/* Indicators shares the chart dock instead of occupying a second strip. */
+.finance-portfolio-toolbar, .finance-chart-stage .mq-toolbar { align-items:center; }
+/* Only the non-scrolling dock chrome (the scroll wrapper itself, and the
+   pinned action buttons after it) should refuse to shrink; the scroll
+   wrapper is deliberately flex:1 so it — not the dock — absorbs width
+   changes. */
+.finance-portfolio-toolbar > :not(.finance-toolbar-scroll), .finance-chart-stage .mq-toolbar > :not(.finance-toolbar-scroll) { flex-shrink:0; }
+.finance-portfolio-toolbar button, .finance-chart-stage .mq-toolbar button { white-space:nowrap; }
+/* Icon controls stay transparent, including the renderer's inline active styles. */
+/* Icon-only buttons (Indicators/Settings, chart-type icons): no ring, no
+   underline — just grey by default, white on hover/selected/expanded.
+   !important for the same reason as the text buttons above: chart-next.js
+   sets inline style.color/background/borderColor on these at runtime and
+   would otherwise win. */
+
+
+/* Roomy width: let the least-essential group (Visible range — the chart
+   already defaults to following the live edge) step aside first, rather
+   than letting the dock overflow and silently scroll it out of reach.
+   Scoped to .finance-chart-stage so it applies in both Portfolio and
+   Markets mode, not just whichever one happened to be active. */
+@container finance-chart (max-width:640px) {
+  .finance-portfolio-toolbar .finance-toolbar-scroll > div[aria-label="Visible range"],
+  .finance-chart-stage .mq-toolbar .mq-ranges { display:none; }
+}
+
+/* ── Ticker picker ─────────────────────────────────────────────────
+   Pinned to the toolbar's far left (panel.js prepends it on every mode
+   switch, same as indicatorButton/settingsButton are pinned at the right).
+   The panel opens *upward* (bottom:100%), not downward like a typical menu
+   — the toolbar sits at the bottom of the dock, so there's chart room
+   above it and nothing but the panel edge below. */
+.finance-ticker-picker { position:relative; }
+.finance-ticker-picker-button {
+  display:inline-flex; align-items:center; gap:6px; flex-shrink:0;
+  height:30px; padding:0 8px; border:0; border-radius:4px;
+  color:rgba(var(--ink-rgb),.55); background:transparent; cursor:pointer;
+  font:500 11px var(--app-font-family, "Segoe UI", sans-serif); white-space:nowrap;
+  transition:color .12s ease;
+}
+.finance-ticker-picker-button svg { flex-shrink:0; transition:transform .15s ease; }
+.finance-ticker-picker-button[aria-expanded="true"] svg { transform:rotate(180deg); }
+.finance-ticker-picker-button:hover, .finance-ticker-picker-button[aria-expanded="true"] { color:rgb(var(--ink-rgb)); }
+.finance-ticker-picker-button:focus-visible { outline:2px solid #a8c7fa; outline-offset:-2px; }
+.finance-ticker-picker-label { max-width:140px; overflow:hidden; text-overflow:ellipsis; }
+.finance-ticker-picker-panel {
+  position:absolute; left:0; bottom:calc(100% + 8px); z-index:30;
+  width:240px; max-height:320px; display:flex; flex-direction:column; gap:6px;
+  padding:8px; border-radius:10px; border:1px solid rgba(var(--ink-rgb),.1);
+  background:rgba(var(--surface-rgb),.97); box-shadow:0 12px 32px rgba(0,0,0,.4);
+  backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%);
+}
+.finance-ticker-picker-panel[hidden] { display:none; }
+.finance-ticker-picker-search {
+  flex:0 0 auto; height:30px; padding:0 10px; border:1px solid rgba(var(--ink-rgb),.1); border-radius:6px;
+  outline:0; color:rgb(var(--ink-rgb)); background:rgba(var(--ink-rgb),.05);
+  font:500 11px var(--app-font-family, "Segoe UI", sans-serif);
+}
+.finance-ticker-picker-search:focus { border-color:rgba(var(--ink-rgb),.28); background:rgba(var(--ink-rgb),.08); }
+.finance-ticker-picker-search::placeholder { color:rgba(var(--ink-rgb),.4); }
+.finance-exchange-picker { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:4px; }
+.finance-exchange-chip {
+  height:22px; padding:0 8px; border:1px solid rgba(var(--ink-rgb),.1); border-radius:11px;
+  color:rgba(var(--ink-rgb),.55); background:transparent; cursor:pointer;
+  font:500 10px var(--app-font-family, "Segoe UI", sans-serif);
+}
+.finance-exchange-chip:hover { color:rgba(var(--ink-rgb),.9); background:rgba(var(--ink-rgb),.06); }
+.finance-exchange-chip.is-active { color:rgb(var(--ink-rgb)); border-color:rgba(var(--ink-rgb),.3); background:rgba(var(--ink-rgb),.1); }
+.finance-exchange-chip:focus-visible { outline:2px solid #a8c7fa; outline-offset:-2px; }
+.finance-ticker-picker-list { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:1px; scrollbar-width:thin; }
+.finance-ticker-picker-row {
+  display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:8px;
+  width:100%; height:30px; padding:0 8px; border:0; border-radius:6px;
+  color:rgba(var(--ink-rgb),.85); background:transparent; cursor:pointer; text-align:left;
+  font:500 11px var(--app-font-family, "Segoe UI", sans-serif);
+}
+.finance-ticker-picker-row:hover, .finance-ticker-picker-row:focus-visible { background:rgba(var(--ink-rgb),.08); outline:0; }
+.finance-ticker-picker-symbol { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.finance-ticker-picker-price { color:rgba(var(--ink-rgb),.55); font-variant-numeric:tabular-nums; }
+.finance-ticker-picker-change { font-variant-numeric:tabular-nums; text-align:right; min-width:52px; }
+.finance-ticker-picker-portfolio {
+  grid-template-columns:1fr auto; margin-bottom:4px; padding-bottom:8px;
+  border-bottom:1px solid rgba(var(--ink-rgb),.09); border-radius:6px 6px 0 0;
+  font-weight:600;
+}
+.finance-ticker-picker-portfolio .finance-ticker-picker-sub { color:rgba(var(--ink-rgb),.4); font-weight:500; font-size:10px; }
+.finance-ticker-picker-jump .finance-ticker-picker-symbol { color:rgba(var(--ink-rgb),.65); font-style:italic; }
+
+/* ── Toolbar dock/undock handle ──────────────────────────────────────────────
+   An invisible drag strip sitting on the dock's top edge
+   (added by panel.js, re-appended to `stage` on every mode switch so it
+   survives Portfolio/Markets swaps). Click it, or drag it down, to tuck the
+   whole dock out of the way without leaving the panel's own surface; drag
+   or click again to bring it back. This is deliberately a small, self-
+   contained UI affordance owned by this plugin, not a reproduction of the
+   Audio Player's drawer. */
+.finance-toolbar-handle {
+  position:absolute; left:0; right:0; bottom:var(--finance-toolbar-h,54px); height:18px; z-index:20;
+  display:flex; align-items:center; justify-content:center;
+  cursor:grab; touch-action:none; background:transparent; border:0; padding:0;
+  transition:bottom .22s cubic-bezier(.22,1,.36,1);
+}
+.finance-toolbar-handle::after {
+  content:none;
+}
+.finance-toolbar-handle:active { cursor:grabbing; }
+.finance-toolbar-handle:focus-visible { outline:0; }
+.finance-workspace.toolbar-hidden .finance-toolbar-handle { bottom:0; }
+.finance-workspace.toolbar-hidden .finance-portfolio-toolbar,
+.finance-workspace.toolbar-hidden .finance-chart-stage .mq-toolbar {
+  transform:translateY(100%); margin-bottom:calc(-1 * var(--finance-toolbar-h,54px)); opacity:0; pointer-events:none;
+}
+.finance-chart-grid { display:grid; flex:1; min-width:0; min-height:0; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); gap:0; }
+.finance-chart-grid[data-count="2"] { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.finance-chart-grid[data-count="4"] { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); }
+.finance-extra-chart { min-width:0; min-height:0; overflow:hidden; border:0; }
+.finance-extra-chart > .mq-market { height:100%; min-height:0; }
+
+.finance-layout-picker { position:relative; flex-shrink:0; }
+.finance-layout-button { display:flex; align-items:center; justify-content:center; padding:6px; color:inherit; background:transparent; border:0; cursor:pointer; }
+.finance-layout-menu { position:absolute; bottom:calc(100% + 12px); right:0; z-index:100; min-width:140px; padding:6px; background:rgb(var(--surface-rgb)); border:1px solid rgba(var(--ink-rgb),.2); border-radius:8px; box-shadow:0 8px 24px #0005; }
+.finance-layout-menu[hidden] { display:none; }
+.finance-layout-menu button { display:block; width:100%; text-align:left; padding:9px 12px; font:inherit; color:inherit; border:0; background:transparent; cursor:pointer; }
+.finance-layout-menu button:hover, .finance-layout-menu button[aria-pressed="true"] { background:rgba(var(--ink-rgb),.12); border-radius:4px; }
+.finance-layout-picker button:focus-visible { outline:2px solid #a8c7fa; outline-offset:2px; }
+@media(max-width:640px) {
+ .finance-chart-grid[data-count="2"] { grid-template-columns:minmax(0,1fr); grid-template-rows:repeat(2,minmax(0,1fr)); }
+}
+.finance-chart-grid[data-count="3"] { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); }
+.finance-chart-grid[data-count="3"] > .finance-chart-stage { grid-column:1 / -1; }
+.finance-extra-chart { display:flex; flex-direction:column; }
+.finance-extra-body { flex:1; min-height:0; min-width:0; }
+.finance-extra-body > .mq-market { height:100%; }
+.finance-chart-grid[data-count="2"][data-orientation="vertical"] { grid-template-columns:minmax(0,1fr); grid-template-rows:repeat(2,minmax(0,1fr)); }
+/* Keep the candle count legible regardless of the number of chart panes. */
+.finance-workspace .atmos-chart__point-count { font-size:12px; line-height:1.4; }
+.finance-extra-chart { position:relative; container-type:inline-size; container-name:finance-chart; }
+
+/* Shared groups own dividers; market groups must not add a second edge. */
+.finance-workspace .finance-toolbar-scroll > .mq-tool-group,
+.finance-workspace .finance-toolbar-scroll > .mq-refresh-control { border-left:0; margin-left:0; padding-left:0; }

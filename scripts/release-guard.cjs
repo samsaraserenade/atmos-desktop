@@ -5,7 +5,8 @@
  * Terms come from this repo at a commit: the id of every extension folder
  * that release.json does not release (and the same id with spaces, and its
  * displayName), your own git email when it is not a GitHub no-reply address,
- * and anything listed in release.json "export.forbid". Matching is
+ * anything listed in release.json "export.forbid", and the lines of the
+ * gitignored .release-guard.local. Matching is
  * case-insensitive and on plain text files only.
  *
  * Used by scripts/publish-release.cjs before it commits, and written into
@@ -39,7 +40,19 @@ function forbiddenTerms(repo, ref = 'HEAD') {
   try { email = git('config', 'user.email').trim(); } catch { /* none set */ }
   if (email && !NOREPLY.test(email)) terms.add(email);
   for (const extra of (release.export && release.export.forbid) || []) if (extra) terms.add(String(extra));
+  for (const extra of localTerms(repo)) terms.add(extra);
   return [...terms].filter(term => term.length >= 3).sort();
+}
+
+/**
+ * Terms from .release-guard.local in the repo's working tree: one per line,
+ * # for comments. Gitignored, so private values (a server address, a local
+ * path) can be refused without being written into a published file.
+ */
+function localTerms(repo) {
+  let text = '';
+  try { text = fs.readFileSync(path.join(repo, '.release-guard.local'), 'utf8'); } catch { return []; }
+  return text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
 }
 
 /** Every file under <dir> (skipping .git, node_modules, dist) that contains a term. */
@@ -70,4 +83,4 @@ function scanTree(dir, terms) {
 
 function isNoreply(email) { return NOREPLY.test(email || ''); }
 
-module.exports = { forbiddenTerms, scanTree, isNoreply };
+module.exports = { forbiddenTerms, localTerms, scanTree, isNoreply };

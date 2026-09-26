@@ -1,0 +1,33 @@
+[Unit]
+Description=Atmos Portfolio API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=atmos-portfolio
+Group=atmos-portfolio
+EnvironmentFile=/etc/atmos-portfolio.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/atmos-portfolio/server.py serve
+Restart=on-failure
+RestartSec=5s
+StateDirectory=atmos-portfolio
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+MemoryMax=160M
+CPUQuota=25%
+ReadWritePaths=/var/lib/atmos-portfolio
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+{
+  "$comment": "Copy to deploy.local.json (gitignored) and fill in. Used by configure-sources.ps1.",
+  "server": "100.64.0.1",
+  "sshKeyPath": "C:\\path\\to\\your-ssh-key"
+}

@@ -5,6 +5,7 @@ release-repo/
 .DS_Store
 .tmp/
 _archive/
+.charting-migration/
 
 # Build output and toolchains inside extensions
 .gradle/
@@ -28,3 +29,4 @@ _to_delete/
 plugins/matrix-chat/data/
 *.docx
 .sync-test-marker.txt
+.release-guard.local

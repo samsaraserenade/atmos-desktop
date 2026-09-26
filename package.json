@@ -1,6 +1,6 @@
 {
   "name": "atmos",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "A modular personal desktop environment.",
   "license": "Apache-2.0",
   "author": "hashy",
@@ -10,6 +10,7 @@
     "test:core": "node --test core/js/core/*.test.cjs",
     "test:services": "node --experimental-vm-modules --test scripts/service-core-v2-contract.test.cjs",
     "test:permissions": "node --test scripts/extension-permissions.test.cjs",
+    "test:finance": "node --experimental-vm-modules --test plugins/finance/tests/*.test.cjs plugins/finance/markets/tests/*.test.cjs",
     "build": "electron-builder --win nsis",
     "build:portable": "electron-builder --win portable",
     "build:personal": "node scripts/build-personal.cjs",

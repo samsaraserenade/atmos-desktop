@@ -1,0 +1,22 @@
+{
+  "id": "market-data",
+  "name": "Atmos Market Data",
+  "version": "0.4.0",
+  "description": "Exchange-independent live trades and candles for Atmos services and plugins.",
+  "entry": "main.cjs",
+  "rendererApi": "api.js",
+  "capability": "market-data",
+  "apiVersion": 2,
+  "events": [
+    "market-data:trade",
+    "market-data:candle",
+    "market-data:candle-history",
+    "market-data:connection-status"
+  ],
+  "providers": [
+    "binance",
+    "bybit",
+    "kraken",
+    "coinbase"
+  ]
+}

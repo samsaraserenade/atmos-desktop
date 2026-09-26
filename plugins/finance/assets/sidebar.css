@@ -1,0 +1,238 @@
+/**
+ * js/plugins/portfolio-tracker/assets/sidebar.css
+ * Injected by sidebar.js. Only the section-body padding lives here — the
+ * widget's own internals (#tc-balance, #tc-balance-amount, #tc-mini-chart,
+ * etc.) are styled inline from balance.js, unchanged from before this
+ * migrated into the registry.
+ */
+
+@font-face {
+  font-family: 'Bebas Neue';
+  src: url('./fonts/BebasNeue-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+.pt-bal-body {
+  padding: 0 14px;
+}
+
+.pt-bal-ticker-body {
+  padding-bottom: 14px;
+}
+
+/* Moved into the Positions accordion (markets/sidebar.js) — sits above
+   the held-position rows it's summarizing, flush against the section
+   header above and the row list below (no vertical padding — the bar's
+   own height plus each row's own padding is enough breathing room), with
+   a divider below instead of the border-top it used to sit under when it
+   followed the balance figure. No horizontal padding either: the bar
+   itself needs to reach edge-to-edge like the Positions rows' own
+   allocation bars do (their .watchlist-row-alloc-bar ignores the row's
+   padding via inset:0 on a positioned ancestor) — see
+   .pt-composition-label below for where that 14px inset moves to. */
+#tc-sidebar-composition {
+  padding: 0;
+  border-bottom: 1px solid rgba(var(--ink-rgb), .065);
+  font-family: inherit;
+  contain: layout paint style;
+}
+
+/* Same widget, mounted above the Futures accordion's own position cards
+   instead of Spot's rows (see markets/sidebar.js's updateFuturesDirection)
+   -- long/short instead of invested/cash, otherwise identical layout. */
+#futures-direction-bar {
+  padding: 0;
+  border-bottom: 1px solid rgba(var(--ink-rgb), .065);
+  font-family: inherit;
+  contain: layout paint style;
+}
+
+/* Square, low-opacity fills (matching the Positions rows' own
+   allocation bars — see markets/styles.css's .watchlist-row-alloc-bar)
+   with the figures as a separate overlay, anchored to the bar's own
+   edges instead of boxed inside their fill — see composition.js. */
+.pt-composition-bar {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 24px;
+  overflow: hidden;
+  border-radius: 0;
+  background: rgba(var(--ink-rgb), .055);
+  box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), .035);
+  font-size: .7rem;
+  font-weight: 650;
+  letter-spacing: .01em;
+  color: rgba(var(--ink-rgb), .92);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background .12s;
+}
+.pt-composition-bar:hover { background: rgba(var(--ink-rgb), .09); }
+.pt-composition-bar:focus-visible { outline: 1px solid rgba(var(--ink-rgb), .4); outline-offset: -1px; }
+
+/* Same click-to-flip affordance as .pt-composition-bar above, on the
+   Day/Week/Total tiles (see balance.js's mountBalanceSection). Each tile
+   already carries its own background/border tint from _renderPerformance,
+   so hover brightens those tiles in place rather than washing a flat
+   color over the whole row. */
+#tc-balance-performance { border-radius: 3px; }
+#tc-balance-performance:hover { filter: brightness(1.18); }
+#tc-balance-performance:focus-visible { outline: 1px solid rgba(var(--ink-rgb), .4); outline-offset: -1px; }
+
+.pt-composition-fill { height: 100%; min-width: 0; }
+.pt-composition-invested { background: var(--pt-invested-fill, rgba(52, 211, 153, .25)); }
+.pt-composition-cash { background: var(--pt-cash-fill, rgba(248, 113, 113, .25)); }
+/* Long/short fills -- colors set inline the same way as a position's own
+   coin label (colorForChange through price-color.js), not hardcoded here,
+   so this bar always matches whatever palette the user has picked. */
+.pt-composition-long { background: var(--pt-long-fill, rgba(52, 211, 153, .25)); }
+.pt-composition-short { background: var(--pt-short-fill, rgba(248, 113, 113, .25)); }
+
+.pt-composition-label {
+  position: absolute;
+  top: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  /* Matches .watchlist-row's own 14px side padding, so these figures
+     line up with the ticker text in the rows directly below, even
+     though the bar underneath them now runs edge-to-edge. */
+  padding: 0 14px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pt-composition-label-invested { left: 0; }
+.pt-composition-label-cash { right: 0; }
+.pt-composition-label-long { left: 0; }
+.pt-composition-label-short { right: 0; }
+
+/* Fixed to the bar's own horizontal center regardless of the invested/
+   cash split -- a label for the whole bar, not tied to either fill
+   segment -- so it never moves or gets squeezed as the ratio changes.
+   Muted and smaller than the edge figures (.pt-composition-label) since
+   this is just naming the widget, not data. */
+.pt-composition-title {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  height: 100%;
+  color: rgba(var(--ink-rgb), .38);
+  font-size: .6rem;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.pt-composition-coverage,
+.pt-composition-empty {
+  color: rgba(var(--ink-rgb), .32);
+  font-size: .65rem;
+  line-height: 1.35;
+}
+/* Both lost #tc-sidebar-composition's own horizontal padding along with
+   it (see above) — restated here so they still sit inset from the
+   now edge-to-edge bar rather than touching the accordion's outer edges. */
+.pt-composition-coverage { margin-top: 5px; padding: 0 14px; text-align: right; }
+.pt-composition-empty { padding: 4px 14px 1px; text-align: center; }
+
+/* Today's Movers + the market-vs-flow breakdown (see balance.js's
+   _renderMovers/_renderFlow) — both share this same compact row look,
+   matching the Day/Week/Total tiles' own text sizing so the whole
+   Performance section reads as one family of numbers. */
+.pt-mini-list-head {
+  display: flex;
+  align-items: center;
+  position: relative;
+  gap: 6px;
+  padding: 2px 0;
+  color: rgba(var(--ink-rgb), .52);
+  font-size: .62rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  cursor: pointer;
+  user-select: none;
+}
+.pt-mini-list-head:hover { color: rgba(var(--ink-rgb), .72); }
+/* flex:1 + text-align:center (rather than justify-content:center on the
+   head) centers the label across the FULL header width regardless of the
+   chevron's own width, since the chevron is taken out of flow below and
+   would otherwise pull an evenly-split center off to the left. */
+.pt-mini-list-head-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.pt-mini-list-chevron {
+  position: absolute;
+  right: 0;
+  flex-shrink: 0;
+  font-size: .55rem;
+  transition: transform .12s ease;
+  transform: rotate(0deg);
+}
+/* Collapsed = header's own aria-expanded goes false -- driven from
+   _mountMiniList's applyCollapsed(), not a separate class, so the arrow
+   and the row-hiding below can never fall out of sync with each other. */
+.pt-mini-list-head[aria-expanded="false"] .pt-mini-list-chevron { transform: rotate(-90deg); }
+.pt-mini-list-rows {
+  display: flex;
+  flex-direction: column;
+  /* Doubles the header-to-content gap (was just the head's own 2px
+     bottom padding plus a row's 4px top padding, ~6px effective) without
+     touching either of those, so the spacing between individual rows
+     inside the list is unaffected -- only the gap before the first one. */
+  margin-top: 6px;
+}
+.pt-mini-list-collapsed > .pt-mini-list-rows { display: none; }
+.pt-mini-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(var(--ink-rgb), .04);
+  font-variant-numeric: tabular-nums;
+}
+.pt-mini-list-row:last-child { border-bottom: 0; }
+.pt-mini-list-row-symbol {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(var(--ink-rgb), .65);
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Movers uses uppercase ticker symbols; the flow rows reuse this same
+   class for plain-case labels (Market movement, Deposits, ...), so the
+   transform is applied per-block instead of baked into the shared row. */
+#tc-balance-movers .pt-mini-list-row-symbol { text-transform: uppercase; }
+.pt-mini-list-row-values {
+  flex-shrink: 0;
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+
+/* Movers splits into two side-by-side columns (winners left, losers
+   right) instead of one stacked list -- see balance.js's _renderMovers.
+   minmax(0,1fr) keeps a long symbol/value from forcing either column
+   wider than half the available width. */
+#tc-balance-movers .pt-movers-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 12px;
+}
+.pt-movers-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}

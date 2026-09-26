@@ -1,0 +1,14 @@
+{
+  "poll_seconds": 60,
+  "sources": {
+    "binance-spot": { "enabled": false, "api_key": "", "api_secret": "" },
+    "aptos-wallet": { "enabled": false, "addresses": [] },
+    "arbitrum-wallet": { "enabled": false, "addresses": [] },
+    "bsc-wallet": { "enabled": false, "addresses": [] },
+    "cardano-wallet": { "enabled": false, "addresses": [] },
+    "hyperliquid-wallet": { "enabled": false, "addresses": [] },
+    "inj-wallet": { "enabled": false, "addresses": [] },
+    "monero-wallet": { "enabled": false, "amount": 0 },
+    "solana-wallet": { "enabled": false, "addresses": [], "jupiter_api_key": "", "jupiter_locks": [] }
+  }
+}

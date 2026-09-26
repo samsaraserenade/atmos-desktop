@@ -1,0 +1,7 @@
+# Contains local finance credentials after the review/import step.
+backend/sources-to-upload.json
+# Your server address and SSH key path (copy deploy.example.json).
+backend/deploy.local.json
+# Docker setup: the token and your sources.
+backend/.env
+backend/sources.json

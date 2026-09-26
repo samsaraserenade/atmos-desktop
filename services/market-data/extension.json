@@ -1,0 +1,31 @@
+{
+  "apiVersion": 2,
+  "tier": "first-party",
+  "requires": {
+    "extensions.manifest": 1
+  },
+  "permissions": {
+    "network": [
+      "api.bybit.com",
+      "api.exchange.coinbase.com",
+      "api.kraken.com",
+      "fapi.binance.com",
+      "fstream.binance.com",
+      "stream.bybit.com",
+      "ws-feed.exchange.coinbase.com",
+      "ws.kraken.com"
+    ],
+    "node": [
+      "crypto",
+      "events"
+    ],
+    "electron": [
+      "app"
+    ],
+    "ipc": true,
+    "provides": [
+      "market-data"
+    ]
+  },
+  "library": true
+}

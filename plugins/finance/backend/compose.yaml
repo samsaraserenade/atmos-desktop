@@ -1,0 +1,48 @@
+# Atmos portfolio server with Docker Compose. See "Running with Docker" in
+# README.md: copy .env.example to .env (set the token), put your sources in
+# sources.json (readable by uid 10001), then `docker compose up -d`.
+name: atmos-portfolio
+
+x-hardening: &hardening
+  build: .
+  image: atmos-portfolio:local
+  env_file: .env
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  volumes:
+    - portfolio-data:/data
+
+services:
+  api:
+    <<: *hardening
+    command: ["python", "/app/server.py", "serve"]
+    # Only this computer by default. For Tailscale, set ATMOS_PORTFOLIO_BIND
+    # in .env to the server's 100.x.y.z address; for HTTPS, keep 127.0.0.1
+    # and put a TLS proxy in front.
+    ports:
+      - "${ATMOS_PORTFOLIO_BIND:-127.0.0.1}:${ATMOS_PORTFOLIO_HOST_PORT:-8787}:8787"
+    mem_limit: 160m
+    cpus: 0.25
+
+  collector:
+    <<: *hardening
+    command: ["python", "/app/collectors.py"]
+    volumes:
+      - portfolio-data:/data
+      - ./sources.json:/config/sources.json:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    mem_limit: 192m
+    cpus: 0.35
+
+volumes:
+  portfolio-data:
