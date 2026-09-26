@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/title.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/images/blacktitle.png">
-    <img alt="Atmos" src="docs/images/blacktitle.png" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/highres-white-title.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/highres-black-title.png">
+    <img alt="Atmos" src="docs/images/highres-black-title.png" width="100%">
   </picture>
 </p>
 
