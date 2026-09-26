@@ -25,8 +25,8 @@ the feeling of a native desktop environment.
 
 Modern computing is fragmented.
 
-Your music is in one app. Your messages are somewhere else. Your tools and
-services rarely understand one another.
+Your music is in one app. Your messages are somewhere else. Your portfolio
+is in a third. Your tools and services rarely understand one another.
 
 Atmos explores a different approach:
 
@@ -155,6 +155,35 @@ A secure chat experience built directly into the workspace using
   `rev/create-room`, `rev/create-space`, `rev/invite`, `rev/leave` and
   `rev/notifications`.
 
+### Finance
+
+Your portfolio and live markets inside the workspace, read from a portfolio
+server you run yourself.
+
+- **One balance across wallets and exchanges:** Solana (with Jupiter staking
+  and locks), Hyperliquid (Spot, Perps and Earn), Arbitrum, BSC, Aptos,
+  Cardano, Injective, Binance Spot, and Monero entered by hand.
+- **Portfolio chart** with full history, scope filters to leave out a source,
+  a holding or a group such as Perps, and a cash/invested breakdown.
+- **Balance, Performance, Spot, Futures, Allocation and Connections widgets**
+  in the sidebar, and a private mode that hides your balances.
+- **Markets chart and watchlist** with live trades and candles from Binance,
+  Bybit, Kraken and Coinbase. If an exchange is blocked where you are, the
+  chart carries on with the others.
+- **Your own server.** The portfolio server
+  ([`plugins/finance/backend`](plugins/finance/backend)) collects every
+  minute on a small VPS or a home server, with systemd or Docker, reachable
+  over Tailscale or HTTPS. It uses only Python's standard library. Setting
+  one up takes about 20 minutes:
+  [SELF_HOSTING.md](plugins/finance/backend/SELF_HOSTING.md). Paid hosting
+  is coming.
+- **Pair with a code.** The server prints a pairing code; paste it into
+  Portfolio Connections. The token is sealed in Windows' secure storage and
+  never reaches the interface.
+- **Read-only by design.** Finance never moves funds or places orders.
+  Balances are estimates from third-party prices, nothing shown is financial
+  advice, and the server should only ever get read-only API keys.
+
 ---
 
 ## Architecture
@@ -175,7 +204,8 @@ widgets, background processes and custom functionality.
 ### Services
 
 Reusable capabilities shared between extensions, including audio, wallpaper,
-location, media metadata and full-screen viewing.
+location, media metadata, full-screen viewing, charting, currency conversion
+and live market data.
 
 ---
 
@@ -192,6 +222,7 @@ Requirements:
 - Node.js
 - npm
 - Windows for packaged builds
+- Python 3.10+ only to run or test Finance's portfolio server
 
 Install dependencies and run Atmos:
 
@@ -227,8 +258,9 @@ Settings waiting for your approval. The smallest working example is
 ```text
 Atmos/
 ├── core/        # The runtime: window, panels, sidebar, settings, the extension host and SDK
-├── plugins/     # User-facing extensions (audio-player, matrix-chat)
-├── services/    # Capabilities extensions call into (audio, fullscreen-viewer, location, media-metadata, wallpaper)
+├── plugins/     # User-facing extensions (audio-player, finance, matrix-chat)
+├── services/    # Capabilities extensions call into (audio, charting, currency, fullscreen-viewer,
+│                #   location, market-data, media-metadata, wallpaper)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
 ├── release.json # What an installer bundles
 └── ATMOS_CORE_INTEGRATION.md   # The extension API
@@ -243,6 +275,9 @@ Atmos/
 | `npm run test:permissions` | Checks each bundled extension's code against its declared permissions |
 | `cd plugins/audio-player && node --test tests/*.test.cjs` | Audio Player tests |
 | `cd plugins/matrix-chat && npm test` | Matrix Chat tests (`npm run check:browser` adds the message-sanitizer attack checks in a browser) |
+| `npm run test:finance` | Finance and Markets tests |
+| `cd plugins/finance/backend && python -m unittest` | Portfolio server tests |
+| `node --test services/market-data/tests/*.test.cjs` | Market Data tests |
 | `node scripts/e2e/<name>.cjs` | End-to-end checks in a throwaway profile (Linux/macOS/WSL; see `scripts/e2e/README.md`) |
 
 ---
@@ -255,6 +290,8 @@ Atmos is actively evolving. The current focus is:
 - Expanding the SDK
 - Improving security boundaries
 - Building more first-party extensions
+- Hosted portfolio servers for Finance, and a way for anyone to add a
+  Finance connector in one file
 - Preparing the foundation for a wider extension ecosystem
 
 ---
