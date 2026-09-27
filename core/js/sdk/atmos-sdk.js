@@ -216,7 +216,11 @@ function forwardKeys() {
     const shortcut = event.ctrlKey || event.metaKey || event.altKey || /^F\d+$/.test(event.key);
     // Space outside fields and buttons can be a global key (Audio Player's play/pause).
     const space = event.code === 'Space' && !typing && !control;
-    if (!(shortcut || space || (event.key === 'Escape' && !typing))) return;
+    // Atmos's single-key shortcuts (Tab for the sidebar, panel shortcuts
+    // such as "]"), outside fields and buttons, where Tab moves focus.
+    const atmosKey = !typing && !control && (init?.shortcutKeys || []).includes(event.key);
+    if (atmosKey) event.preventDefault();
+    if (!(shortcut || space || atmosKey || (event.key === 'Escape' && !typing))) return;
     notify('ui.key', {
       key: event.key, code: event.code,
       ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey,

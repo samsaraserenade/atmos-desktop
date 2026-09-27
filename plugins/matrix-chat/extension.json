@@ -1,9 +1,12 @@
 {
   "apiVersion": 3,
   "tier": "first-party",
+  "version": "1.0.0",
+  "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
   "displayName": "Matrix Chat",
+  "description": "Chat on Matrix, with encryption, rooms in the sidebar and notifications.",
   "requires": {
     "extensions.manifest": 1,
     "extensions.frames": 3
@@ -48,6 +51,11 @@
     "sharedOriginIndexedDB": [
       "matrix-js-sdk*"
     ]
+  },
+  "dependencies": {
+    "audio": "^1.0.0",
+    "fullscreen-viewer": "^1.0.0",
+    "wallpaper": "^1.0.0"
   },
   "permissions": {
     "network": [

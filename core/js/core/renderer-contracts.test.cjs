@@ -285,6 +285,14 @@ test('plugin-specific player chrome does not become a Core panel convention', ()
   assert.match(guide, /waveform, track metadata, album art, playback controls/);
 });
 
+test('settings gives system capabilities their own destination', () => {
+  const settings = fs.readFileSync(path.resolve(appDir, 'core/settings-menu.js'), 'utf8');
+
+  assert.match(settings, /\[_SYSTEM_PAGE_ID, _PLUGINS_PAGE_ID, _SERVICES_PAGE_ID\]/);
+  assert.match(settings, /category === _SYSTEM_PAGE_ID[^\n]+extension\.tier === 'system'/);
+  assert.match(settings, /category === _SERVICES_PAGE_ID[^\n]+extension\.tier !== 'system'/);
+});
+
 test('shell and panel appearance settings remain independently scoped', () => {
   const readSource = relativePath => fs.readFileSync(path.resolve(appDir, relativePath), 'utf8');
   const appearance = readSource('core/appearance.js');

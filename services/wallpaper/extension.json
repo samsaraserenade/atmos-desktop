@@ -1,6 +1,8 @@
 {
   "apiVersion": 2,
   "tier": "system",
+  "version": "1.0.0",
+  "publisher": "atmos",
   "displayName": "Wallpaper",
   "requires": {
     "extensions.manifest": 1,

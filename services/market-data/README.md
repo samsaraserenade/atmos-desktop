@@ -16,7 +16,7 @@ candles only".
 Market Data is a first-party service bundled with Atmos (`services/market-data`
 in the repo, `resources/extensions/services/market-data` in a build).
 `extension.json` participates in CoreV2 compatibility checks; `main.cjs` is
-activated by the service host before plugins. `service.json` documents the
+activated by the service host before plugins. `extension.json` "contract" lists the
 service-owned API and event contract.
 
 ## Renderer API

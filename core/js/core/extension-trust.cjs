@@ -1,13 +1,19 @@
 'use strict';
 /**
- * Whether each extension may load, by tier:
+ * Whether each extension may load, by tier (extension-catalog.cjs decides
+ * the tier: bundled, signed by an official key, or neither):
  *
- *   system, first-party (bundled)
- *     verified    files match the build's integrity.json
- *     unverified  no integrity.json (running from source, or an unpacked dev build)
- *     tampered    files differ from integrity.json — not loaded
+ *   system, first-party bundled with Atmos
+ *     verified    files match the build's integrity.json, or the
+ *                 extension's own signature when there is no integrity.json
+ *     unverified  neither (running from source, or an unpacked dev build)
+ *     tampered    files differ from integrity.json or the signature — not loaded
  *
- *   third-party (installed in AppData)
+ *   first-party installed (an official signed package)
+ *     verified    every file matches its signature
+ *     tampered    the signature is broken or a file differs — not loaded
+ *
+ *   third-party (installed, not officially signed)
  *     approved    the user approved exactly these files and permissions
  *     pending     never approved — not loaded
  *     changed     files or permissions changed since approval — not loaded
@@ -25,6 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const { normalizePermissions, describePermissions } = require('./extension-permissions.cjs');
 const { createHasher, readIntegrityList, compareFiles } = require('./extension-integrity.cjs');
+const { verifyExtension, SIGNATURE_FILE } = require('./extension-signing.cjs');
 
 const LOADABLE = new Set(['verified', 'unverified', 'approved']);
 // Permissions only a main.cjs can use; third-party extensions cannot have one.
@@ -55,8 +62,9 @@ function newlyRequested(current, approved) {
  * @param {string} options.approvalsFile   userData/extension-approvals.json
  * @param {string} [options.hashCacheFile] userData/extension-hash-cache.json
  * @param {(kind: 'plugins'|'services') => string|null} options.bundledRoot
+ * @param {Map} [options.trustedKeys]      from loadTrustedKeys()
  */
-function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot, warn = message => console.warn(message) }) {
+function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot, trustedKeys = new Map(), warn = message => console.warn(message) }) {
   const hasher = createHasher(hashCacheFile);
   const integrityLists = new Map();
   const results = new Map();
@@ -78,9 +86,26 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
     return stored && typeof stored === 'object' ? stored : {};
   }
 
+  function signatureOf(entry) {
+    const result = verifyExtension(entry.path, {
+      kind: entry.kind, id: entry.id, manifest: entry.manifest && !entry.manifest.invalid ? entry.manifest : null, trustedKeys, hasher,
+    });
+    const { status, reason, keyId = null, publisher = null } = result;
+    return { status, reason, keyId, publisher };
+  }
+
   function assessBundled(entry, kind) {
     const list = integrityFor(kind);
-    if (!list) return { status: 'unverified', reason: 'No integrity list (running from source)' };
+    if (!list) {
+      // No integrity.json: a signed extension is checked against its own
+      // signature; otherwise it is running from source.
+      if (fs.existsSync(path.join(entry.path, SIGNATURE_FILE))) {
+        const signature = signatureOf(entry);
+        if (signature.status === 'verified') return { status: 'verified', reason: null, signature };
+        if (signature.status === 'tampered') return { status: 'tampered', reason: signature.reason, signature };
+      }
+      return { status: 'unverified', reason: 'No integrity list (running from source)' };
+    }
     if (list.error) return { status: 'tampered', reason: `integrity.json is unreadable: ${list.error}` };
     const { files } = hasher.hashTree(entry.path);
     const mismatch = compareFiles(files, list.extensions[`${kind}/${entry.id}`]);
@@ -89,16 +114,23 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
       : { status: 'verified', reason: null };
   }
 
+  /** An installed extension the catalog found an official signature on. */
+  function assessSigned(entry) {
+    const signature = signatureOf(entry);
+    if (signature.status === 'verified') return { status: 'verified', reason: null, signature };
+    return { status: 'tampered', reason: signature.reason || 'Its signature could not be checked', signature };
+  }
+
   function assessInstalled(entry, permissions) {
     if (!entry.manifest) return { status: 'blocked', reason: 'It has no extension.json, so its permissions are unknown' };
     if (entry.manifest.invalid) return { status: 'blocked', reason: `Its extension.json is invalid: ${entry.manifest.error}` };
     if (!permissions) return { status: 'blocked', reason: `Its permissions are invalid: ${entry.permissionError}` };
     if (fs.existsSync(path.join(entry.path, 'main.cjs'))) {
-      return { status: 'blocked', reason: 'Third-party extensions cannot run main-process code (main.cjs) yet' };
+      return { status: 'blocked', reason: 'Only official, signed extensions can run main-process code (main.cjs)' };
     }
     const mainOnly = MAIN_PROCESS_KEYS.filter(key => (key === 'ipc' ? permissions.ipc : permissions[key].length));
     if (mainOnly.length) {
-      return { status: 'blocked', reason: `It asks for main-process permissions (${mainOnly.join(', ')}), which third-party extensions cannot have yet` };
+      return { status: 'blocked', reason: `It asks for main-process permissions (${mainOnly.join(', ')}), which only official, signed extensions can have` };
     }
     const { digest } = hasher.hashTree(entry.path);
     const approval = approvals()[`${entry.kind}:${entry.id}`];
@@ -125,9 +157,11 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
     }
     let result;
     try {
-      result = entry.source === 'bundled' ? assessBundled(entry, kind) : assessInstalled(entry, permissions);
+      result = entry.source === 'bundled' ? assessBundled(entry, kind)
+        : entry.tier === 'first-party' ? assessSigned(entry)
+          : assessInstalled(entry, permissions);
     } catch (error) {
-      result = { status: entry.source === 'bundled' ? 'tampered' : 'blocked', reason: `Could not check its files: ${error.message}` };
+      result = { status: entry.tier === 'third-party' ? 'blocked' : 'tampered', reason: `Could not check its files: ${error.message}` };
     }
     // A bundled extension with a bad permissions block still loads if its
     // files are intact (the audit test keeps that from shipping), but it gets
@@ -145,8 +179,16 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
 
   function assessAll(catalog) {
     for (const kind of ['plugins', 'services']) {
-      for (const entry of catalog.list(kind)) {
-        const result = assess(kind, entry);
+      for (let entry of [...catalog.list(kind)]) {
+        let result = assess(kind, entry);
+        // A newer official copy that can't load falls back to the next one
+        // (usually the copy bundled with Atmos), and says so.
+        while (!result.loadable && entry.fallback) {
+          warn(`[extensions] ${entry.kind} '${entry.id}' ${entry.version || ''} (${entry.path}) can't load (${result.status}: ${result.reason}); using version ${entry.fallback.version || '(none)'} instead`);
+          const failed = { version: entry.version, status: result.status, reason: result.reason };
+          entry = catalog.useFallback(kind, entry.id);
+          result = { ...assess(kind, entry), fellBackFrom: failed };
+        }
         if (!result.loadable) warn(`[extensions] not loading ${entry.kind} '${entry.id}' (${result.status}): ${result.reason}`);
         results.set(`${entry.kind}:${entry.id}`, result);
       }
@@ -169,7 +211,7 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
    * never approves something they have not seen. Takes effect on restart.
    */
   function approve(kind, entry, fingerprint) {
-    if (!entry || entry.source !== 'installed') throw new Error('Only third-party extensions need approval');
+    if (!entry || entry.tier !== 'third-party') throw new Error('Only community extensions need approval');
     const fresh = assess(kind, entry);
     hasher.save();
     if (fresh.status === 'blocked') throw new Error(fresh.reason);

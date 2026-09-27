@@ -1,6 +1,7 @@
 import { masked, isPrivate, MASK } from '../src/privacy.js';
 import { registerSection } from '../src/host/sidebar-registry.js';
 import { atmos, requestPanelAction } from '../src/host/frame.js';
+import { hasMarketData } from '../src/host/market-data.js';
 import { save } from '../src/host/persist.js';
 import { watchlistState } from './persist.js';
 import { portfolioState } from '../persist.js';
@@ -348,6 +349,8 @@ function renderFuturesRows() {
 }
 
 function openTicker(symbol) {
+  // Charts need Market Data (optional); without it a click does nothing.
+  if (!hasMarketData()) return;
   updateTickerActive(symbol);
   // The chart is in the Finance panel, another frame: ask it (frame-panel.js).
   requestPanelAction({ type: 'open-market', query: `${symbol}USDT` });
@@ -465,8 +468,8 @@ function createRowEntry(symbol, isHeld) {
     row.append(bar);
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
-    row.setAttribute('aria-label', `${symbol}: click to open chart, hold to remove`);
-    row.title = 'Click to open chart · hold to remove';
+    row.setAttribute('aria-label', hasMarketData() ? `${symbol}: click to open chart, hold to remove` : `${symbol}: hold to remove`);
+    row.title = hasMarketData() ? 'Click to open chart · hold to remove' : 'Hold to remove';
   }
 
   return { row, allocBar, symbolEl, valueEl, changeBar, priceEl, removeEl };

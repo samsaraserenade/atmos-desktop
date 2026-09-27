@@ -24,7 +24,7 @@ let collapsed = false, saves = 0;
 const sandbox = vm.createContext({ document, context, console, portfolioState: {},
   workspace: { classList: { contains: () => collapsed, toggle: (_, value) => { collapsed = value; } }, querySelectorAll: () => handles },
   save: () => saves++, onStateLoaded: () => {},
-  watchlistState: { tickers: ['BTC', 'ETH'] }, tickerData: {}, onTickerUpdate: () => () => {}, getServiceFileUrl: async () => null,
+  watchlistState: { tickers: ['BTC', 'ETH'] }, tickerData: {}, onTickerUpdate: () => () => {}, getServiceFileUrl: async () => null, hasMarketData: () => true,
   colorForChange: () => 'rgba(255,255,255,.55)', onPriceColorChange: () => () => {},
   KNOWN_EXCHANGES: ['binance', 'bybit', 'kraken', 'coinbase'],
   parseMarketQuery: query => {
@@ -99,3 +99,7 @@ marketChips.children[3].handlers.click(); marketChips.children[4].handlers.click
 assert.equal(marketSelections.at(-1), 'BTCUSDT', 'every exchange picked collapses back to All');
 assert.equal(marketChips.children[0].attributes['aria-pressed'], 'true');
 console.log('Passed: either docking handle updates all charts; secondary picker selections remain local; exchange chips apply per chart');
+
+// Without Market Data (an optional dependency) there are no market charts to switch to.
+sandbox.hasMarketData = () => false;
+assert.equal(sandbox.createTickerPicker(context, () => 'Portfolio', () => {}).tickerPicker.hidden, true);

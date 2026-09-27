@@ -22,6 +22,39 @@ test('bundled extensions have a tier and declare their permissions', () => {
   }
 });
 
+// Every bundled extension is a package: a version, a publisher, and every
+// service it calls listed as a dependency whose range the repo's copy meets.
+// A released extension's required dependencies are released too.
+test('bundled extensions have a version, a publisher and complete dependencies', () => {
+  const { isValidVersion, satisfies } = require('../core/js/core/extension-version.cjs');
+  const { normalizeDependencies } = require('../core/js/core/extension-dependencies.cjs');
+  const manifests = new Map(extensions.map(relative => {
+    const [kind, id] = relative.split(path.sep);
+    return [`${kind === 'plugins' ? 'plugin' : 'service'}:${id}`, JSON.parse(fs.readFileSync(path.join(repo, relative, 'extension.json'), 'utf8'))];
+  }));
+  const release = JSON.parse(fs.readFileSync(path.join(repo, 'release.json'), 'utf8'));
+  const released = new Set([...release.plugins.map(id => `plugin:${id}`), ...release.services.map(id => `service:${id}`)]);
+  const problems = [];
+  for (const [ref, manifest] of manifests) {
+    if (!isValidVersion(manifest.version)) problems.push(`${ref}: "version" must be MAJOR.MINOR.PATCH`);
+    if (manifest.publisher !== 'atmos') problems.push(`${ref}: "publisher" must be "atmos"`);
+    if (manifest.after !== undefined) problems.push(`${ref}: use "dependencies" instead of "after"`);
+    const { list, errors } = normalizeDependencies(manifest);
+    problems.push(...errors.map(error => `${ref}: ${error}`));
+    const declared = new Set(list.map(dep => dep.ref));
+    for (const target of manifest.permissions?.invokes || []) {
+      if (!declared.has(target)) problems.push(`${ref}: invokes ${target} but does not list it in "dependencies"`);
+    }
+    for (const dep of list) {
+      const target = manifests.get(dep.ref);
+      if (!target) problems.push(`${ref}: depends on ${dep.ref}, which is not in the repo`);
+      else if (!satisfies(target.version, dep.range)) problems.push(`${ref}: needs ${dep.ref} ${dep.range}, the repo has ${target.version}`);
+      if (released.has(ref) && !dep.optional && !released.has(dep.ref)) problems.push(`${ref} is released but its dependency ${dep.ref} is not (release.json)`);
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
 for (const relative of extensions) {
   test(`${relative} uses only what it declares`, () => {
     assert.deepEqual(auditExtension(path.join(repo, relative)), []);

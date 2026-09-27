@@ -89,6 +89,7 @@ export function getRegisteredSections() {
     return {
       id,
       label:   def.label || id,
+      owner:   def.owner || null,
       icon:    def.icon,
       order:   def.order ?? 0,
       enabled: sidebarState.enabled[id] ?? def.defaultEnabled ?? true,

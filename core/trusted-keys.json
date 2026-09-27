@@ -1,0 +1,14 @@
+{
+ "format": 1,
+ "$comment": "Public keys whose signatures make an extension official (see core/js/core/extension-signing.cjs). Add one with `npm run keys:create -- <file outside the repo>`. To replace a key, add the new one, mark the old one \"revoked\": true, and ship an Atmos update.",
+ "keys": [
+  {
+   "id": "e1203f33c49abf80",
+   "publisher": "atmos",
+   "official": true,
+   "algorithm": "ed25519",
+   "publicKey": "MCowBQYDK2VwAyEAg4LLhaVwNQP+D52BhDLp2d7FYoAZWq1edC2rmeKqxeE=",
+   "addedAt": "2026-09-26"
+  }
+ ]
+}

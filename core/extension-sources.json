@@ -1,0 +1,7 @@
+{
+ "format": 1,
+ "$comment": "Where Atmos looks for official packages (see core/js/core/extension-manager.cjs). Each source is a folder or an https:// address with a signed index.json. The official one is the latest GitHub release of the public repo: its assets are the .atmos packages and index.json (npm run pack:extensions -- --from <export>). An installed Atmos also offers these in its first-run picker.",
+ "sources": [
+  { "name": "Atmos", "location": "https://github.com/samsaraserenade/atmos-desktop/releases/latest/download/" }
+ ]
+}

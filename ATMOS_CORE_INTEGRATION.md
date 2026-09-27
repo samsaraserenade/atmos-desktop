@@ -36,23 +36,19 @@ also used for state, events, IPC, and DOM persistence.
 
 Atmos loads extensions from two places:
 
-| Source | Location | Tier |
+| Source | Location |
+|---|---|
+| Bundled with Atmos | `resources/extensions/{plugins,services}` in an installed build; the repo's `plugins/` and `services/` when running from source |
+| Installed later | `%APPDATA%/atmos/{plugins,services}/<id>/` |
+
+Where an extension sits does not decide who vouches for it; its signature
+does. Settings shows the tier as **System**, **Official** or **Community**:
+
+| Tier | Settings | Which extensions |
 |---|---|---|
-| Bundled with Atmos | `resources/extensions/{plugins,services}` in an installed build; the repo's `plugins/` and `services/` when running from source | `system` or `first-party` |
-| Installed by the user | `%APPDATA%/atmos/{plugins,services}/<id>/` | always `third-party` |
-
-A bundled extension declares its tier in `extension.json`:
-
-```json
-{ "tier": "system" }
-```
-
-- **system** — part of Atmos itself (Wallpaper, Audio, Location). Always
-  loaded; it cannot be disabled in Settings.
-- **first-party** — shipped with Atmos (the Audio Player, …) and can be
-  disabled. A bundled extension without a tier is first-party.
-- **third-party** — anything in `%APPDATA%/atmos`. The `tier` field is
-  ignored there, so nothing installed by a user can claim to be system.
+| `system` | System | Bundled with `"tier": "system"`: part of Atmos itself (Wallpaper, Audio, Location). Always loaded; can't be disabled. |
+| `first-party` | Official | Bundled with Atmos (a bundled extension without a tier is first-party), **or installed with a valid signature from an official key** in `core/trusted-keys.json` (section 18, "Signed packages"). Can be disabled. |
+| `third-party` | Community | Installed and not signed by an official key. The `tier` field is ignored, so nothing installed can claim to be system or official. |
 
 **The background layer.** Two system services run behind every panel for the
 whole session, in the Atmos page:
@@ -70,9 +66,13 @@ whole session, in the Atmos page:
 
 Services may have a `boot.js`, like plugins; these two start from theirs.
 
-If the same id exists in both places, the bundled copy is loaded and the
-installed one is ignored (a warning is logged). Declare `"extensions.tiers": 1`
-if an extension depends on this behaviour. Installs from before the
+If the same id exists in both places: a system extension always wins; among
+official copies (bundled, or installed and signed) the highest `version` wins,
+the bundled one on a tie, and the next one down is kept as a fallback that
+loads instead if the winner can't (a damaged update, say; Settings says so);
+a community copy never replaces an official one. The ignored copies are
+logged. Declare `"extensions.tiers": 1` if an extension depends on this
+behaviour. Installs from before the
 `services` rename used a singular `service/` folder, which Atmos moves on
 first launch.
 
@@ -176,7 +176,11 @@ section 18.
 |---|---|---|
 | `apiVersion`, `requires` | Core API targeted and capabilities needed | this section |
 | `tier` | `system` or `first-party` (bundled extensions only) | 1 |
-| `after`, `supersedesServices` | Start order; legacy services this plugin replaces | this section |
+| `version` | The extension's own version, `MAJOR.MINOR.PATCH` (semver). Required to be packaged, and for others to depend on a range of it | this section |
+| `publisher` | Who publishes it (`"atmos"` for official extensions); must match the key that signs it | 18 |
+| `dependencies` | Services (or plugins) it needs, with version ranges; also its start order | this section |
+| `description`, `contract` | A one-line description; for a service, its own API contract (renderer API file, API version, events), formerly `service.json` | 13 |
+| `after`, `supersedesServices` | Start order only (prefer `dependencies`); legacy services this plugin replaces | this section |
 | `permissions` | Everything the extension uses | 18 |
 | `auditExclude` | Folders the permission audit skips | 18 |
 | `displayName` | Name shown in Settings and, for framed extensions, the default label | 9, 19 |
@@ -227,10 +231,62 @@ if (hasCapability('panel.pass-through')) {
 Declare a capability as required only when the extension cannot operate
 without it. Prefer runtime checks for optional enhancements.
 
+### Versions and dependencies
+
+Every extension has a `version`, and lists what it needs in `dependencies`:
+
+```json
+{
+  "version": "1.0.0",
+  "publisher": "atmos",
+  "dependencies": {
+    "charting": "^1.2.0",
+    "currency": "^1.0.0",
+    "market-data": { "version": "^0.4.0", "optional": true }
+  }
+}
+```
+
+A bare id is a service; write `"plugin:<id>"` for a plugin. Ranges are
+`1.2.3` (exactly), `^1.2.3` (compatible: `<2.0.0`, or `<0.5.0` for `^0.4.x`),
+`~1.2.3` (patch updates), `>=1.2.3` and `*`. Every `service:<id>` in
+`permissions.invokes` must also be a dependency (`npm run test:permissions`
+checks it, along with the ranges against the repo's copies and that a
+released extension's required dependencies are released too).
+
+At startup, after trust is decided, an extension whose **required**
+dependency is missing, switched off, can't load, or has a version outside
+the range doesn't load either, and Settings says why ("Needs Charting, which
+is switched off"). The dependency's own row lists what uses it. An
+**optional** dependency never stops loading: the extension checks for it
+itself and hides what needs it. Dependencies of the same kind also order
+startup.
+
+A library service that isn't loading this session (not installed, switched
+off, missing a dependency, or failed to start) can't be imported:
+`atmos.library('service:<id>', file)` rejects, which is how a frame checks
+for an optional one. Finance does this once per frame before it mounts
+(`plugins/finance/src/host/market-data.js`) and, without Market Data, hides
+its market charts rather than showing them offline.
+
+The extension manager installs required dependencies with the extension
+and **offers** optional ones: Settings → Extensions shows "Optional: <name>"
+with its own Install beside the extension, as long as a source has a
+version in range and it isn't installed. An optional dependency marked
+`"recommended": true` is installed together with the extension on its
+first install (when a source has it), but stays optional: it can be removed
+or switched off, or fail to start, without stopping the extension, and an
+update doesn't bring it back. Finance does this with Market Data for now:
+
+```json
+"market-data": { "version": "^0.4.0", "optional": true, "recommended": true }
+```
+
 ### Start order
 
-Extensions of the same kind start in alphabetical id order unless a manifest
-says otherwise. List ids that must start first in `after`:
+Extensions of the same kind start in alphabetical id order, after their
+dependencies of that kind. The older `after` list still orders startup
+(and nothing else):
 
 ```json
 {
@@ -744,6 +800,16 @@ module.exports = async context => {
 };
 ```
 
+Atmos waits for the returned promise before it starts the next extension
+and opens its window, so `activate()` should register its handlers and
+return; start slow work (connections, scans) without awaiting it. An
+`activate()` that throws, or hasn't finished after **10 seconds**, fails
+the extension for this session: what it registered is withdrawn (later
+registrations are refused), whatever requires it is skipped ("Needs X,
+which failed to start"), the rest of Atmos starts as usual, and Settings →
+Extensions lists it under Needs attention. It is tried again at the next
+start.
+
 Renderer calls are automatically scoped by extension kind and id:
 
 ```js
@@ -869,8 +935,8 @@ still declares three or more parameters.
 | Tier | Runs in | Model |
 |---|---|---|
 | **system** | the Atmos page | Privileged and declared. Always on. |
-| **first-party** | the Atmos page today; frames once migrated (`"runtime": "frame"`) | Trusted, declared and audited. |
-| **third-party** | sandboxed frames only (section 19) | Approved, fingerprinted, sandboxed, with `network`, `browser` and `invokes` enforced. No `main.cjs`. |
+| **first-party** (Official) | frames with `"runtime": "frame"` (every first-party plugin), otherwise the page | Installed as a signed package (an installer carries them as packages offered on the first start; `npm start` runs them from the repo). Trusted, declared and audited; may have a `main.cjs`. |
+| **third-party** (Community) | sandboxed frames only (section 19) | Approved, fingerprinted, sandboxed, with `network`, `browser` and `invokes` enforced. No `main.cjs`. |
 
 Every extension, whatever its tier, lists what it uses in `extension.json`:
 
@@ -930,6 +996,10 @@ the block invalid.
   change afterwards (code or permissions) stops it loading until it is
   approved again, with newly requested permissions highlighted. Approvals are
   kept in `extension-approvals.json` in Atmos's user-data folder.
+- **Signed packages** — see below. An installed extension signed by an
+  official key loads as first-party once every file matches its signature;
+  one changed, added or removed file, or a broken signature, stops it
+  loading (it shows as modified, and is never demoted to community).
 - **No third-party main-process code** — a third-party extension with a
   `main.cjs`, or with main-process permissions (`node`, `electron`, `ipc`,
   `provides`, `uses`, `resources`), is blocked and cannot be approved. A
@@ -943,6 +1013,78 @@ the block invalid.
   folders (`node_modules`) are cached by size and modification time in
   `extension-hash-cache.json` so later launches stay fast. When running from
   source there is no list, and bundled extensions show as unverified.
+
+### Signed packages
+
+An official extension can be installed separately from Atmos as a signed
+`.atmos` package (a zip of the extension folder). Its `signature.json` holds
+the extension's kind, id, `version` and `publisher` and the SHA-256 of every
+other file, signed with Ed25519 (`core/js/core/extension-signing.cjs`).
+Atmos trusts the public keys in `core/trusted-keys.json`; a key is official,
+belongs to one publisher, and can be marked `"revoked"`. Signatures from keys
+not in the list are ignored (the extension is community). Community
+publishers signing their own packages comes later.
+
+```bash
+npm run keys:create -- <file outside the repo>   # new key, encrypted with a passphrase; adds it to core/trusted-keys.json
+npm run keys:show -- <file>                       # its id, and whether Atmos trusts it
+npm run pack:extensions -- --key <file>          # the released extensions → dist/packages/<id>-<version>.atmos
+npm run pack:extensions -- --key <file> finance --out <dir>
+```
+
+`pack:extensions` copies what an installer would bundle (the filters in
+`package.json` "build.extraResources"), signs the copy, checks it against
+`core/trusted-keys.json` and zips it; `--from <folder>` packs another tree,
+such as an export for the public repo. System extensions are part of Atmos
+and never packaged. The key file stays outside the repo (the scripts refuse
+one inside it) and the passphrase is asked for, or read from
+`ATMOS_SIGNING_PASSPHRASE`. To replace a key, add the new one, mark the old
+one revoked and ship an Atmos update; keep a backup of the key file.
+
+A bundled extension is checked against `integrity.json` when the build has
+one, and otherwise against its own `signature.json` if it has one.
+
+### Installing, updating and removing (Settings → Extensions)
+
+`core/js/core/extension-manager.cjs` installs official packages from
+**sources**: a folder or an `https://` address holding `index.json` and the
+`.atmos` files it lists — exactly what `pack:extensions` writes to its
+`--out` folder. The index names each package's kind, id, version, Core
+compatibility, dependencies, size and SHA-256, and is signed with an
+official key, so the host needn't be trusted. Sources are listed in
+`core/extension-sources.json` (built in; the official one is added when
+packages are published) and in `extension-sources.json` in user data
+(added on the Extensions page). Unpackaged, `--extension-source=<folder or
+url>` (or `ATMOS_EXTENSION_SOURCE`) adds one for the session.
+
+- **Checking** reads the indexes only, shortly after start and every 12
+  hours, or with Check for updates. Nothing downloads until Install or
+  Update is pressed. Packages this Core can't run are not offered.
+- **Install / Update** downloads the package and any missing or too-old
+  required dependency, checks size and hash against the index, unpacks it
+  safely and checks every file against an official signature, then stages
+  it in user data (`extension-staging/`, recorded in
+  `extension-pending.json`). Nothing running changes.
+- **Remove** is for what's in the installed folder (one bundled with Atmos
+  is switched off instead; removing an update of one goes back to the
+  bundled version). It asks every time whether to keep the extension's
+  settings and data (the default) or delete them, and is refused while an
+  installed extension needs it.
+- **At the next start**, before anything is listed, pending changes are
+  applied: staged packages move into the installed folder, removed ones are
+  deleted. The version an update replaced is kept in
+  `extension-previous/` and loads instead if the new one can't; it is
+  deleted once the new one has loaded. Deleting data removes the
+  extension's Atmos state, a `userData/<id>` folder, and the storage of an
+  origin of its own; databases a framed first-party extension keeps in the
+  shared origin stay.
+- The footer's **Extensions** button (left of Settings) opens this page and
+  turns the negative colour, with a tooltip saying why, when an update is
+  available, a change waits for a restart, or an extension failed to load.
+
+For development and the end-to-end checks, an unpackaged Atmos also trusts
+the keys in `--trusted-keys=<file>` (or `ATMOS_TRUSTED_KEYS`); a packaged
+one trusts only its own list.
 
 ### What is audited, not enforced
 
@@ -975,8 +1117,9 @@ first-party extension into frames makes its renderer-side `network`,
 - `main.cjs` (first-party only) runs with full Node.js access; the context
   gating catches mistakes, not hostile code.
 - `integrity.json` makes changes to an installed Atmos visible; it does not
-  stop someone who can also rewrite `integrity.json` (or `core/`). That needs
-  a signed installer and app.
+  stop someone who can also rewrite `integrity.json` (or `core/`, including
+  `trusted-keys.json`). That needs a signed installer and app. Signed
+  packages are only as trustworthy as the copy of Atmos checking them.
 
 ### Licensing your extension
 
@@ -1281,8 +1424,13 @@ A frame cannot:
 - draw outside its surface or catch input outside it. Pass-through panels and
   workspace overlays are page-only features.
 
-Keys pressed inside a focused frame that aren't typing (shortcuts, Escape)
-are passed on to Atmos. System notifications go through
+Keys pressed inside a focused frame that aren't typing are passed on to
+Atmos, so its shortcuts work whichever panel or widget has focus: modifier
+combinations (Ctrl+` for Settings), F-keys, Escape, Space outside fields
+and buttons, and Atmos's single-key shortcuts outside fields and buttons
+(Tab for the sidebar, Shift+Tab to move it, and panel shortcuts such as
+Finance's `]`). A key the frame handled itself (`preventDefault()`) stays
+its own. System notifications go through
 `atmos.notifications.show()`, since Chromium refuses the `Notification` API
 in frames.
 

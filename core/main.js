@@ -1,11 +1,14 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net } = require('electron');
 const fs   = require('fs');
 const path = require('path');
 
-const { createExtensionHost } = require('./js/core/extension-host.cjs');
+const { createExtensionHost, ACTIVATION_TIMEOUT_MS } = require('./js/core/extension-host.cjs');
 const { createExtensionPreferences } = require('./js/core/extension-preferences.cjs');
 const { createExtensionCatalog } = require('./js/core/extension-catalog.cjs');
 const { createExtensionTrust } = require('./js/core/extension-trust.cjs');
+const { loadTrustedKeys } = require('./js/core/extension-signing.cjs');
+const { resolveDependencies, dependentsOf, normalizeDependencies, refOf } = require('./js/core/extension-dependencies.cjs');
+const { createExtensionManager } = require('./js/core/extension-manager.cjs');
 const { BASELINE_BROWSER } = require('./js/core/extension-permissions.cjs');
 const { createLocationGate } = require('./js/core/location-gate.cjs');
 const frames = require('./js/core/extension-frames.cjs');
@@ -436,11 +439,13 @@ ipcMain.on('window-resize:end', event => {
 // in a build, or the repo's plugins/ and services/ when running from source.
 // Launching with --extensions-root=<dir> (or ATMOS_EXTENSIONS_ROOT=<dir>)
 // bundles <dir>/plugins and <dir>/services instead. Only bundled extensions
-// can be `system` (always on) or `first-party`.
+// can be `system` (always on).
 //
-// Installed extensions live in %APPDATA%/atmos/{plugins,services}; they are
-// always third-party, and a bundled extension with the same id wins. See
-// extension-catalog.cjs. The handlers below only list what is present;
+// Installed extensions live in %APPDATA%/atmos/{plugins,services}. One
+// signed with an official key (core/trusted-keys.json) is first-party
+// ("official") there too, and the highest official version of an id wins;
+// anything else installed is third-party ("community"). See
+// extension-catalog.cjs and extension-signing.cjs. The handlers below only list what is present;
 // plugin-loader.js and service-loader.js do their own dynamic import().
 const _installedRoots = {};
 
@@ -496,7 +501,119 @@ function _installedRoot(kind) {
   return dir;
 }
 
-const _catalog = createExtensionCatalog({ bundledRoot: _bundledRoot, installedRoot: _installedRoot });
+// Keys whose signatures make an extension official. Unpackaged (development
+// and end-to-end runs only), --trusted-keys=<file> or ATMOS_TRUSTED_KEYS adds
+// a list of test keys; a packaged Atmos trusts only its own list.
+function _trustedKeyFiles() {
+  const files = [path.join(__dirname, 'trusted-keys.json')];
+  if (!app.isPackaged) {
+    const flag = process.argv.find(arg => arg.startsWith('--trusted-keys='));
+    const extra = flag ? flag.slice('--trusted-keys='.length) : process.env.ATMOS_TRUSTED_KEYS;
+    if (extra) files.push(path.resolve(extra));
+  }
+  return files;
+}
+const _trustedKeys = loadTrustedKeys(_trustedKeyFiles());
+
+// The extension manager (extension-manager.cjs): sources, and install /
+// update / remove applied at the next start. Unpackaged, --extension-source=
+// (or ATMOS_EXTENSION_SOURCE) adds a source for this session.
+function _sessionSources() {
+  if (app.isPackaged) return [];
+  const flag = process.argv.find(arg => arg.startsWith('--extension-source='));
+  const value = flag ? flag.slice('--extension-source='.length) : process.env.ATMOS_EXTENSION_SOURCE;
+  return value ? [value] : [];
+}
+
+// How long a main.cjs activate() may take (extension-host.cjs). Unpackaged,
+// --activation-timeout=<ms> changes it, so end-to-end runs needn't wait.
+function _activationTimeoutMs() {
+  const flag = app.isPackaged ? null : process.argv.find(arg => arg.startsWith('--activation-timeout='));
+  const value = flag ? Number(flag.slice('--activation-timeout='.length)) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : ACTIVATION_TIMEOUT_MS;
+}
+
+// An installer carries Core and the system services built in; every other
+// extension is a package. A release build downloads them from the official
+// source (core/extension-sources.json, the GitHub releases); a personal
+// build also carries its own as signed packages in
+// resources/extensions/packages (scripts/after-pack.cjs), "Comes with
+// Atmos", which then serve the first run and upgrades offline. Unpackaged,
+// --seed-packages=<dir> (or ATMOS_SEED_PACKAGES) stands in for those.
+function _seedSources() {
+  let location = null;
+  if (app.isPackaged) location = path.join(process.resourcesPath, 'extensions', 'packages');
+  else {
+    const flag = process.argv.find(arg => arg.startsWith('--seed-packages='));
+    const value = flag ? flag.slice('--seed-packages='.length) : process.env.ATMOS_SEED_PACKAGES;
+    if (value) location = path.resolve(value);
+  }
+  return location && fs.existsSync(path.join(location, 'index.json')) ? [{ location, name: 'Comes with Atmos' }] : [];
+}
+
+const _BUILT_IN_SOURCES_FILE = path.join(__dirname, 'extension-sources.json');
+
+/**
+ * Where the first-run picker and the upgrade install take packages from:
+ * the packages that come with Atmos if there are any, otherwise (installed
+ * Atmos) the built-in sources. Running from source has no first run, unless
+ * --setup-source=<folder or https://> (tests) says where from.
+ */
+function _setupSources() {
+  const seed = _seedSources();
+  if (seed.length) return seed;
+  if (!app.isPackaged) {
+    const flag = process.argv.find(arg => arg.startsWith('--setup-source='));
+    return flag ? [{ location: flag.slice('--setup-source='.length), name: 'Atmos' }] : [];
+  }
+  try {
+    return (JSON.parse(fs.readFileSync(_BUILT_IN_SOURCES_FILE, 'utf8')).sources || [])
+      .filter(item => typeof item?.location === 'string').map(item => ({ location: item.location, name: item.name || null }));
+  } catch { return []; }
+}
+
+/**
+ * Whether this user data has been used before (an Atmos that bundled its
+ * extensions is being upgraded), as opposed to a first start.
+ */
+function _usedBefore(userData) {
+  return ['Local Storage', 'extension-preferences.json', 'extension-approvals.json', 'window-state.json']
+    .some(name => fs.existsSync(path.join(userData, name)));
+}
+
+/** A download for a web source, refused past maxBytes. */
+async function _fetchSourceFile(url, maxBytes) {
+  const response = await net.fetch(url, { cache: 'no-store', redirect: 'follow' });
+  if (!response.ok) throw new Error(`${new URL(url).pathname.split('/').pop()}: HTTP ${response.status}`);
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error('The file is too large');
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error('The file is too large');
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+const _manager = createExtensionManager({
+  userData: app.getPath('userData'),
+  installedRoot: _installedRoot,
+  trustedKeys: _trustedKeys,
+  builtInSourceFiles: [_BUILT_IN_SOURCES_FILE],
+  extraSources: _sessionSources(),
+  seedSources: _seedSources(),
+  setupSources: _setupSources(),
+  fetchUrl: _fetchSourceFile,
+  installed: () => [..._catalog.list('plugins'), ..._catalog.list('services')].map(entry => ({
+    ...entry, loadable: _trust?.get(entry)?.loadable !== false, active: _isActive(entry),
+  })),
+});
+
+const _catalog = createExtensionCatalog({
+  bundledRoot: _bundledRoot, installedRoot: _installedRoot, previousRoot: _manager.previousRoot, trustedKeys: _trustedKeys,
+});
 
 let _trust = null;
 
@@ -505,9 +622,191 @@ function _isStartupDisabled(entry) {
   return entry.tier !== 'system' && _startupDisabled[entry.kind].has(entry.id);
 }
 
-/** Whether an extension loads this session: switched on, and trusted (see extension-trust.cjs). */
+/** Switched on and trusted, before dependencies are considered. */
+function _isUsableAlone(entry) {
+  return !_isStartupDisabled(entry) && _trust?.get(entry)?.loadable !== false && !_activationFailures.has(refOf(entry));
+}
+
+// main.cjs activations that threw or ran out of time this session
+// (extension-host.cjs): ref → reason. They count as not loading, so what
+// needs them is skipped too, and Settings says why.
+const _activationFailures = new Map();
+
+// Decided once at startup, after trust (see extension-dependencies.cjs):
+// an extension whose required dependency can't load doesn't load either.
+let _dependencyState = null;
+let _dependents = new Map();
+
+function _resolveDependencyState() {
+  const all = [..._catalog.list('plugins'), ..._catalog.list('services')];
+  _dependencyState = resolveDependencies(all, _isUsableAlone, entry => (_isStartupDisabled(entry)
+    ? 'is switched off'
+    : _activationFailures.has(refOf(entry)) ? 'failed to start'
+      : `can't load (${_trust?.get(entry)?.status || 'unknown'})`));
+  _dependents = dependentsOf(all);
+  for (const entry of all) {
+    const state = _dependencyState.get(refOf(entry));
+    if (_isUsableAlone(entry) && !state.ok) console.warn(`[extensions] not loading ${entry.kind} '${entry.id}': ${state.problems.join('; ')}`);
+  }
+}
+
+/** Whether an extension loads this session: switched on, trusted, and its required dependencies load. */
 function _isActive(entry) {
-  return !_isStartupDisabled(entry) && _trust?.get(entry)?.loadable !== false;
+  return _isUsableAlone(entry) && _dependencyState?.get(refOf(entry))?.ok !== false;
+}
+
+/** Version, publisher and dependency details for Settings. */
+function _describePackage(entry) {
+  const trust = _trust?.get(entry);
+  const state = _dependencyState?.get(refOf(entry));
+  const label = ref => {
+    const [kind, id] = ref.split(':');
+    const target = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
+    const declared = target?.manifest?.displayName || target?.manifest?.name;
+    // Same fallback as Settings' own labels: "media-metadata" → "Media Metadata".
+    return typeof declared === 'string' && declared.trim()
+      ? declared.trim()
+      : id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  };
+  return {
+    version: entry.version || null,
+    publisher: entry.manifest?.publisher || null,
+    signature: trust?.signature || entry.signature || null,
+    fellBackFrom: trust?.fellBackFrom || null,
+    dependencies: normalizeDependencies(entry.manifest).list
+      .map(dep => {
+        const [kind, id] = dep.ref.split(':');
+        const system = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id)?.tier === 'system';
+        return { ref: dep.ref, name: label(dep.ref), range: dep.range, optional: dep.optional, system };
+      }),
+    dependencyProblems: _activationFailures.has(refOf(entry)) ? [_activationFailures.get(refOf(entry))] : state?.problems || [],
+    activationFailed: _activationFailures.has(refOf(entry)),
+    optionalMissing: (state?.optionalMissing || []).map(label),
+    usedBy: (_dependents.get(refOf(entry)) || []).map(item => ({ ref: item.ref, name: label(item.ref), optional: item.optional })),
+    removable: entry.source === 'installed' || entry.source === 'previous',
+    bundledFallback: entry.fallback?.source === 'bundled',
+  };
+}
+
+// ── Extension manager (Settings → Extensions, the footer icon) ───────────
+
+/** What the footer icon needs: updates, changes waiting for a restart, and problems. */
+function _managerSummary(status = _manager.status()) {
+  const problems = [];
+  for (const entry of [..._catalog.list('plugins'), ..._catalog.list('services')]) {
+    if (_isStartupDisabled(entry)) continue;
+    const trust = _trust?.get(entry);
+    const name = entry.manifest?.displayName || entry.id;
+    const deps = _dependencyState?.get(refOf(entry));
+    if (trust && !trust.loadable && ['tampered', 'blocked'].includes(trust.status)) problems.push({ kind: entry.kind, id: entry.id, name, reason: trust.reason });
+    else if (_activationFailures.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _activationFailures.get(refOf(entry)) });
+    else if (trust?.fellBackFrom) problems.push({ kind: entry.kind, id: entry.id, name, reason: `version ${trust.fellBackFrom.version} couldn't load` });
+    else if (deps && !deps.ok && trust?.loadable) problems.push({ kind: entry.kind, id: entry.id, name, reason: deps.problems[0] });
+  }
+  return { updates: status.updates, pending: status.pending.length, problems, checkedAt: status.checkedAt };
+}
+
+function _broadcastManager(status = _manager.status()) {
+  const payload = { status, summary: _managerSummary(status) };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('extensions:manager-changed', payload);
+  }
+  return payload;
+}
+
+/**
+ * Upgrading from an Atmos that bundled every extension, without packages of
+ * its own: download what it had from the official source, stage it, and
+ * ask for a restart (Settings → Extensions opens on "Waiting for a
+ * restart"). Offline, nothing is marked done, so the next start tries again.
+ */
+let _upgradeDownloaded = false;
+async function _downloadForUpgrade() {
+  try {
+    const changes = await _manager.installFromSeed();
+    _manager.finishSetup('upgrade');
+    console.log(`[extensions] upgrade: downloaded ${changes.map(change => change.id).join(', ') || 'nothing'}; applied at the next restart`);
+    _broadcastManager();
+    if (changes.length) {
+      _upgradeDownloaded = true;
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('extensions:upgrade-downloaded', { changes });
+      }
+    }
+  } catch (error) {
+    console.warn(`[extensions] upgrade: can't download extensions yet (${error.message}); trying again next start`);
+  }
+}
+
+let _lastUpdateCheck = null;
+async function _checkForUpdates() {
+  try {
+    const status = await _manager.checkForUpdates();
+    _lastUpdateCheck = Date.now();
+    return _broadcastManager(status);
+  } catch (error) {
+    console.warn('[extensions] update check failed:', error.message);
+    return _broadcastManager();
+  }
+}
+
+// A sender must be the Atmos page itself: frames never reach these.
+function _fromAtmosPage(event) {
+  return String(event.senderFrame?.url || event.sender.getURL()).startsWith('atmos-app://local/');
+}
+function _managerHandler(name, fn) {
+  ipcMain.handle(`extensions:${name}`, async (event, ...args) => {
+    if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+    return fn(...args);
+  });
+}
+
+_managerHandler('manager-status', () => ({ status: _manager.status(), summary: _managerSummary() }));
+_managerHandler('check-updates', () => _checkForUpdates());
+_managerHandler('install', async (kind, id) => {
+  const result = await _manager.install(kind, id);
+  return { changes: result.changes, ..._broadcastManager(result.status) };
+});
+_managerHandler('remove', (kind, id, options) => _broadcastManager(_manager.remove(kind, id, { deleteData: options?.deleteData === true })));
+_managerHandler('cancel', (kind, id) => _broadcastManager(_manager.cancel(kind, id)));
+_managerHandler('add-source', async location => { _manager.addSource(location); return _checkForUpdates(); });
+_managerHandler('remove-source', async location => { _manager.removeSource(location); return _checkForUpdates(); });
+_managerHandler('take-data-cleanup', () => _dataCleanup.splice(0));
+// First run: the plugins that come with Atmos, to choose from.
+_managerHandler('setup', async () => {
+  // upgradeDownloaded: the page may start after the download finished.
+  if (_manager.setupDone()) return { needed: false, packages: [], upgradeDownloaded: _upgradeDownloaded };
+  try {
+    return {
+      needed: true,
+      packages: (await _manager.seedPackages()).map(item => ({
+        kind: item.kind, id: item.id, version: item.version, displayName: item.displayName, description: item.description,
+        dependencies: item.named,
+      })),
+    };
+  } catch (error) {
+    // Offline, or the source can't be reached: the picker says so and offers to try again.
+    return { needed: true, packages: [], error: error.message };
+  }
+});
+_managerHandler('finish-setup', async chosen => {
+  const wanted = Array.isArray(chosen) ? chosen.filter(item => ['plugin', 'service'].includes(item?.kind) && typeof item?.id === 'string') : [];
+  const changes = wanted.length ? await _manager.installFromSeed(wanted) : [];
+  _manager.finishSetup(wanted.length ? 'chosen' : 'skipped');
+  return { changes, ..._broadcastManager() };
+});
+
+// Extensions removed with their data at this start: the page forgets their
+// state namespaces (it asks once, at boot), and origins of their own lose
+// their storage.
+const _dataCleanup = [];
+function _cleanUpRemovedData() {
+  for (const { kind, id } of _manager.takeDataCleanup()) {
+    _dataCleanup.push({ kind, id });
+    for (const host of [`${kind}-${id}`, `first-party-${kind}-${id}`]) {
+      session.defaultSession.clearStorageData({ origin: `atmos-ext://${host}` }).catch(() => {});
+    }
+  }
 }
 
 function _describeTrust(entry) {
@@ -547,13 +846,14 @@ function _describeRuntime(entry) {
 
 function _describeExtension(entry, files, disabled) {
   return {
-    id: entry.id, path: entry.path, files,
+    id: entry.id, kind: entry.kind, path: entry.path, files,
     manifest: entry.manifest,
     tier: entry.tier,
     source: entry.source,
     enabled: entry.tier === 'system' || !disabled.has(entry.id),
     active: _isActive(entry),
     ..._describeTrust(entry),
+    ..._describePackage(entry),
     ..._describeRuntime(entry),
   };
 }
@@ -613,7 +913,7 @@ ipcMain.handle('extensions:approve', async (_, kind, id, fingerprint) => {
 
 ipcMain.handle('extensions:revoke', async (_, kind, id) => {
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
-  if (!entry || entry.source !== 'installed') throw new Error('Only third-party extensions have approvals');
+  if (!entry || entry.tier !== 'third-party') throw new Error('Only community extensions have approvals');
   _trust.revoke(entry);
   return { restartRequired: true };
 });
@@ -994,6 +1294,26 @@ if (process.platform === 'win32') app.setAppUserModelId('com.hashy.atmosphere');
 
 if (hasInstanceLock) app.whenReady().then(async () => {
   console.log('[main] userData:', app.getPath('userData'));
+  // Upgrading from an Atmos that bundled every extension: what came with it
+  // is installed from the packages that come with this one, at once, so
+  // nothing disappears (settings and data are kept by id). A first start
+  // shows the picker instead (Settings, first run).
+  // With packages of its own (a personal build) that happens here, offline;
+  // otherwise they are downloaded once the window is up (below) and applied
+  // at the next restart.
+  // (A first run that hasn't been chosen yet, say offline, stays a first run.)
+  const upgrading = !_manager.setupDone() && !_manager.setupPending() && _usedBefore(app.getPath('userData'));
+  if (!_manager.setupDone() && !upgrading) _manager.beginSetup();
+  if (upgrading && _seedSources().length) {
+    const changes = await _manager.installFromSeed();
+    console.log(`[extensions] upgrade: installing ${changes.map(change => change.id).join(', ') || 'nothing'} from the packages that come with Atmos`);
+    _manager.finishSetup('upgrade');
+  }
+  // Installs, updates and removals chosen last session, before anything is listed.
+  for (const change of _manager.applyPending()) {
+    console.log(`[extensions] ${change.action === 'install' ? 'installed' : 'removed'} ${change.kind} '${change.id}'${change.version ? ` ${change.version}` : ''}`);
+  }
+  _catalog.refresh(); // what was listed above (to plan installs) may have changed
   _extensionPreferences = createExtensionPreferences(path.join(app.getPath('userData'), 'extension-preferences.json'));
   _windowAppearance = _loadWindowAppearance();
   _startupDisabled = {
@@ -1005,9 +1325,16 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     approvalsFile: path.join(userData, 'extension-approvals.json'),
     hashCacheFile: path.join(userData, 'extension-hash-cache.json'),
     bundledRoot: _bundledRoot,
+    trustedKeys: _trustedKeys,
   });
   const trustStart = Date.now();
   _trust.assessAll(_catalog);
+  _resolveDependencyState();
+  _manager.confirmApplied((kind, id) => {
+    const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
+    return entry ? { entry, loadable: _trust.get(entry)?.loadable !== false } : null;
+  });
+  _cleanUpRemovedData();
   console.log(`[main] checked extension integrity in ${Date.now() - trustStart}ms`);
   const extensions = createExtensionHost({ app, BrowserWindow, ipcMain, dialog, shell, protocol });
   const activePlugins = _catalog.list('plugins').filter(_isActive);
@@ -1015,8 +1342,23 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   const activeServices = _catalog.list('services')
     .filter(entry => _isActive(entry) && !supersededServices.has(entry.id));
   _installBrowserPermissions([...activePlugins, ...activeServices]);
-  await extensions.activateEntries('service', activeServices);
-  await extensions.activateEntries('plugin', activePlugins);
+  // A main.cjs that throws or takes longer than 10 s is failed and startup
+  // carries on; whatever needs it is skipped (and not listed as active).
+  const activation = {
+    timeoutMs: _activationTimeoutMs(),
+    skip: (kind, id) => {
+      const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
+      return entry && !_isActive(entry) ? (_dependencyState?.get(refOf(entry))?.problems[0] || 'not loading') : null;
+    },
+    onFailed: (kind, id, error) => {
+      _activationFailures.set(`${kind}:${id}`, error?.code === 'ATMOS_ACTIVATION_TIMEOUT'
+        ? `Didn't start: it took longer than ${Math.round(_activationTimeoutMs() / 1000)} s`
+        : `Didn't start: ${error?.message || error}`);
+      _resolveDependencyState();
+    },
+  };
+  await extensions.activateEntries('service', activeServices, activation);
+  await extensions.activateEntries('plugin', activePlugins.filter(_isActive), activation);
   extensions.registerResourceProtocol(protocol, { allowOrigin: _originMayUseResource });
   _registerAtmosPluginProtocol();
   _registerAtmosServiceProtocol();
@@ -1024,6 +1366,13 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   _registerAtmosExtProtocol();
   createWindow();
   void _cleanUpSharedOriginStorage();
+  // Check the sources soon after start and twice a day; this only reads
+  // their indexes (nothing downloads until Install or Update is pressed).
+  if (upgrading && !_seedSources().length) void _downloadForUpgrade();
+  setTimeout(() => void _checkForUpdates(), 5000);
+  setInterval(() => {
+    if (!_lastUpdateCheck || Date.now() - _lastUpdateCheck > 12 * 60 * 60 * 1000) void _checkForUpdates();
+  }, 60 * 60 * 1000).unref?.();
 });
 
 app.on('window-all-closed', () => {

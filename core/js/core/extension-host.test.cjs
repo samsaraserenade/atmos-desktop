@@ -189,3 +189,52 @@ test('main.cjs only receives what its permissions declare', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a main.cjs that stalls or throws is failed, withdrawn, and startup carries on', async () => {
+  const handlers = new Map();
+  const removed = [];
+  const ipcMain = {
+    handle: (channel, handler) => handlers.set(channel, handler),
+    removeHandler: channel => { removed.push(channel); handlers.delete(channel); },
+  };
+  const host = createExtensionHost({ ipcMain });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-extension-timeout-'));
+  const write = (id, manifest, source) => {
+    fs.mkdirSync(path.join(root, id));
+    fs.writeFileSync(path.join(root, id, 'extension.json'), JSON.stringify({ permissions: { ipc: true }, ...manifest }));
+    fs.writeFileSync(path.join(root, id, 'main.cjs'), source);
+  };
+  try {
+    // Registers a handler, then never finishes; a late registration is refused.
+    write('stalls', {}, `module.exports = context => { context.handle('early', () => 1); global.lateRegister = () => context.handle('late', () => 2); return new Promise(() => {}); };`);
+    write('throws', {}, `module.exports = () => { throw new Error('boom'); };`);
+    write('needs-stalls', { dependencies: { 'plugin:stalls': '*' } }, `module.exports = context => { global.needsStallsRan = true; };`);
+    write('fine', {}, `module.exports = context => { context.handle('ok', () => 'ok'); };`);
+    const failed = new Set();
+    const started = Date.now();
+    const results = await host.activateEntries('plugin', fs.readdirSync(root).map(id => ({ id, path: path.join(root, id) })), {
+      timeoutMs: 150,
+      onFailed: (kind, id) => failed.add(id),
+      skip: (kind, id) => (id === 'needs-stalls' && failed.has('stalls') ? 'Needs Stalls, which failed to start' : null),
+    });
+    assert.ok(Date.now() - started < 5000);
+    const by = Object.fromEntries(results.map(item => [item.id, item.result]));
+    assert.deepEqual(by, { stalls: 'timed-out', throws: 'failed', 'needs-stalls': 'skipped', fine: 'activated' });
+    assert.match(results.find(item => item.id === 'stalls').error, /within 0 s|within/);
+    assert.deepEqual([...failed].sort(), ['stalls', 'throws']);
+    assert.equal(global.needsStallsRan, undefined);
+    assert.deepEqual(removed, ['atmos-extension:plugin:stalls:early']);
+    assert.equal(handlers.has('atmos-extension:plugin:stalls:early'), false);
+    assert.throws(() => global.lateRegister(), /failed to start/);
+    assert.equal(await handlers.get('atmos-extension:plugin:fine:ok')(), 'ok');
+  } finally {
+    delete global.lateRegister;
+    delete global.needsStallsRan;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the activation timeout is about ten seconds', () => {
+  const { ACTIVATION_TIMEOUT_MS } = require('./extension-host.cjs');
+  assert.equal(ACTIVATION_TIMEOUT_MS, 10_000);
+});

@@ -6,6 +6,8 @@ import { createContext, handlePanelActions, setRole } from './src/host/frame.js'
 
 setRole('panel');
 const context = createContext();
+// Market Data is optional: decided before anything mounts (src/host/market-data.js).
+await (await import('./src/host/market-data.js')).checkMarketData();
 const { startView } = await import('./src/host/mirror.js');
 await startView(context);
 await import('./panel.js');

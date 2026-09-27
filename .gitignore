@@ -30,3 +30,7 @@ plugins/matrix-chat/data/
 *.docx
 .sync-test-marker.txt
 .release-guard.local
+
+# Package signing keys live outside the repo; never commit one
+*.pem
+*.atmos

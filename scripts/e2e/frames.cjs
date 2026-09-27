@@ -121,7 +121,7 @@ const frameFor = (page, ext, surface) => page.frames().find(f => f.url().include
   // Settings → Appearance shows the extension's settings frame.
   await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsMenu());
   await s.page.waitForTimeout(500);
-  await s.page.evaluate(() => document.querySelector('button[aria-label="Appearance"]')?.click());
+  await s.page.evaluate(() => [...document.querySelectorAll('#sm-nav .sm-nav-item')].find(item => item.textContent.trim() === 'Appearance')?.click());
   await s.page.waitForTimeout(1500);
   const settingsFrame = frameFor(s.page, 'plugin:hello-frame', 'settings');
   r.settingsFrame = settingsFrame ? await settingsFrame.evaluate(() => document.body.innerText.trim()) : 'missing';

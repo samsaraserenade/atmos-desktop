@@ -36,6 +36,7 @@ import { tickerData, onUpdate as onTickerUpdate, updateTickerActive } from './ma
 import { watchlistState, marketQueryState, onQueryRemembered } from './markets/persist.js';
 import { chartLabel, parseMarketQuery, KNOWN_EXCHANGES } from './markets/src/query-engine.js';
 import { queueMarketQuery } from './markets/src/session.js';
+import { hasMarketData } from './src/host/market-data.js';
 
 const CHART_MODE_EVENT = 'atmos:chart-mode';
 let marketsPanelPromise = null;
@@ -137,7 +138,8 @@ function mountChartPanel(contentEl, context) {
           const items = [...(portfolioState.extraCharts || [])];
           items[index] = { ...items[index], ...patch }; portfolioState.extraCharts = items; save();
         };
-        let selectedSource = ['total', 'spot', 'perp', 'market'].includes(saved.source) ? saved.source : ['perp', 'spot', 'total'][index];
+        const sources = hasMarketData() ? ['total', 'spot', 'perp', 'market'] : ['total', 'spot', 'perp'];
+        let selectedSource = sources.includes(saved.source) ? saved.source : ['perp', 'spot', 'total'][index];
         const body = document.createElement('div'); body.className = 'finance-extra-body';
         host.append(body);
         let viewContext = null;
@@ -454,6 +456,8 @@ function mountChartPanel(contentEl, context) {
     renderTickerPicker();
   
     syncTickerPickerLabel();
+    // Without Market Data there are no market charts to switch to.
+    if (!hasMarketData()) tickerPicker.hidden = true;
     return { tickerPicker, syncTickerPickerLabel };
   }
 
@@ -481,7 +485,9 @@ function mountChartPanel(contentEl, context) {
   // outgoing mode's chart stays on screen the entire time the next one is
   // loading, and the only DOM change anyone sees is one atomic swap.
   const showMode = async mode => {
-    const nextMode = mode === 'markets' ? 'markets' : 'portfolio';
+    // Market charts need Market Data (an optional dependency); without it
+    // the panel stays on Portfolio rather than showing a chart offline.
+    const nextMode = mode === 'markets' && hasMarketData() ? 'markets' : 'portfolio';
     requestedMode = nextMode;
     if (nextMode === activeMode) return;
     const previousDispose = disposeMode;
@@ -528,7 +534,9 @@ function mountChartPanel(contentEl, context) {
     // snapping back to Portfolio -- the ticker itself needs no separate
     // bookkeeping here since markets/panel.js already restores its own
     // last-viewed symbol from marketQueryState.lastQuery on mount.
-    if (portfolioState.chartMode !== nextMode) { portfolioState.chartMode = nextMode; save(); }
+    // A market chart asked for while Market Data is missing isn't forgotten:
+    // it shows again once Market Data is installed.
+    if (portfolioState.chartMode !== nextMode && !(mode === 'markets' && nextMode !== 'markets')) { portfolioState.chartMode = nextMode; save(); }
     const toolbar = container.querySelector('.finance-portfolio-toolbar, .mq-toolbar');
     setChartTypeIcons(toolbar);
     toolbar.prepend(tickerPicker);

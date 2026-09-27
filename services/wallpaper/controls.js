@@ -1,7 +1,7 @@
 // Wallpaper's section of Settings → Appearance. Uses the Appearance page's
 // shared row classes (.sa-row, .sa-slider…, styled in Core's index.html).
 import { wallpaperState } from './persist.js';
-import { getPersistentState, removeWallpaper, setState, setWallpaper, subscribe } from './engine.js';
+import { imageKind, removeWallpaper, setState, setWallpaper, subscribe, useDefaultWallpaper } from './engine.js';
 
 const adjustments = [
   ['opacity', 'Opacity', 0, 100, '%'],
@@ -21,6 +21,7 @@ export function mountControls(body, context) {
   body.innerHTML = `
     ${row('Image', `
       <button type="button" class="sa-btn wallpaper-choose">Choose…</button>
+      <button type="button" class="sa-btn wallpaper-default">Use default</button>
       <button type="button" class="sa-btn wallpaper-remove">Remove</button>`, '<span class="wallpaper-image-status"></span>')}
     ${row('Mode', `
       <span class="sa-segmented" role="radiogroup" aria-label="Wallpaper mode">
@@ -44,6 +45,7 @@ export function mountControls(body, context) {
 
   const input = body.querySelector('.wallpaper-file');
   const removeButton = body.querySelector('.wallpaper-remove');
+  const defaultButton = body.querySelector('.wallpaper-default');
   const imageStatus = body.querySelector('.wallpaper-image-status');
   const effectsToggle = body.querySelector('.wallpaper-window-effects');
   const effectsStatus = body.querySelector('.wallpaper-window-status');
@@ -51,11 +53,17 @@ export function mountControls(body, context) {
 
   // Image
   const renderImage = () => {
-    const image = getPersistentState().image;
-    const hasImage = !!image;
-    imageStatus.textContent = hasImage ? 'Your own image' : 'None';
-    removeButton.hidden = !hasImage;
+    const kind = imageKind();
+    imageStatus.textContent = kind === 'own' ? 'Your own image' : kind === 'default' ? 'The Atmos default' : 'None';
+    defaultButton.hidden = kind === 'default';
+    removeButton.hidden = kind === 'none';
   };
+  context.listen(defaultButton, 'click', async () => {
+    defaultButton.disabled = true;
+    try { await useDefaultWallpaper(); }
+    catch (error) { console.error('[wallpaper] reset failed:', error); }
+    finally { defaultButton.disabled = false; }
+  });
   context.listen(body.querySelector('.wallpaper-choose'), 'click', () => input.click());
   context.listen(removeButton, 'click', async () => {
     removeButton.disabled = true;

@@ -9,9 +9,13 @@ const ASSET_KEY = 'wallpaper:image';
 // Where the image was kept before: as the Background plugin, and before that.
 const LEGACY_ASSET_KEYS = ['background:wallpaper', 'background'];
 
+// The image Atmos shows until you choose your own or remove it (Core's
+// assets, served with the Atmos page).
+export const DEFAULT_IMAGE = new URL('assets/atmos-background.jpg', document.baseURI).href;
+
 let imageEl = null;
 let overlayEl = null;
-let persistentImage = '';
+let persistentImage = DEFAULT_IMAGE;
 let persistentObjectUrl = null;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value)));
@@ -57,7 +61,10 @@ export async function initialize() {
       await deleteAsset(legacyKey);
     }
   }
-  if (blob && wallpaperState.wallpaperRemoved !== true) replacePersistentObjectUrl(blob);
+  // Your own image, else the default, unless the wallpaper was removed.
+  if (wallpaperState.wallpaperRemoved === true) persistentImage = '';
+  else if (blob) replacePersistentObjectUrl(blob);
+  else persistentImage = DEFAULT_IMAGE;
   paint();
 }
 
@@ -137,6 +144,24 @@ export async function removeWallpaper() {
   paint();
 }
 
+/** Back to Atmos's default image: your own is deleted, and the wallpaper shows again. */
+export async function useDefaultWallpaper() {
+  if (!await deleteAsset(ASSET_KEY)) throw new Error('wallpaper: wallpaper could not be reset');
+  for (const legacyKey of LEGACY_ASSET_KEYS) await deleteAsset(legacyKey);
+  if (persistentObjectUrl) URL.revokeObjectURL(persistentObjectUrl);
+  persistentObjectUrl = null;
+  persistentImage = DEFAULT_IMAGE;
+  // Remove switched to see-through; the default image is meant to be seen.
+  updateWallpaperState({ wallpaperRemoved: false, ...(wallpaperState.mode === 'transparent' && wallpaperState.opacity === 0 ? { mode: 'wallpaper', opacity: 100 } : {}) });
+  paint();
+}
+
+/** Which image is showing: 'own', 'default' or 'none'. */
+export function imageKind() {
+  if (!persistentImage) return 'none';
+  return persistentImage === DEFAULT_IMAGE ? 'default' : 'own';
+}
+
 export function setTemporaryEffects(owner, effects = {}) {
   if (!owner) throw new TypeError('wallpaper: temporary effect owner is required');
   temporary.set(owner, { ...(temporary.get(owner) || {}), ...effects });
@@ -183,6 +208,6 @@ export function getThumbnail(width = 320) {
 }
 
 export const wallpaperApi = Object.freeze({
-  getState, getPersistentState, setState, setWallpaper, removeWallpaper,
+  getState, getPersistentState, setState, setWallpaper, removeWallpaper, useDefaultWallpaper, imageKind,
   setTemporaryEffects, clearTemporaryEffects, subscribe, getThumbnail,
 });

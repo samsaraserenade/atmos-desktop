@@ -321,16 +321,19 @@ html[data-sidebar-shadow="hidden"] #settings-drawer.open { box-shadow: none; }
 .sidebar-footer-brand { min-width:0; line-height:1; }
 .sidebar-footer-name { font-size:.72rem; font-weight:650; letter-spacing:.16em; color:rgba(var(--ink-rgb),.82); }
 .sidebar-footer-version { margin-top:5px; font-size:.52rem; letter-spacing:.06em; color:rgba(var(--ink-rgb),.32); }
-#sidebar-footer-settings {
+.sidebar-footer-actions { display:flex; align-items:center; gap:2px; }
+#sidebar-footer-settings, #sidebar-footer-extensions {
   width:30px; height:30px; flex:0 0 30px;
   display:grid; place-items:center;
   border:0; border-radius:6px; background:transparent;
   color:rgba(var(--ink-rgb),.46); cursor:pointer;
   transition:background .12s, color .12s;
 }
-#sidebar-footer-settings:hover { background:rgba(var(--ink-rgb),.08); color:rgba(var(--ink-rgb),.86); }
-#sidebar-footer-settings:focus-visible { outline:1px solid rgba(var(--ink-rgb),.45); outline-offset:1px; }
-#sidebar-footer-settings svg { width:16px; height:16px; }
+:is(#sidebar-footer-settings, #sidebar-footer-extensions):hover { background:rgba(var(--ink-rgb),.08); color:rgba(var(--ink-rgb),.86); }
+:is(#sidebar-footer-settings, #sidebar-footer-extensions):focus-visible { outline:1px solid rgba(var(--ink-rgb),.45); outline-offset:1px; }
+:is(#sidebar-footer-settings, #sidebar-footer-extensions) svg { width:16px; height:16px; }
+/* Something needs attention: an update, a restart, or an extension that failed to load. */
+#sidebar-footer-extensions.attention, #sidebar-footer-extensions.attention:hover { color:var(--color-negative, #f87171); }
 /* no backdrop — drawer is non-modal, UI stays fully interactive */
 /* ── Accordion sections ──────────────────────────────────────────────────── */
 .fin-section { position: relative; border-bottom: 1px solid rgba(var(--ink-rgb),.06); }
@@ -440,7 +443,10 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
 }
 #settings-menu-panel {
   position: relative;
-  width: min(780px, 92vw); height: min(560px, 84vh);
+  /* Grows on large screens (settings-menu.js settingsScale()); the vw/vh
+     limits are divided by it because zoom scales them too. */
+  zoom: var(--settings-scale, 1);
+  width: min(780px, calc(92vw / var(--settings-scale, 1))); height: min(560px, calc(84vh / var(--settings-scale, 1)));
   display: flex; flex-direction: row;
   background: rgba(var(--surface-rgb),var(--shell-opacity, .88));
   border: 1px solid rgba(var(--ink-rgb),.09);
@@ -498,13 +504,6 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
   margin-left: auto; font-size: .58rem; color: rgba(var(--ink-rgb),.25);
   font-variant-numeric: tabular-nums;
 }
-/* Appearance + About are compact utility buttons pinned above the
-   full-width page list, side by side (About first, Appearance after). */
-.sm-nav-top-row { display: flex; flex-direction: row; gap: 4px; margin-left: 4px; }
-.sm-nav-home {
-  width: 29px; height: 29px; align-self: flex-start;
-  justify-content: center; padding: 0; margin-left: 0;
-}
 .sm-nav-divider { height: 1px; margin: 8px 2px; background: rgba(var(--ink-rgb),.06); }
 
 /* ── Right pane — the active page's content ──────────────────────────── */
@@ -545,7 +544,17 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
 }
 .sm-search input::placeholder { color: rgba(var(--ink-rgb),.25); }
 
-#settings-menu-list { overflow-y: auto; flex: 1; padding: 6px 12px 14px; }
+#settings-menu-list {
+  overflow-y: auto; flex: 1; padding: 6px 12px 14px;
+  /* A thin scrollbar in the ink colour, not the platform's default one
+     with arrow buttons (which also showed past the rounded corner). */
+  scrollbar-gutter: stable;
+}
+#settings-menu-list::-webkit-scrollbar { width: 8px; }
+#settings-menu-list::-webkit-scrollbar-button { display: none; height: 0; }
+#settings-menu-list::-webkit-scrollbar-track { background: transparent; }
+#settings-menu-list::-webkit-scrollbar-thumb { background: rgba(var(--ink-rgb),.14); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+#settings-menu-list::-webkit-scrollbar-thumb:hover { background-color: rgba(var(--ink-rgb),.26); }
 #settings-menu-empty {
   padding: 40px 16px; font-size: .7rem; color: rgba(var(--ink-rgb),.3);
   text-align: center;
@@ -663,6 +672,65 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-permissions summary { cursor: pointer; width: max-content; color: rgba(var(--ink-rgb),.34); }
 .sm-permissions summary:hover { color: rgba(var(--ink-rgb),.6); }
 .sm-permissions .sm-trust-secondary { margin: 2px 0 4px; }
+.sm-package-details { margin-bottom: 4px; }
+/* Settings → Extensions (the extension manager). */
+.sm-nav-attention { color: var(--color-negative, #f87171); }
+.sm-manager-heading { margin: 14px 8px 4px; font-size: .6rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: rgba(var(--ink-rgb),.34); }
+.sm-manager-main { cursor: default; }
+.sm-manager-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.sm-manager-row .sm-trust-error { margin: -4px 8px 10px 50px; font-size: .64rem; }
+.sm-trust-note.sm-manager-confirm { margin: -4px 8px 10px 50px; display: flex; flex-direction: column; gap: 6px; }
+.sm-manager-choice { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.sm-manager-also { margin-top: 4px; color: rgba(var(--ink-rgb),.55); }
+.sm-manager-subheading { display:flex; align-items:center; gap:6px; margin:8px 8px 2px; font-size:.62rem; color:rgba(var(--ink-rgb),.5); }
+.sm-manager-subheading span { font-size:.56rem; color:rgba(var(--ink-rgb),.28); font-variant-numeric:tabular-nums; }
+.sm-manager-needs { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:5px; }
+.sm-manager-needs-label { font-size:.56rem; letter-spacing:.04em; color:rgba(var(--ink-rgb),.35); margin-right:1px; }
+.sm-manager-needs-label:not(:first-child) { margin-left:6px; }
+.sm-manager-chip { padding:1px 7px; border-radius:999px; border:1px solid rgba(var(--ink-rgb),.14); background:rgba(var(--ink-rgb),.05); font-size:.58rem; color:rgba(var(--ink-rgb),.72); white-space:nowrap; }
+.sm-manager-chip.optional { border-style:dashed; background:transparent; color:rgba(var(--ink-rgb),.5); }
+.sm-manager-chip.used-by { background:transparent; color:rgba(var(--ink-rgb),.5); }
+.sm-view-toggle { display:inline-flex; border:1px solid rgba(var(--ink-rgb),.12); border-radius:7px; overflow:hidden; }
+.sm-view-toggle button { display:grid; place-items:center; width:28px; height:26px; border:0; background:transparent; color:rgba(var(--ink-rgb),.4); cursor:pointer; }
+.sm-view-toggle button[aria-pressed="true"] { background:rgba(var(--ink-rgb),.1); color:rgba(var(--ink-rgb),.85); }
+.sm-as-grid .sm-card-group { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; padding:4px 8px 8px; }
+.sm-as-grid .sm-card-group > .sm-card { border:1px solid rgba(var(--ink-rgb),.08); border-radius:10px; display:flex; flex-direction:column; }
+.sm-as-grid .sm-card-group > .sm-card:last-child { border-bottom:1px solid rgba(var(--ink-rgb),.08); }
+.sm-as-grid .sm-extension-card > .sm-card-main { height:auto; flex-wrap:wrap; align-items:flex-start; padding:12px 12px 6px; gap:10px; }
+.sm-as-grid .sm-extension-card > .sm-card-main .sm-card-text { flex:1 1 0; }
+.sm-as-grid .sm-extension-card .sm-card-detail { white-space:normal; }
+.sm-as-grid .sm-extension-card .sm-extension-trust { padding:0 12px 10px; }
+.sm-as-grid .sm-extension-card .sm-permissions { margin-left:0 !important; }
+.sm-as-grid .sm-card-group:has(.sm-extension-card) { align-items:start; }
+.sm-as-grid .sm-extension-card .sm-extension-trust { margin-top:2px; }
+.sm-as-grid .sm-card-group:has(.sm-widget-card) { grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); }
+.sm-as-grid .sm-widget-card > .sm-card-main { height:auto; min-height:52px; padding:8px 10px; }
+.sm-as-grid .sm-widget-card .sm-card-name { white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; line-height:1.3; }
+.sm-as-grid .sm-manager-main { flex-direction:column; align-items:flex-start; gap:8px; flex:1; padding:12px; }
+.sm-as-grid .sm-manager-row:hover { background:rgba(var(--ink-rgb),.03); }
+.sm-as-grid .sm-manager-main .sm-card-text { width:100%; }
+.sm-as-grid .sm-manager-main .sm-card-detail { white-space:normal; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.sm-as-grid .sm-manager-actions { margin-top:auto; align-self:flex-end; }
+.sm-as-grid .sm-trust-note.sm-manager-optional, .sm-as-grid .sm-trust-note.sm-manager-confirm, .sm-as-grid .sm-manager-row .sm-trust-error { margin:0 10px 10px; }
+.sm-picker-list { display:grid !important; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:8px !important; }
+.sm-picker-item { border:1px solid rgba(var(--ink-rgb),.08); border-radius:10px; align-items:flex-start !important; }
+.sm-picker-item input { margin-top:3px; }
+.sm-trust-note.sm-manager-optional { margin: -4px 8px 10px 50px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sm-manager-optional > span { flex: 1; min-width: 0; }
+.sm-manager-optional .sm-trust-error { flex-basis: 100%; margin: 0; }
+.sm-trust-note.sm-manager-problem, .sm-trust-note.sm-manager-empty { margin: 2px 8px 6px; }
+.sm-manager-source { display: flex; align-items: center; gap: 10px; padding: 6px 8px; font-size: .64rem; color: rgba(var(--ink-rgb),.6); }
+.sm-manager-source-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-manager-source-state { flex-shrink: 0; color: rgba(var(--ink-rgb),.35); }
+.sm-manager-source.sm-trust-alert .sm-manager-source-state { color: rgb(248,113,113); }
+.sm-manager-add-source { display: flex; gap: 8px; padding: 6px 8px; }
+.sm-manager-add-source input {
+  flex: 1; min-width: 0; padding: 6px 9px; border-radius: 6px;
+  border: 1px solid rgba(var(--ink-rgb),.1); background: rgba(var(--ink-rgb),.04);
+  color: rgb(var(--ink-rgb)); font: inherit; font-size: .66rem; outline: none;
+}
+.sm-manager-add-source input:focus { border-color: rgba(129,140,248,.38); }
+.sm-manager-add-source + .sm-trust-error { margin: 0 8px 8px; font-size: .64rem; }
 .sm-permission-list { margin: 6px 0 8px; padding-left: 16px; line-height: 1.55; }
 .sm-permission-new { color: rgba(var(--ink-rgb),.82); }
 .sm-permission-new span { margin-left: 4px; padding: 0 5px; border-radius: 6px; font-size: .55rem; background: rgba(251,191,36,.18); color: rgb(251,191,36); }
@@ -847,6 +915,12 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-onboarding-actions button { padding:8px 12px; border:1px solid rgba(var(--ink-rgb),.12); border-radius:7px; background:rgba(var(--ink-rgb),.08); color:rgba(var(--ink-rgb),.72); font:inherit; font-size:.66rem; cursor:pointer; transition:background .12s,color .12s,border-color .12s; }
 .sm-onboarding-actions button:hover { background:rgba(var(--ink-rgb),.13); border-color:rgba(var(--ink-rgb),.19); color:rgb(var(--ink-rgb)); }
 .sm-onboarding-actions button.secondary { background:transparent; color:rgba(var(--ink-rgb),.4); }
+.sm-onboarding-actions button:disabled { opacity:.45; cursor:default; }
+.sm-picker-list { display:flex; flex-direction:column; gap:2px; }
+.sm-picker-item { display:flex; align-items:center; gap:12px; padding:10px 12px; cursor:pointer; }
+.sm-picker-item input { flex-shrink:0; }
+.sm-picker-item .sm-card-text { display:flex; flex-direction:column; min-width:0; }
+.sm-picker-error { margin-top:10px; color:var(--color-negative, #f87171); font-size:.64rem; }
 
 /* ── Sidebar page (widget enable/disable list) ───────────────────────────
    Reuses .sm-card/.sm-icon/.sm-card-text from the plugin list below — same
@@ -857,6 +931,11 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
   font-size: .68rem; color: rgba(var(--ink-rgb),.32);
   padding: 4px 8px 14px;
 }
+.sm-widget-card.disabled .sm-icon, .sm-widget-card.disabled .sm-card-name { opacity: .5; }
+.sm-card-main .sm-toggle { cursor: pointer; }
+.sm-extension-card > .sm-card-main, .sm-widget-card > .sm-card-main { cursor: default; }
+.sm-main-header.sm-no-search + #settings-menu-list { padding-top: 12px; }
+.sm-nav-item:focus-visible { outline: 2px solid rgba(129,140,248,.6); outline-offset: -2px; }
 .sm-toggle {
   position: relative;
   width: 34px; height: 20px; flex-shrink: 0;
@@ -1321,9 +1400,14 @@ html[data-app-theme="amoled"] #settings-menu {
         <div class="sidebar-footer-name">ATMOS</div>
         <div class="sidebar-footer-version" id="sidebar-footer-version">Version —</div>
       </div>
+      <div class="sidebar-footer-actions">
+      <button type="button" id="sidebar-footer-extensions" aria-label="Extensions" title="Extensions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/><path d="m7.5 5.5 9 5"/></svg>
+      </button>
       <button type="button" id="sidebar-footer-settings" aria-label="Open Settings" title="Open Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.18V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.17 14H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.32 10H21a2 2 0 1 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      </div>
     </div>
   </div><!-- /settings-panel-main -->
 </div><!-- /settings-drawer -->

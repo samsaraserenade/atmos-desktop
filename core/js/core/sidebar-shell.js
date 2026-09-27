@@ -430,7 +430,17 @@ document.getElementById('acc-plugin-settings')?.addEventListener('click', event 
 }, true);
 
 document.addEventListener('keydown', event => {
+  // Ctrl+` opens and closes Settings, even while typing (a plain ` is left
+  // for typing). Frames pass it on too, so it works inside any panel.
+  if (event.ctrlKey && !event.altKey && !event.metaKey && (event.code === 'Backquote' || event.key === '`')) {
+    event.preventDefault();
+    toggleSettings();
+    return;
+  }
   if (isTyping() || event.ctrlKey || event.metaKey || event.altKey) return;
+  // While Settings is open, Tab moves between its controls (it used to hide
+  // the sidebar behind it instead).
+  if (event.key === 'Tab' && document.getElementById('settings-menu')?.classList.contains('open')) return;
   if (event.key === 'Tab') {
     event.preventDefault();
     if (event.shiftKey) {
@@ -438,9 +448,6 @@ document.addEventListener('keydown', event => {
     } else {
       toggleSidebar();
     }
-  } else if (event.key === '`' || event.key === '~') {
-    event.preventDefault();
-    toggleSettings();
   }
 });
 
@@ -448,6 +455,43 @@ document.getElementById('sidebar-footer-settings')?.addEventListener('click', ev
   event.stopPropagation();
   openSettings();
 });
+
+// The Extensions button: opens Settings on the extension manager, and turns
+// the negative colour when an update is available, a change waits for a
+// restart, or an extension failed to load. The tooltip says which.
+const extensionsButton = document.getElementById('sidebar-footer-extensions');
+extensionsButton?.addEventListener('click', event => {
+  event.stopPropagation();
+  import('./settings-menu.js')
+    .then(module => module.openExtensionManager())
+    .catch(error => console.warn('[settings] settings menu failed to load:', error.message));
+});
+
+export function describeExtensionAttention(summary) {
+  const lines = [];
+  if (summary?.problems?.length) {
+    lines.push(summary.problems.length === 1
+      ? `${summary.problems[0].name} didn't load`
+      : `${summary.problems.length} extensions didn't load`);
+  }
+  if (summary?.updates) lines.push(`${summary.updates} update${summary.updates === 1 ? '' : 's'} available`);
+  if (summary?.pending) lines.push('Restart to apply changes');
+  return lines;
+}
+
+function showExtensionAttention(summary) {
+  if (!extensionsButton) return;
+  const lines = describeExtensionAttention(summary);
+  extensionsButton.classList.toggle('attention', lines.length > 0);
+  const label = lines.length ? `Extensions: ${lines.join(', ')}` : 'Extensions';
+  extensionsButton.title = label;
+  extensionsButton.setAttribute('aria-label', label);
+}
+
+window.atmosCore?.extensionManager?.onChange?.(payload => showExtensionAttention(payload?.summary));
+Promise.resolve(window.atmosCore?.extensionManager?.status?.())
+  .then(payload => showExtensionAttention(payload?.summary))
+  .catch(() => {});
 
 loadSidebarFooterVersion();
 

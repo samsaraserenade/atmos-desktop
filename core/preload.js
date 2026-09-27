@@ -50,6 +50,29 @@ contextBridge.exposeInMainWorld('atmosCore', {
     ipcRenderer.on('extensions:notification-click', listener);
     return () => ipcRenderer.removeListener('extensions:notification-click', listener);
   },
+  // The extension manager (Settings → Extensions).
+  extensionManager: {
+    status:        ()                      => ipcRenderer.invoke('extensions:manager-status'),
+    checkForUpdates: ()                    => ipcRenderer.invoke('extensions:check-updates'),
+    install:       (kind, id)              => ipcRenderer.invoke('extensions:install', kind, id),
+    remove:        (kind, id, options)     => ipcRenderer.invoke('extensions:remove', kind, id, options),
+    cancel:        (kind, id)              => ipcRenderer.invoke('extensions:cancel', kind, id),
+    addSource:     location                => ipcRenderer.invoke('extensions:add-source', location),
+    removeSource:  location                => ipcRenderer.invoke('extensions:remove-source', location),
+    takeDataCleanup: ()                    => ipcRenderer.invoke('extensions:take-data-cleanup'),
+    setup:         ()                      => ipcRenderer.invoke('extensions:setup'),
+    finishSetup:   chosen                  => ipcRenderer.invoke('extensions:finish-setup', chosen),
+    onUpgradeDownloaded: callback => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('extensions:upgrade-downloaded', listener);
+      return () => ipcRenderer.removeListener('extensions:upgrade-downloaded', listener);
+    },
+    onChange: callback => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('extensions:manager-changed', listener);
+      return () => ipcRenderer.removeListener('extensions:manager-changed', listener);
+    },
+  },
 });
 
 contextBridge.exposeInMainWorld('atmos', {

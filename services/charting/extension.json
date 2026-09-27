@@ -1,6 +1,20 @@
 {
   "apiVersion": 2,
   "tier": "first-party",
+  "version": "1.2.0",
+  "publisher": "atmos",
+  "displayName": "Charting",
+  "description": "Reusable SVG time-series charts with shared, live chart and Samsara settings.",
+  "contract": {
+    "rendererApi": "api.js",
+    "apiVersion": 2,
+    "rendererApiVersion": 2,
+    "chartTypes": [
+      "line",
+      "candlestick",
+      "heiken-ashi"
+    ]
+  },
   "requires": {
     "extensions.manifest": 1,
     "lifecycle.context": 1

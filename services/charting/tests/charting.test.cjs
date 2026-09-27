@@ -11,11 +11,11 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 
 test('service declares a renderer-only CoreV2 contract', () => {
   const extension = JSON.parse(read('extension.json'));
-  const service = JSON.parse(read('service.json'));
+  const service = extension.contract;
   assert.equal(extension.apiVersion, 2);
   assert.equal(extension.requires['extensions.manifest'], 1);
   assert.equal(extension.requires['lifecycle.context'], 1);
-  assert.equal(service.id, 'charting');
+  assert.equal(extension.version, '1.2.0');
   assert.equal(service.apiVersion, 2);
   assert.equal(service.rendererApiVersion, 2);
   assert.equal(service.rendererApi, 'api.js');

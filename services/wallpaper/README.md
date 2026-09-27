@@ -14,7 +14,7 @@ two things that run behind every panel for the whole session.
 
 - In the Atmos page, use the `visual.wallpaper` renderer capability from
   `atmos-core/core/renderer-capabilities.js` (`getState`, `setState`,
-  `setWallpaper`, `removeWallpaper`, `setTemporaryEffects`, `subscribe`).
+  `setWallpaper`, `removeWallpaper`, `useDefaultWallpaper`, `imageKind`, `setTemporaryEffects`, `subscribe`). With no image of your own, it shows `core/assets/atmos-background.jpg`; Remove shows none.
 - From a frame, use `atmos.wallpaper` in the SDK, with
   `"invokes": ["service:wallpaper"]`.
 

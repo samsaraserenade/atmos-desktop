@@ -509,6 +509,9 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
         },
         entry: `${base}${surface.entry}`,
         appearance: _appearance(),
+        // Atmos's own single-key shortcuts, which a focused frame passes on
+        // when they aren't typing: Tab (the sidebar) and panel shortcuts.
+        shortcutKeys: ['Tab', ..._panelShortcuts],
       },
     }, origin, [channel.port2]);
     resolveReady(true);
@@ -779,6 +782,8 @@ function _registerContribution(extension, surface) {
     const mounted = new Map();
     registerSection(surface.id, {
       label: surface.label,
+      // Which extension it comes from, for Settings → Sidebar's groups.
+      owner: extension.manifest?.displayName || extension.id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
       icon: icon || '',
       order: surface.order,
       defaultEnabled: surface.defaultEnabled,
@@ -843,7 +848,9 @@ function _registerContribution(extension, surface) {
  * persistence has loaded and before panels are restored and boot hooks run.
  */
 export function loadFramedExtensions({ plugins = [], services = [] } = {}) {
-  _libraryBases = new Map(services.filter(service => service.libraryBase).map(service => [service.id, service.libraryBase]));
+  // Only libraries that load this session can be imported: one switched off,
+  // missing a dependency or failed is absent, so optional consumers can tell.
+  _libraryBases = new Map(services.filter(service => service.libraryBase && service.active !== false && service.enabled !== false).map(service => [service.id, service.libraryBase]));
   const framed = [
     ...services.map(service => ({ ...service, kind: 'service' })),
     ...plugins.map(plugin => ({ ...plugin, kind: 'plugin' })),

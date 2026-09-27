@@ -8,6 +8,7 @@ import { atmos, createContext, setRole } from './frame.js';
 export async function startWidget(id) {
   setRole(`widget:${id}`);
   const context = createContext();
+  await (await import('./market-data.js')).checkMarketData();
   const { startView } = await import('./mirror.js');
   await startView(context);
   await import('../../sidebar.js');

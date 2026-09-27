@@ -22,10 +22,10 @@ class FakeWebSocket { addEventListener() {} close() {} send() {} }
 
 test('service declares CoreV2 discovery and its files', () => {
   const extension = JSON.parse(fs.readFileSync(path.join(root, 'extension.json')));
-  const service = JSON.parse(fs.readFileSync(path.join(root, 'service.json')));
+  const service = extension.contract;
   assert.equal(extension.apiVersion, 2);
   assert.equal(extension.requires['extensions.manifest'], 1);
-  assert.equal(service.id, 'market-data');
+  assert.match(extension.version, /^\d+\.\d+\.\d+$/);
   assert.deepEqual(service.events, [...activate.EVENT_NAMES]);
   for (const file of ['main.cjs', 'websocket-manager.js', 'normalizer.js', 'market-state.js', 'history.js', 'candle-engine.js', 'subscription-manager.js', 'exchanges/binance.js', 'exchanges/bybit.js', 'exchanges/kraken.js', 'exchanges/coinbase.js']) {
     assert.ok(fs.existsSync(path.join(root, file)), `missing ${file}`);

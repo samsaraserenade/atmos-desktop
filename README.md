@@ -237,6 +237,22 @@ Build the Windows installer:
 npm run build
 ```
 
+An installer carries Core and the system services (Audio, Location,
+Wallpaper) built in, nothing else. Every other extension is downloaded
+from the official source, the latest release of
+[atmos-desktop](https://github.com/samsaraserenade/atmos-desktop)
+(`core/extension-sources.json`): Atmos offers them on its first start
+("Choose your extensions"; offline it says so and offers to try again) and
+installs them like any other, so each can be removed or updated on
+Settings → Extensions. An Atmos that bundled them before downloads what it
+had in the background after the upgrade and asks for a restart. A personal
+build (`npm run build:personal`) also carries its extensions as signed
+packages ("Comes with Atmos"), so its first run and upgrades work offline;
+building it signs them, so it needs the package key: set `ATMOS_SIGNING_KEY`
+to the key file (the passphrase is asked for, or `ATMOS_SIGNING_PASSPHRASE`).
+`npm start` from the repo still runs every extension straight from
+`plugins/` and `services/`.
+
 Create a portable build:
 
 ```bash

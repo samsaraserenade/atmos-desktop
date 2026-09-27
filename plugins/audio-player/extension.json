@@ -1,8 +1,11 @@
 {
   "apiVersion": 3,
   "tier": "first-party",
+  "version": "1.0.0",
+  "publisher": "atmos",
   "runtime": "frame",
   "displayName": "Audio Player",
+  "description": "A music player for your own library, in a drawer at the bottom of the screen.",
   "requires": {
     "extensions.manifest": 1,
     "extensions.frames": 3
@@ -58,6 +61,11 @@
         ]
       }
     ]
+  },
+  "dependencies": {
+    "audio": "^1.0.0",
+    "media-metadata": "^1.0.0",
+    "wallpaper": "^1.0.0"
   },
   "permissions": {
     "node": [

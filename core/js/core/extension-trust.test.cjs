@@ -8,7 +8,7 @@ const { createExtensionCatalog } = require('./extension-catalog.cjs');
 const { createExtensionTrust } = require('./extension-trust.cjs');
 const { writeIntegrityList } = require('./extension-integrity.cjs');
 
-function fixture() {
+function fixture(trustedKeys = new Map()) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-trust-'));
   const write = (rel, content) => {
     fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
@@ -17,11 +17,12 @@ function fixture() {
   const bundled = kind => path.join(dir, 'bundled', kind);
   const installed = kind => path.join(dir, 'installed', kind);
   const setup = () => {
-    const catalog = createExtensionCatalog({ bundledRoot: bundled, installedRoot: installed, warn() {} });
+    const catalog = createExtensionCatalog({ bundledRoot: bundled, installedRoot: installed, trustedKeys, warn() {} });
     const trust = createExtensionTrust({
       approvalsFile: path.join(dir, 'user', 'approvals.json'),
       hashCacheFile: path.join(dir, 'user', 'hash-cache.json'),
       bundledRoot: bundled,
+      trustedKeys,
       warn() {},
     });
     trust.assessAll(catalog);
@@ -123,5 +124,124 @@ test('an installed copy of a bundled extension is ignored, not approvable', () =
   const { catalog, trust } = setup();
   const alpha = catalog.find('plugins', 'alpha');
   assert.equal(alpha.source, 'bundled');
-  assert.throws(() => trust.approve('plugins', alpha, 'x'), /Only third-party/);
+  assert.throws(() => trust.approve('plugins', alpha, 'x'), /Only community/);
+});
+
+// ── Signed (official) packages ──────────────────────────────────────────
+
+const crypto = require('crypto');
+const { trustedKeyEntry, loadTrustedKeys, signExtension } = require('./extension-signing.cjs');
+const { createHasher } = require('./extension-integrity.cjs');
+
+function signedFixture() {
+  const official = crypto.generateKeyPairSync('ed25519');
+  const stranger = crypto.generateKeyPairSync('ed25519');
+  const keysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-keys-'));
+  fs.writeFileSync(path.join(keysDir, 'k.json'), JSON.stringify({ format: 1, keys: [trustedKeyEntry(official.publicKey)] }));
+  const trustedKeys = loadTrustedKeys([path.join(keysDir, 'k.json')], () => {});
+  const f = fixture(trustedKeys);
+  const sign = (rel, key = official.privateKey) => {
+    const [, kind, id] = rel.split('/');
+    signExtension(path.join(f.dir, rel), { kind: kind === 'plugins' ? 'plugin' : 'service', id, privateKey: key, hasher: createHasher(null) });
+  };
+  return { ...f, sign, stranger };
+}
+
+test('an installed extension signed with an official key is official, main.cjs and all', () => {
+  const { write, setup, sign } = signedFixture();
+  write('installed/plugins/sounds/extension.json', { version: '1.0.0', publisher: 'atmos', permissions: { ipc: true } });
+  write('installed/plugins/sounds/main.cjs', 'module.exports = { activate() {} };');
+  sign('installed/plugins/sounds');
+  let { catalog, trust } = setup();
+  let sounds = catalog.find('plugins', 'sounds');
+  assert.equal(sounds.tier, 'first-party');
+  assert.equal(sounds.source, 'installed');
+  assert.equal(trust.get(sounds).status, 'verified');
+  assert.equal(trust.get(sounds).loadable, true);
+  assert.equal(trust.get(sounds).signature.publisher, 'atmos');
+  assert.throws(() => trust.approve('plugins', sounds, 'x'), /Only community/);
+
+  // One changed byte: tampered, not loaded, and not demoted to community.
+  write('installed/plugins/sounds/main.cjs', 'module.exports = { activate() { steal(); } };');
+  ({ catalog, trust } = setup());
+  sounds = catalog.find('plugins', 'sounds');
+  assert.equal(sounds.tier, 'first-party');
+  assert.equal(trust.get(sounds).status, 'tampered');
+  assert.match(trust.get(sounds).reason, /changed main\.cjs/);
+  assert.equal(trust.get(sounds).loadable, false);
+});
+
+test('signatures from unknown keys are ignored: the extension is community', () => {
+  const { write, setup, sign, stranger } = signedFixture();
+  write('installed/plugins/clock/extension.json', { version: '1.0.0', publisher: 'atmos', permissions: {} });
+  write('installed/plugins/clock/boot.js', '');
+  sign('installed/plugins/clock', stranger.privateKey);
+  const { catalog, trust } = setup();
+  const clock = catalog.find('plugins', 'clock');
+  assert.equal(clock.tier, 'third-party');
+  assert.equal(clock.signature.status, 'untrusted');
+  assert.equal(trust.get(clock).status, 'pending');
+});
+
+test('the highest official version wins over the bundled copy, which stays as the fallback', () => {
+  const { write, setup, sign } = signedFixture();
+  write('bundled/plugins/sounds/extension.json', { version: '1.0.0', publisher: 'atmos', permissions: {} });
+  write('bundled/plugins/sounds/boot.js', 'export default "bundled";');
+  write('installed/plugins/sounds/extension.json', { version: '1.1.0', publisher: 'atmos', permissions: {} });
+  write('installed/plugins/sounds/boot.js', 'export default "update";');
+  sign('installed/plugins/sounds');
+  let { catalog, trust } = setup();
+  let sounds = catalog.find('plugins', 'sounds');
+  assert.equal(sounds.source, 'installed');
+  assert.equal(sounds.version, '1.1.0');
+  assert.equal(sounds.fallback.source, 'bundled');
+  assert.equal(trust.get(sounds).status, 'verified');
+
+  // The update is damaged: Atmos falls back to the bundled 1.0.0.
+  write('installed/plugins/sounds/boot.js', 'export default "damaged";');
+  ({ catalog, trust } = setup());
+  sounds = catalog.find('plugins', 'sounds');
+  assert.equal(sounds.source, 'bundled');
+  assert.equal(sounds.version, '1.0.0');
+  assert.equal(sounds.replaced.version, '1.1.0');
+  const result = trust.get(sounds);
+  assert.equal(result.loadable, true);
+  assert.equal(result.fellBackFrom.status, 'tampered');
+
+  // An older signed copy never beats the bundled one.
+  write('installed/plugins/sounds/extension.json', { version: '0.9.0', publisher: 'atmos', permissions: {} });
+  write('installed/plugins/sounds/boot.js', 'export default "old";');
+  sign('installed/plugins/sounds');
+  ({ catalog } = setup());
+  assert.equal(catalog.find('plugins', 'sounds').source, 'bundled');
+});
+
+test('a community copy never replaces an official extension, and a broken signature never becomes community', () => {
+  const { write, setup, sign } = signedFixture();
+  write('bundled/services/charting/extension.json', { version: '1.2.0', publisher: 'atmos', permissions: {} });
+  write('installed/services/charting/extension.json', { version: '9.0.0', publisher: 'atmos', permissions: {} });
+  write('installed/services/notes/extension.json', { version: '1.0.0', publisher: 'atmos', permissions: {} });
+  write('installed/services/notes/boot.js', '');
+  sign('installed/services/notes');
+  write('installed/services/notes/signature.json', '{ broken');
+  const { catalog, trust } = setup();
+  const charting = catalog.find('services', 'charting');
+  assert.equal(charting.source, 'bundled');
+  assert.equal(charting.tier, 'first-party');
+  const notes = catalog.find('services', 'notes');
+  assert.equal(notes.tier, 'first-party');
+  assert.equal(trust.get(notes).status, 'tampered');
+  assert.match(trust.get(notes).reason, /unreadable/);
+});
+
+test('a bundled extension without integrity.json is checked against its own signature', () => {
+  const { write, setup, sign } = signedFixture();
+  write('bundled/plugins/sounds/extension.json', { version: '1.0.0', publisher: 'atmos', permissions: {} });
+  write('bundled/plugins/sounds/boot.js', '1');
+  sign('bundled/plugins/sounds');
+  let { catalog, trust } = setup();
+  assert.equal(trust.get(catalog.find('plugins', 'sounds')).status, 'verified');
+  write('bundled/plugins/sounds/boot.js', '2');
+  ({ catalog, trust } = setup());
+  assert.equal(trust.get(catalog.find('plugins', 'sounds')).status, 'tampered');
 });

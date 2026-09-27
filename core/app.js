@@ -1,6 +1,6 @@
 /** Core renderer entry point. Extension contributions are discovered at runtime. */
 
-import { load }                           from './js/persist.js';
+import { load, forgetStateNamespaces }    from './js/persist.js';
 import './js/core/context-menu.js';
 import './js/core/sidebar-shell.js';
 import './js/core/appearance.js';
@@ -95,6 +95,14 @@ document.getElementById('titlebar')?.addEventListener('dblclick', event => {
 await loadServicePersist();
 await loadPluginPersist();
 load();
+// Extensions removed with their data at this start (extension-manager.cjs):
+// forget their state namespaces (a plugin and a service may use kind-id).
+try {
+  const removed = await window.atmosCore?.extensionManager?.takeDataCleanup?.() || [];
+  if (removed.length) forgetStateNamespaces(removed.flatMap(({ kind, id }) => [id, `${kind}-${id}`]));
+} catch (error) {
+  console.warn('[app] could not clear removed extensions\' data:', error.message);
+}
 
 // UI contributions load only after every extension has installed its state
 // defaults and persistence handlers.
@@ -133,7 +141,15 @@ const [_installedPlugins, _installedServices] = await Promise.all([
   listInstalledPlugins(),
   listInstalledServices(),
 ]);
-if (_installedPlugins.length === 0 && _installedServices.length === 0) {
+// First start of an installed Atmos: choose from the extensions that come
+// with it (Settings, first run). Without any, the same page explains how to add them.
+const _setup = await window.atmosCore?.extensionManager?.setup?.().catch(() => null);
+// After an upgrade, extensions are downloaded in the background; once they
+// are, Settings → Extensions shows them waiting for a restart.
+const _showDownloaded = () => import('./js/core/settings-menu.js').then(module => module.openExtensionManager()).catch(() => {});
+window.atmosCore?.extensionManager?.onUpgradeDownloaded?.(_showDownloaded);
+if (_setup?.upgradeDownloaded) _showDownloaded();
+if (_setup?.needed || (_installedPlugins.length === 0 && _installedServices.length === 0)) {
   openOnboardingSettings();
 }
 

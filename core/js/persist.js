@@ -197,6 +197,22 @@ let _stateLoaded = false;
  * or not anything has registered it this session (null if never saved).
  * Used to hand a namespace to an extension that moved into frames.
  */
+/**
+ * Forget saved state namespaces for good (an extension removed with its
+ * data). Only namespaces nothing has registered this session.
+ */
+export function forgetStateNamespaces(ids) {
+  const saved = _lastLoadedBlob?.extensionState;
+  let changed = false;
+  for (const id of ids) {
+    if (_stateNamespaces.has(id) || !saved || !(id in saved)) continue;
+    delete saved[id];
+    changed = true;
+  }
+  if (changed) scheduleSave(0);
+  return changed;
+}
+
 export function readSavedNamespace(id) {
   if (_stateNamespaces.has(id)) {
     const def = _stateNamespaces.get(id);
