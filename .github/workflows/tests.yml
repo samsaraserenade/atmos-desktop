@@ -1,0 +1,35 @@
+# Every unit test (npm run test:all) on each push and pull request.
+# The end-to-end checks (scripts/e2e) need Electron and a display and are
+# still run by hand; see scripts/e2e/README.md.
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # The unit tests don't start Electron; skip its 100 MB download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - name: Install Matrix Chat's own dependencies
+        if: hashFiles('plugins/matrix-chat/package-lock.json') != ''
+        run: npm ci
+        working-directory: plugins/matrix-chat
+      - run: npm run test:all

@@ -34,6 +34,9 @@ const serviceTest = serviceTestsUnavailable
   : test;
 
 const read = relative => fs.readFileSync(path.join(serviceRoot, relative), 'utf8');
+// The system services are part of Core (core/system).
+const systemRoot = path.join(__dirname, '..', 'core', 'system');
+const readSystem = relative => fs.readFileSync(path.join(systemRoot, relative), 'utf8');
 
 serviceTest('installed services declare compatible Core API v2 manifests', () => {
   const installed = installedServiceEntries
@@ -85,16 +88,16 @@ serviceTest('privileged services use scoped Core handlers and capabilities', () 
   assert.equal(JSON.parse(read('media-metadata/extension.json')).library, true);
 });
 
-serviceTest('stateful services use namespaced persistence and lifecycle cleanup', () => {
-  const locationPersist = read('location/persist.js');
+test('the Location system service uses namespaced persistence and lifecycle cleanup', () => {
+  const locationPersist = readSystem('location/persist.js');
   assert.match(locationPersist, /registerStateNamespace\('location'/);
   assert.match(locationPersist, /location-legacy-v1/);
 
-  const location = read('location/index.js');
+  const location = readSystem('location/index.js');
   assert.match(location, /createEventScope\('location'/);
   assert.doesNotMatch(location, /state\.userLocation/);
 
-  const settings = read('location/settings.js');
+  const settings = readSystem('location/settings.js');
   assert.match(settings, /category: 'Appearance'/);
   assert.match(settings, /mount\(bodyEl, context\)/);
   assert.match(settings, /context\.listen/);

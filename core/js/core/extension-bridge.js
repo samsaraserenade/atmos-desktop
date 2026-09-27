@@ -138,22 +138,44 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     }
     return parsed;
   };
+  // What another extension shares with this one (its "exports", filtered
+  // by this extension's tier in the main process): { ipc, events, methods,
+  // resources }. Everything of its own is open to it.
+  const reach = extension.frame?.reach || {};
+  // ["*"]: everything (an official target that doesn't list its exports yet).
+  const shares = (target, kind, name) => {
+    const list = reach[target]?.[kind] || [];
+    return target === self || list.includes('*') || list.includes(name);
+  };
+  const whom = extension.tier === 'third-party' ? 'community extensions' : 'other extensions';
+  const NOUNS = { ipc: 'handler', events: 'events', methods: 'method' };
+  const requireShared = (target, kind, name) => {
+    if (!shares(target, kind, name)) {
+      throw new BridgeError(`${target} doesn't share its '${name}' ${NOUNS[kind]} with ${whom} ("exports.${kind}" in its extension.json)`);
+    }
+  };
   const fullEventName = name => {
     if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9:._-]*$/i.test(name)) throw new BridgeError('event names use letters, numbers and - _ . :', 'TypeError');
     const colon = name.indexOf(':');
     if (colon === -1) return `${extension.id}:${name}`;
     const owner = name.slice(0, colon);
-    if (owner !== extension.id && !may(`plugin:${owner}`) && !may(`service:${owner}`)) {
+    if (owner === extension.id) return name;
+    const declared = [`plugin:${owner}`, `service:${owner}`].filter(may);
+    if (!declared.length) {
       throw new BridgeError(`${self} is not permitted to listen to '${owner}' events; declare it in "permissions.invokes"`);
     }
+    const event = name.slice(colon + 1);
+    if (!declared.some(target => shares(target, 'events', event))) requireShared(declared[0], 'events', event);
     return name;
   };
 
   const handlers = {
     'state.get': () => deps.state.get(extension),
     'state.set': value => deps.state.set(extension, checkSize(plainObject(value, 'state')), bridge),
-    'state.update': patch => {
-      const next = { ...deps.state.get(extension), ...plainObject(patch, 'state patch') };
+    'state.update': async patch => {
+      plainObject(patch, 'state patch');
+      if (deps.state.update) return deps.state.update(extension, patch, bridge, checkSize);
+      const next = { ...(await deps.state.get(extension)), ...patch };
       return deps.state.set(extension, checkSize(next), bridge);
     },
 
@@ -264,6 +286,7 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     'main.subscribe': (target, channel) => {
       const { kind, id } = requireTarget(target, 'listen to');
       if (typeof channel !== 'string' || !/^[a-z0-9][a-z0-9:._-]*$/i.test(channel)) throw new BridgeError('listen(target, channel, fn)', 'TypeError');
+      requireShared(target, 'events', channel);
       const key = `${target} ${channel}`;
       if (mainListeners.has(key)) return;
       if (!deps.onMain) throw new BridgeError('main-process events are unavailable', 'Error');
@@ -278,12 +301,15 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     'invoke': (target, channel, ...args) => {
       const { kind, id } = requireTarget(target, 'invoke');
       if (typeof channel !== 'string') throw new BridgeError('invoke(target, channel, ...args)', 'TypeError');
-      return deps.invokeMain(kind, id, channel, ...args);
+      requireShared(target, 'ipc', channel);
+      // Stamped with this extension, so the main process can check it too.
+      return deps.invokeMain(self, kind, id, channel, ...args);
     },
 
     'call': async (target, method, ...args) => {
       requireTarget(target, 'call');
       if (typeof method !== 'string') throw new BridgeError('call(target, method, ...args)', 'TypeError');
+      requireShared(target, 'methods', method);
       // A background frame may still be starting; wait for it rather than fail.
       const service = deps.services.get(target) || await deps.awaitService?.(target);
       if (!service) throw new BridgeError(`${target} is not running or exposes nothing`, 'Error');

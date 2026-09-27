@@ -1,5 +1,5 @@
 /**
- * Market-data client: a library (ATMOS_CORE_INTEGRATION.md § 19). It runs
+ * Market-data client: a library (ATMOS_CORE_INTEGRATION.md § 5). It runs
  * in the consumer's document and reaches this service's main process only
  * through the route the consumer passes to setBridge():
  *

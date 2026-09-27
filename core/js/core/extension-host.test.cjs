@@ -238,3 +238,31 @@ test('the activation timeout is about ten seconds', () => {
   const { ACTIVATION_TIMEOUT_MS } = require('./extension-host.cjs');
   assert.equal(ACTIVATION_TIMEOUT_MS, 10_000);
 });
+
+test('IPC handlers: every call carries its caller, and a refusal stops it before the handler', async t => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { createExtensionHost } = require('./extension-host.cjs');
+  const handlers = new Map();
+  const asked = [];
+  const host = createExtensionHost({
+    ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
+    authorizeInvoke: (event, caller, target) => {
+      asked.push([caller, `${target.kind}:${target.id}`, target.name]);
+      return caller === 'plugin:nosy' ? `${target.kind}:${target.id} doesn't share its '${target.name}' handler` : null;
+    },
+  });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-host-caller-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const service = path.join(root, 'tags');
+  fs.mkdirSync(service);
+  fs.writeFileSync(path.join(service, 'extension.json'), JSON.stringify({ permissions: { ipc: true } }));
+  fs.writeFileSync(path.join(service, 'main.cjs'), "module.exports = context => context.handle('read', (event, file) => `read ${file}`);");
+  await host.activateRoot('service', root);
+  const handler = handlers.get('atmos-extension:service:tags:read');
+  assert.equal(await handler({}, null, 'a.mp3'), 'read a.mp3', 'the Atmos page itself');
+  assert.equal(await handler({}, 'plugin:player', 'b.mp3'), 'read b.mp3', 'an extension it shares with; the caller is not passed on');
+  assert.throws(() => handler({}, 'plugin:nosy', '/etc/passwd'), /doesn't share its 'read' handler/);
+  assert.deepEqual(asked, [[null, 'service:tags', 'read'], ['plugin:player', 'service:tags', 'read'], ['plugin:nosy', 'service:tags', 'read']]);
+});

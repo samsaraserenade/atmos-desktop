@@ -44,11 +44,21 @@ contextBridge.exposeInMainWorld('atmosCore', {
   updateWindowResize: (x, y)             => ipcRenderer.send('window-resize:update', x, y),
   endWindowResize: ()                    => ipcRenderer.send('window-resize:end'),
   openExtensionRoot: kind                => ipcRenderer.invoke('extensions:open-root', kind),
+  // A framed extension's invoke(), made by Core's bridge on its behalf:
+  // `caller` ("plugin:<id>") is who asked, which the main process checks
+  // against what the target shares ("exports.ipc").
+  invokeExtensionAs: (caller, kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, String(caller), ...args),
   showExtensionNotification: (kind, id, options) => ipcRenderer.invoke('extensions:notify', kind, id, options),
   onExtensionNotificationClick: callback => {
     const listener = (_event, kind, id, tag) => callback(kind, id, tag);
     ipcRenderer.on('extensions:notification-click', listener);
     return () => ipcRenderer.removeListener('extensions:notification-click', listener);
+  },
+  // Each extension's atmos.state, one file each (extension-state.cjs).
+  extensionState: {
+    loadAll:  ()               => ipcRenderer.invoke('extension-state:load-all'),
+    save:     (kind, id, data) => ipcRenderer.invoke('extension-state:save', kind, id, data),
+    saveSync: (kind, id, data) => ipcRenderer.sendSync('extension-state:save-sync', kind, id, data),
   },
   // The extension manager (Settings → Extensions).
   extensionManager: {
@@ -76,7 +86,8 @@ contextBridge.exposeInMainWorld('atmosCore', {
 });
 
 contextBridge.exposeInMainWorld('atmos', {
-  extensionInvoke: (kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, ...args),
+  // The Atmos page's own calls (caller null: Core and the system services).
+  extensionInvoke: (kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, null, ...args),
   extensionOn: (kind, id, name, callback) => {
     const channel = `atmos-extension:${kind}:${id}:${name}`;
     const listener = (_event, ...args) => callback(...args);

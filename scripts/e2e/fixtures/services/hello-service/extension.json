@@ -1,1 +1,1 @@
-{ "apiVersion": 3, "displayName": "Hello Service", "permissions": {} }
+{ "apiVersion": 3, "displayName": "Hello Service", "permissions": {}, "exports": { "methods": { "greet": "all" } } }

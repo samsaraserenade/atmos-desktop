@@ -180,8 +180,8 @@ function _hydrateCoreStateNamespaces(blob) {
 // ── "State loaded" signal ────────────────────────────────────────────────────
 // load() below dispatches a plain 'app:state-loaded' event once namespaces
 // have settled. That's fine for subscribers registered synchronously at boot —
-// but plugins load via dynamic import() (see js/core/plugin-loader.js),
-// which resolves asynchronously and can easily lose the race against
+// but modules loaded with dynamic import() (the system services, see
+// js/core/system-services.js) resolve asynchronously and can easily lose the race against
 // load()'s dispatch. A subscriber that registers even one tick late would
 // silently miss the event forever with a plain addEventListener.
 //

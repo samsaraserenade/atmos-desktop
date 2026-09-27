@@ -17,7 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { normalizePermissions } = require('../core/js/core/extension-permissions.cjs');
+const { normalizePermissions, normalizeExports } = require('../core/js/core/extension-permissions.cjs');
 
 // Folders Atmos never executes (dev tooling, companion apps, fixtures).
 const NOT_EXECUTED = new Set([
@@ -56,7 +56,7 @@ function scanExtension(dir) {
   const used = {
     node: new Set(), electron: new Set(), ipc: false,
     provides: new Set(), uses: new Set(), resources: new Set(),
-    browser: new Set(), network: new Set(), invokes: new Set(),
+    browser: new Set(), network: new Set(), invokes: new Set(), handles: new Set(),
   };
   const where = {};
   const note = (key, value, file) => { (where[`${key}:${value}`] ||= []).push(file); };
@@ -84,6 +84,7 @@ function scanExtension(dir) {
         if (ELECTRON_APIS.includes(api)) { used.electron.add(api); note('electron', api, rel); }
       }
       if (/\bcontext\.(handle|send)\(/.test(source)) { used.ipc = true; note('ipc', 'true', rel); }
+      for (const [, name] of source.matchAll(/\bcontext\.handle\(\s*['"]([a-z0-9][a-z0-9:-]*)['"]/g)) used.handles.add(name);
       // Names may be string literals or constants defined in the same file.
       const constant = identifier => source.match(new RegExp(`\\b(?:const|let|var)\\s+${identifier}\\s*=\\s*['"]([\\w.-]+)['"]`))?.[1];
       const names = pattern => [...source.matchAll(pattern)].map(([, literal, identifier]) => literal || constant(identifier) || `<${identifier}>`);
@@ -167,6 +168,17 @@ function auditExtension(dir) {
   unused('resources', declared.resources, used.resources);
   unused('browser', declared.browser, used.browser);
   if (declared.ipc && !used.ipc) problems.push(`${id}: declares "ipc": true but registers no IPC handlers`);
+
+  // What it shares with other extensions must exist: IPC handlers it
+  // registers and resource providers it declares.
+  let shared = null;
+  try { shared = normalizeExports(manifest.exports); } catch (error) { problems.push(`${id}: ${error.message}`); }
+  for (const name of Object.keys(shared?.ipc || {})) {
+    if (!used.handles.has(name)) problems.push(`${id}: shares IPC handler '${name}' ("exports.ipc") but never registers it`);
+  }
+  for (const name of Object.keys(shared?.resources || {})) {
+    if (!declared.resources.includes(name)) problems.push(`${id}: shares resource provider '${name}' ("exports.resources") but doesn't declare it`);
+  }
   return problems;
 }
 

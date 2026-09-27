@@ -41,12 +41,13 @@ test('main-process events: own and declared extensions only, forwarded and clean
     return () => listeners.delete(key);
   };
   const { bridge, posted, request } = harness(createExtensionBridge, {
-    extension: { permissions: { invokes: ['service:other'] } },
+    extension: { permissions: { invokes: ['service:other'] }, frame: { reach: { 'service:other': { ipc: [], events: ['ready'], methods: [], resources: [] } } } },
     deps: { onMain },
   });
 
   assert.equal((await request('main.subscribe', 'plugin:probe', 'progress')).error, undefined);
   assert.equal((await request('main.subscribe', 'service:other', 'ready')).error, undefined);
+  assert.match((await request('main.subscribe', 'service:other', 'private')).error.message, /doesn't share its 'private' events with other extensions/);
   const denied = await request('main.subscribe', 'plugin:notes', 'anything');
   assert.equal(denied.error.name, 'AtmosPermissionError');
   const badChannel = await request('main.subscribe', 'plugin:probe', '../x');

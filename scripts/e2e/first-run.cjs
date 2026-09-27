@@ -24,7 +24,7 @@
 // Usage: node scripts/e2e/first-run.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const crypto = require('crypto'), fs = require('fs'), os = require('os'), path = require('path');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, atmosWindow } = require('./isolate.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'first-run'));
@@ -36,7 +36,7 @@ fs.mkdirSync(out, { recursive: true });
 const step = message => { if (process.env.E2E_STEPS) console.error('[step]', message); };
 
 // A build's resources/extensions, made the way after-pack.cjs makes it: the
-// released extensions, system services kept, the rest packed and signed.
+// released extensions, packed and signed (the system services are part of Core).
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-first-run-'));
 const key = crypto.generateKeyPairSync('ed25519');
 const trustedFile = path.join(work, 'trusted-keys.json');
@@ -65,14 +65,14 @@ async function launch(env, { setupSource = null } = {}) {
   if (process.env.E2E_LOGS) app.process().stdout.on('data', d => process.stderr.write(d)), app.process().stderr.on('data', d => process.stderr.write(d));
   // Install and restart relaunches Atmos; here the script starts it again itself.
   await app.evaluate(({ app: electronApp }) => { electronApp.relaunch = () => {}; });
-  let page = await app.firstWindow();
+  let page = await atmosWindow(app);
   // The first start after an upgrade can replace the window's page once
   // (an extension's one-time fresh start); follow it.
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const ok = await page.waitForFunction(() => window.__atmosBootComplete === true, null, { timeout: 30000 }).then(() => true, () => false);
     if (ok) break;
     await new Promise(resolve => setTimeout(resolve, 1000));
-    page = app.windows().find(w => !w.isClosed()) || await app.firstWindow();
+    page = await atmosWindow(app);
   }
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));

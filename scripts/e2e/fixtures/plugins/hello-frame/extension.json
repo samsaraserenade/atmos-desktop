@@ -3,7 +3,7 @@
   "displayName": "Hello Frame",
   "permissions": {
     "network": ["api.example.net"],
-    "invokes": ["service:hello-service", "service:media-metadata"]
+    "invokes": ["service:hello-service", "service:media-metadata", "plugin:matrix-chat"]
   },
   "contributes": {
     "panel": { "label": "Hello Frame", "icon": "icon.svg" },

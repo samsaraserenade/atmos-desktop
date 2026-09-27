@@ -3,7 +3,7 @@
   "description": "Reads tags and cover art from audio files for other extensions.",
   "apiVersion": 2,
   "tier": "first-party",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "atmos",
   "requires": {
     "extensions.manifest": 1
@@ -17,6 +17,12 @@
     "provides": [
       "media-metadata"
     ]
+  },
+  "exports": {
+    "ipc": {
+      "read-file-bytes": "official",
+      "write-cover-art": "official"
+    }
   },
   "library": true
 }

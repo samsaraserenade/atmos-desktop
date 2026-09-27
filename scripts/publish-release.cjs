@@ -67,6 +67,18 @@ function main() {
     const tracked = inDest('ls-files', '-z').split('\0').filter(Boolean);
     const removed = tracked.filter(file => !exported.has(file));
     for (const file of removed) fs.rmSync(path.join(dest, file), { force: true });
+    // Folders those removals leave empty go too: git doesn't track folders,
+    // and a check that lists services/ would find, say, an empty
+    // services/audio once Audio moved into Core.
+    for (const file of removed) {
+      for (let dir = path.dirname(file); dir && dir !== '.'; dir = path.dirname(dir)) {
+        const full = path.join(dest, dir);
+        try {
+          if (fs.readdirSync(full).length) break;
+          fs.rmdirSync(full);
+        } catch { break; }
+      }
+    }
     for (const file of exported) {
       const target = path.join(dest, file);
       fs.mkdirSync(path.dirname(target), { recursive: true });

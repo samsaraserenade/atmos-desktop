@@ -1,7 +1,7 @@
 {
   "apiVersion": 2,
   "tier": "first-party",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "atmos",
   "displayName": "Market Data",
   "description": "Exchange-independent live trades and candles for Atmos services and plugins.",
@@ -47,6 +47,19 @@
     "provides": [
       "market-data"
     ]
+  },
+  "exports": {
+    "ipc": {
+      "subscribe": "official",
+      "unsubscribe": "official",
+      "status": "official",
+      "snapshot": "official",
+      "history": "official",
+      "providers": "official"
+    },
+    "events": {
+      "event": "official"
+    }
   },
   "library": true
 }

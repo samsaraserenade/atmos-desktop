@@ -29,7 +29,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { normalizePermissions, describePermissions } = require('./extension-permissions.cjs');
+const { normalizePermissions, describePermissions, normalizeExports } = require('./extension-permissions.cjs');
 const { createHasher, readIntegrityList, compareFiles } = require('./extension-integrity.cjs');
 const { verifyExtension, SIGNATURE_FILE } = require('./extension-signing.cjs');
 
@@ -157,7 +157,9 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
     }
     let result;
     try {
-      result = entry.source === 'bundled' ? assessBundled(entry, kind)
+      // The system services are part of Atmos's own files, like the rest of Core.
+      result = entry.source === 'core' ? { status: 'verified', reason: null }
+        : entry.source === 'bundled' ? assessBundled(entry, kind)
         : entry.tier === 'first-party' ? assessSigned(entry)
           : assessInstalled(entry, permissions);
     } catch (error) {
@@ -167,9 +169,19 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
     // files are intact (the audit test keeps that from shipping), but it gets
     // no gated main-process access.
     const hasMain = fs.existsSync(path.join(entry.path, 'main.cjs'));
+    // What it shares with other extensions; a malformed block shares
+    // nothing, and no block at all is null (see reachOf()).
+    const declared = entry.manifest && !entry.manifest.invalid ? entry.manifest.exports : undefined;
+    let shared = declared === undefined || declared === null ? null : normalizeExports(undefined);
+    try {
+      if (shared) shared = normalizeExports(declared);
+    } catch (error) {
+      warn(`[extensions] ${entry.kind} '${entry.id}' shares nothing: ${error.message}`);
+    }
     const full = {
       ...result,
       loadable: isLoadable(result.status),
+      exports: shared,
       permissions: permissions || normalizePermissions(undefined),
       permissionSummary: describePermissions(permissions || {}, { hasMain }),
       hasMain,

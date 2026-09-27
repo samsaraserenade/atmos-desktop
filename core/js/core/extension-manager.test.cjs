@@ -73,7 +73,14 @@ function world(t) {
     return { manager, catalog, trust, applied, find, entries };
   }
 
-  return { dir, source, userData, publish, bundle, start, root, stranger: crypto.generateKeyPairSync('ed25519') };
+  /** Re-sign the source's index with another "generated" time. */
+  function resign(generated) {
+    const indexFile = path.join(source, 'index.json');
+    const { keyId: _k, signature: _s, ...body } = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+    fs.writeFileSync(indexFile, JSON.stringify(signIndex({ ...body, generated }, official.privateKey)));
+  }
+
+  return { dir, source, userData, publish, bundle, start, root, resign, stranger: crypto.generateKeyPairSync('ed25519') };
 }
 
 test('install stages a verified package and applies it at the next start, dependencies first', async t => {
@@ -209,11 +216,20 @@ test('sources must be signed with an official key, and packages must match the i
   assert.match(status.sources[0].error, /signature does not match/);
   assert.equal(status.packages.length, 0);
 
-  // A package swapped on the server no longer matches the index.
+  // A package swapped on the server no longer matches the index: a bigger
+  // one is refused before more than the signed size is read, one of the
+  // same size by its hash.
   fs.writeFileSync(indexFile, JSON.stringify(index));
-  fs.appendFileSync(path.join(w.source, 'sounds-1.0.0.atmos'), 'x');
+  const packageFile = path.join(w.source, 'sounds-1.0.0.atmos');
+  const original = fs.readFileSync(packageFile);
+  fs.appendFileSync(packageFile, 'x');
   await s.manager.checkForUpdates();
+  await assert.rejects(s.manager.install('plugin', 'sounds'), /is too large/);
+  const swapped = Buffer.from(original);
+  swapped[swapped.length - 1] ^= 0xff;
+  fs.writeFileSync(packageFile, swapped);
   await assert.rejects(s.manager.install('plugin', 'sounds'), /doesn't match the source's index/);
+  fs.writeFileSync(packageFile, original);
 
   // A package signed with an unknown key, listed by an official index, is refused.
   w.publish('plugin', 'clock', '1.0.0', { key: w.stranger.privateKey });
@@ -380,4 +396,29 @@ test('a first run stays a first run across restarts until the choice is made', t
   m.finishSetup('skipped');
   assert.equal(m.setupPending(), false);
   assert.equal(m.setupDone(), true);
+});
+
+test('a source can\'t be rolled back to an index older than one already seen', async t => {
+  const w = world(t);
+  w.publish('plugin', 'sounds', '1.0.0');
+  w.resign('2026-10-01T12:00:00.000Z');
+  const s = w.start();
+  assert.equal((await s.manager.checkForUpdates()).sources[0].ok, true);
+
+  // An older, genuinely signed index (say, an earlier release marked latest again).
+  w.resign('2026-09-01T12:00:00.000Z');
+  const old = await s.manager.checkForUpdates();
+  assert.equal(old.sources[0].ok, false);
+  assert.match(old.sources[0].error, /older than one Atmos has already seen/);
+  assert.equal(old.packages.length, 0);
+  // Remembered across starts.
+  assert.equal((await w.start().manager.checkForUpdates()).sources[0].ok, false);
+
+  // The same index again, or a newer one, is fine.
+  w.resign('2026-10-01T12:00:00.000Z');
+  assert.equal((await s.manager.checkForUpdates()).sources[0].ok, true);
+  w.resign('2026-11-01T12:00:00.000Z');
+  assert.equal((await s.manager.checkForUpdates()).sources[0].ok, true);
+  w.resign('2026-10-01T12:00:00.000Z');
+  assert.equal((await s.manager.checkForUpdates()).sources[0].ok, false);
 });

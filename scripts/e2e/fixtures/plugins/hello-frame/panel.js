@@ -25,6 +25,15 @@ results.ink = getComputedStyle(document.documentElement).getPropertyValue('--ink
 // SDK calls: a declared service works, undeclared targets are refused.
 results.greet = await atmos.call('service:hello-service', 'greet', 'Sam').catch(e => `ERR ${e.message}`);
 results.invokeUndeclared = await atmos.invoke('plugin:audio-player', 'anything').catch(e => `${e.name}: ${e.message}`);
+// Declared, but not shared with community extensions: refused.
+results.invokeUnshared = await atmos.invoke('service:media-metadata', 'read-file-bytes', '/etc/hostname').then(() => 'read', e => `${e.name}: ${e.message}`);
+results.invokeMatrixFetch = await atmos.invoke('plugin:matrix-chat', 'fetch', { requestId: 'x', url: 'http://127.0.0.1:1/' }).then(() => 'relayed', e => `${e.name}: ${e.message}`);
+results.listenUnshared = await new Promise(resolve => {
+  const origError = console.error;
+  console.error = (...args) => { console.error = origError; resolve(args.join(' ')); };
+  atmos.listen('plugin:matrix-chat', 'anything', () => {});
+  setTimeout(() => { console.error = origError; resolve('no error'); }, 1000);
+});
 results.notifyUndeclared = await atmos.notifications.show({ title: 'Hello' }).then(shown => `shown ${shown}`, e => e.name);
 results.listenUndeclared = await new Promise(resolve => {
   const origError = console.error;

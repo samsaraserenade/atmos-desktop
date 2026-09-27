@@ -160,7 +160,17 @@ function createExtensionHost(dependencies) {
         if (typeof handler !== 'function') throw new Error('Extension IPC handler must be a function');
         const channel = scopedChannel(kind, id, name);
         if (ipcChannels.has(channel)) throw new Error(`Extension IPC handler already registered: ${name}`);
-        dependencies.ipcMain.handle(channel, handler);
+        // Every call arrives with the extension making it ("plugin:<id>",
+        // stamped by Core's frame bridge, or null for the Atmos page
+        // itself) ahead of its arguments. Another extension gets through
+        // only if this one shares the handler with it ("exports.ipc").
+        dependencies.ipcMain.handle(channel, (event, caller, ...args) => {
+          const refusal = dependencies.authorizeInvoke
+            ? dependencies.authorizeInvoke(event, caller ?? null, { kind, id, name })
+            : null;
+          if (refusal) throw new Error(refusal);
+          return handler(event, ...args);
+        });
         ipcChannels.add(channel);
         own.channels.add(channel);
         return channel;

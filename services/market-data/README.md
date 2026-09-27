@@ -22,7 +22,7 @@ service-owned API and event contract.
 ## Renderer API
 
 `api.js` is a client library (`"library": true`; ATMOS_CORE_INTEGRATION.md
-§ 19): it runs in the consumer's document and reaches this service's main
+§ 5): it runs in the consumer's document and reaches this service's main
 process only through the route the consumer hands it.
 
 ```js

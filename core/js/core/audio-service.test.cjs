@@ -1,5 +1,5 @@
 'use strict';
-// The background layer's Audio service (services/audio/engine.js), with a
+// The background layer's Audio service (core/system/audio/engine.js), with a
 // fake <audio> element: channels per owner, loading, seeking once metadata
 // arrives, Blob sources, stopping.
 const test = require('node:test');
@@ -35,7 +35,7 @@ async function loadEngine(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-audio-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
-  fs.copyFileSync(path.join(__dirname, '../../../services/audio/engine.js'), path.join(dir, 'engine.js'));
+  fs.copyFileSync(path.join(__dirname, '../../system/audio/engine.js'), path.join(dir, 'engine.js'));
   const elements = [];
   const host = { children: [], appendChild(child) { this.children.push(child); } };
   globalThis.document = {

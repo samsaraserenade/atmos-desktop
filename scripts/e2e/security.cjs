@@ -3,7 +3,7 @@
 // Usage: node scripts/e2e/security.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), os = require('os'), path = require('path');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, atmosWindow } = require('./isolate.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'security'));
@@ -45,7 +45,7 @@ fs.appendFileSync(path.join(bundled, 'plugins', 'audio-player', 'panel.js'), '\n
 async function launch(root) {
   const app = await electron.launch({ executablePath: ELECTRON, args: [repo, `--extensions-root=${root}`, '--no-sandbox', '--disable-gpu'], cwd: repo, env });
   const logs = []; app.process().stdout.on('data', d => logs.push(String(d))); app.process().stderr.on('data', d => logs.push(String(d)));
-  const page = await app.firstWindow();
+  const page = await atmosWindow(app);
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error' && !/TUNNEL|Failed to load resource|rate fetch/.test(m.text())) errors.push(m.text()); });
   await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
@@ -72,7 +72,8 @@ const frameLoaded = (page, id) => page.frames().some(f => f.url().includes(`ext=
   r.run1 = { 'hello-third': (await list(s.page))['hello-third'], 'sneaky-main': (await list(s.page))['sneaky-main'] };
   r.run1BootFrames = { hello: frameLoaded(s.page, 'hello-third'), sneaky: frameLoaded(s.page, 'sneaky-main') };
   r.sneakyMainRan = fs.existsSync(marker);
-  r.pageProtocol = await s.page.evaluate(() => fetch('atmos-plugin://hello-third/boot.js').then(res => res.status, () => 'error'));
+  // An extension waiting for approval has none of its files served, even to the page.
+  r.pendingFiles = await s.page.evaluate(() => fetch('atmos-ext://plugin-hello-third/plugins/hello-third/boot.js').then(res => res.status, () => 'error'));
   // Hardening.
   r.windowOpen = await s.page.evaluate(() => String(window.open('https://example.com/')));
   r.windowCount = s.app.windows().length;

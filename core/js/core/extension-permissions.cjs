@@ -107,14 +107,90 @@ function describePermissions(permissions, { hasMain = false } = {}) {
     const shown = p.network.slice(0, 4).join(', ');
     lines.push(`Connect to ${shown}${p.network.length > 4 ? ` and ${p.network.length - 4} more` : ''}`);
   }
-  if (p.invokes.length) lines.push(`Call ${p.invokes.map(name => name.split(':')[1]).join(', ')}`);
+  if (p.invokes.length) lines.push(`Use what ${p.invokes.map(name => name.split(':')[1]).join(', ')} share${p.invokes.length === 1 ? 's' : ''} with other extensions`);
   if (p.provides.length) lines.push(`Share ${p.provides.join(', ')} with other extensions`);
   if (p.uses.length) lines.push(`Use ${p.uses.join(', ')} from other extensions`);
   if (!lines.length) lines.push('No special permissions');
   return [...new Set(lines)];
 }
 
+// ── What an extension shares with others ("exports") ─────────────────────
+//
+//   "exports": {
+//     "ipc":       { "read-tags": "official" },   // main.cjs handlers (invoke)
+//     "events":    { "changed": "all" },          // its events: main.cjs context.send() and atmos.events
+//     "methods":   { "greet": "all" },            // methods its boot frame expose()s (call)
+//     "resources": { "example-art": "official" }  // atmos-resource:// providers it registers
+//   }
+//
+// Everything an extension offers is its own until it is listed here. The
+// level says who else may use it: "official" (system and official
+// extensions) or "all" (community extensions too). Another extension also
+// has to declare the target in "permissions.invokes". An extension always
+// reaches everything of its own, and the Atmos page (Core) everything.
+//
+// An extension with no "exports" block at all (made before Atmos 0.12)
+// shares everything with official extensions, as before, and nothing with
+// community ones: an official extension that hasn't been updated yet keeps
+// working with the others. Its reach lists are then ["*"].
+
+const EXPORT_KINDS = ['ipc', 'events', 'methods', 'resources'];
+const EXPORT_LEVELS = ['official', 'all'];
+const EXPORT_NAME = /^[a-z0-9][a-z0-9:._-]*$/i;
+
+/** Validate and normalise an "exports" block: { ipc: { name: level }, ... }. Missing means nothing shared. */
+function normalizeExports(exportsBlock) {
+  const out = Object.fromEntries(EXPORT_KINDS.map(kind => [kind, {}]));
+  if (exportsBlock === undefined || exportsBlock === null) return out;
+  if (typeof exportsBlock !== 'object' || Array.isArray(exportsBlock)) throw new TypeError('exports must be an object');
+  const unknown = Object.keys(exportsBlock).filter(key => !EXPORT_KINDS.includes(key));
+  if (unknown.length) throw new TypeError(`unknown exports ${unknown.map(key => `"${key}"`).join(', ')} (use ${EXPORT_KINDS.join(', ')})`);
+  for (const kind of EXPORT_KINDS) {
+    const block = exportsBlock[kind];
+    if (block === undefined) continue;
+    if (!block || typeof block !== 'object' || Array.isArray(block)) throw new TypeError(`exports.${kind} must be an object of name: "official" | "all"`);
+    for (const [name, level] of Object.entries(block)) {
+      if (!EXPORT_NAME.test(name)) throw new TypeError(`exports.${kind} has an invalid name "${name}"`);
+      if (!EXPORT_LEVELS.includes(level)) throw new TypeError(`exports.${kind}.${name} must be "official" or "all"`);
+      out[kind][name] = level;
+    }
+  }
+  return out;
+}
+
+/** Whether an extension of `tier` may use something exported at `level`. */
+function levelAllows(level, tier) {
+  if (level === 'all') return true;
+  if (level === 'official') return tier === 'system' || tier === 'first-party';
+  return false;
+}
+
+/**
+ * What `caller` ({ kind, id, tier, invokes }) may use of `target`
+ * ({ kind, id, exports }): { ipc, events, methods, resources }, each a list
+ * of names, or ["*"] for everything (a target with no "exports" block,
+ * to an official caller). Its own extension: `null` (everything). Not
+ * declared in "invokes": nothing.
+ */
+
+/** Whether a reach list (from reachOf) includes `name`. */
+function reaches(list, name) {
+  return Array.isArray(list) && (list.includes('*') || list.includes(name));
+}
+function reachOf(caller, target) {
+  if (caller.kind === target.kind && caller.id === target.id) return null;
+  const empty = Object.fromEntries(EXPORT_KINDS.map(kind => [kind, []]));
+  if (!(caller.invokes || []).includes(`${target.kind}:${target.id}`)) return empty;
+  if (target.exports === undefined || target.exports === null) {
+    return levelAllows('official', caller.tier) ? Object.fromEntries(EXPORT_KINDS.map(kind => [kind, ['*']])) : empty;
+  }
+  let shared;
+  try { shared = normalizeExports(target.exports); } catch { return empty; }
+  return Object.fromEntries(EXPORT_KINDS.map(kind => [kind,
+    Object.entries(shared[kind]).filter(([, level]) => levelAllows(level, caller.tier)).map(([name]) => name).sort()]));
+}
+
 module.exports = {
-  BASELINE_BROWSER, BROWSER_PERMISSIONS, CONTEXT_ELECTRON, KEYS,
-  normalizePermissions, describePermissions,
+  BASELINE_BROWSER, BROWSER_PERMISSIONS, CONTEXT_ELECTRON, KEYS, EXPORT_KINDS,
+  normalizePermissions, describePermissions, normalizeExports, levelAllows, reachOf, reaches,
 };

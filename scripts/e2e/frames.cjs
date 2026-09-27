@@ -3,7 +3,7 @@
 // Usage: node scripts/e2e/frames.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), os = require('os'), path = require('path');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, atmosWindow } = require('./isolate.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'frames'));
@@ -15,7 +15,7 @@ fs.cpSync(path.join(__dirname, 'fixtures'), installRoot, { recursive: true });
 async function launch() {
   const app = await electron.launch({ executablePath: ELECTRON, args: [repo, `--extensions-root=${repo}`, '--no-sandbox', '--disable-gpu'], cwd: repo, env });
   const logs = []; app.process().stdout.on('data', d => logs.push(String(d))); app.process().stderr.on('data', d => logs.push(String(d)));
-  const page = await app.firstWindow();
+  const page = await atmosWindow(app);
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('response', res => { if (res.status() >= 400) errors.push(`HTTP ${res.status()} ${res.url()}`); });
@@ -54,6 +54,13 @@ const frameFor = (page, ext, surface) => page.frames().find(f => f.url().include
   for (let i = 0; i < 40 && !(panel = frameFor(s.page, 'plugin:hello-frame', 'panel')); i++) await s.page.waitForTimeout(100);
   await panel.waitForFunction(() => window.__results?.done === true, null, { timeout: 15000 }).catch(() => {});
   r.panel = await panel.evaluate(() => window.__results).catch(e => `no panel frame: ${e.message}`);
+  // The main process checks who is calling too: the page asking on behalf
+  // of the community extension gets the same refusal (the bridge is bypassed).
+  r.mainRefusesUnshared = await s.page.evaluate(() => window.atmosCore.invokeExtensionAs('plugin:hello-frame', 'service', 'media-metadata', 'read-file-bytes', '/etc/hostname')
+    .then(() => 'read', e => e.message.replace(/^Error invoking remote method '[^']+': /, '')));
+  r.mainRefusesImpostor = await s.page.evaluate(() => window.atmosCore.invokeExtensionAs('plugin:nobody', 'service', 'media-metadata', 'read-file-bytes', '/etc/hostname')
+    .then(() => 'read', e => e.message.replace(/^Error invoking remote method '[^']+': /, '')));
+  r.sharingSummary = await s.page.evaluate(async () => (await window.atmosCore.listPlugins()).find(p => p.id === 'hello-frame')?.sharing);
   await s.page.waitForTimeout(600);
   await s.page.screenshot({ path: path.join(out, '70-frame-panel.png') });
 

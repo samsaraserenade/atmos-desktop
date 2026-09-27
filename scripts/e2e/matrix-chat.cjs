@@ -8,19 +8,19 @@
 // Usage: node scripts/e2e/matrix-chat.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), path = require('path');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, savedFrameState, forgetFrameState, atmosWindow } = require('./isolate.cjs');
 const { createHomeserver } = require('./fake-homeserver.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'matrix-chat'));
 const ELECTRON = process.env.ELECTRON_PATH || require('electron');
 fs.mkdirSync(out, { recursive: true });
-const { home, env } = isolatedEnv('atmos-matrix-');
+const { home, env, installRoot } = isolatedEnv('atmos-matrix-');
 
 async function launch() {
   const app = await electron.launch({ executablePath: ELECTRON, args: [repo, `--extensions-root=${repo}`, '--no-sandbox', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'], cwd: repo, env });
   const logs = []; app.process().stdout.on('data', d => logs.push(String(d))); app.process().stderr.on('data', d => logs.push(String(d)));
-  const page = await app.firstWindow();
+  const page = await atmosWindow(app);
   const errors = [];
   page.on('pageerror', e => errors.push(`page: ${e.message}`));
   page.on('console', m => { if (['error', 'warning'].includes(m.type()) && !/TUNNEL|rate fetch|save\(\) called before|Electron Security Warning|VPS unavailable|images\.unsplash\.com/.test(m.text())) errors.push(`${m.type()}: ${m.text()}`); });
@@ -41,7 +41,12 @@ async function waitFor(page, surface, check = 'true', timeout = 20000) {
   return null;
 }
 const activate = (page, id) => page.evaluate(async id => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin(id), id);
-const savedState = page => page.evaluate(() => JSON.parse(localStorage.getItem('samsara_v4') || '{}').extensionState?.['matrix-chat'] ?? null);
+// Matrix Chat's atmos.state, as saved (its own file; written shortly after a change).
+const savedState = async page => {
+  await page.waitForTimeout(400);
+  const data = savedFrameState(installRoot, 'plugin', 'matrix-chat');
+  return data ? { data } : null;
+};
 // Open Atmos's sidebar and the Matrix Chat section, as you would.
 const openRoomsWidget = page => page.evaluate(async () => {
   (await import('atmos-core/core/sidebar-shell.js')).openSidebar();
@@ -89,6 +94,9 @@ const r = {};
   }, { homeserver });
   r.seededDatabases = await pageDatabases(s.page);
   await s.app.close();
+  // This setup run's framed Matrix Chat saved its own state already; forget
+  // it, so the next start takes what the page left, as on a first start.
+  forgetFrameState(installRoot, 'plugin', 'matrix-chat');
 
   // 2. Fresh start.
   s = await launch();

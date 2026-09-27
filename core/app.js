@@ -4,11 +4,11 @@ import { load, forgetStateNamespaces }    from './js/persist.js';
 import './js/core/context-menu.js';
 import './js/core/sidebar-shell.js';
 import './js/core/appearance.js';
-import { loadServiceSidebars,
-         loadServiceSettings,
-         loadServicePersist,
-         loadServiceBoot,
-         listInstalledServices }           from './js/core/service-loader.js';
+import { loadSystemState,
+         loadSystemSettings,
+         loadSystemBoot }                  from './js/core/system-services.js';
+import { listInstalledPlugins,
+         listInstalledServices }           from './js/core/extension-list.js';
 import { ensureDefaultPanelPlugin,
          activatePanelPlugin,
          getPersistedPanelPluginId,
@@ -18,11 +18,6 @@ import { ensureDefaultPanelPlugin,
 import { openOnboardingSettings }           from './js/core/settings-menu.js';
 import { initTaskView }                     from './js/core/task-view.js';
 import { runBootHooks }                    from './js/core/boot-registry.js';
-import { loadPluginPanelsAndBoot,
-         loadPluginPersist,
-         loadPluginSidebars,
-         loadPluginSettings,
-         listInstalledPlugins }             from './js/core/plugin-loader.js';
 import { loadFramedExtensions }           from './js/core/extension-frame-host.js';
 
 // ── Title bar controls ────────────────────────────────────────────────────────
@@ -91,9 +86,8 @@ document.getElementById('titlebar')?.addEventListener('dblclick', event => {
   window.atmosCore?.toggleFullscreen();
 });
 
-// Register extension persistence before loading the shared state blob.
-await loadServicePersist();
-await loadPluginPersist();
+// Register the system services' state before loading the shared state blob.
+await loadSystemState();
 load();
 // Extensions removed with their data at this start (extension-manager.cjs):
 // forget their state namespaces (a plugin and a service may use kind-id).
@@ -104,22 +98,13 @@ try {
   console.warn('[app] could not clear removed extensions\' data:', error.message);
 }
 
-// UI contributions load only after every extension has installed its state
-// defaults and persistence handlers.
-await Promise.all([
-  loadServiceSidebars(),
-  loadServiceSettings(),
-  loadPluginSidebars(),
-  loadPluginSettings(),
-]);
+// The system services' Appearance settings, once state is loaded, then their
+// boot hooks (the background layer: Audio and Wallpaper).
+await loadSystemSettings();
+await loadSystemBoot();
 
-// Discover panel and boot entry points by convention. Services' boot hooks
-// (the background layer: Wallpaper and Audio) register first.
-await loadServiceBoot();
-await loadPluginPanelsAndBoot();
-
-// Framed extensions (third-party, and first-party opted into frames) run in
-// sandboxed iframes; register their surfaces with the same registries.
+// Every extension runs in sandboxed frames; register their surfaces with
+// Core's registries.
 loadFramedExtensions({ plugins: await listInstalledPlugins(), services: await listInstalledServices() });
 
 // Preserve the restored selection before mounting the registry default.

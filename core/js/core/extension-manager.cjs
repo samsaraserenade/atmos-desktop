@@ -22,6 +22,10 @@
  *
  * Checking for updates only reads the indexes; nothing downloads until
  * the user presses Install or Update.
+ *
+ * An index is never older than one already seen from the same source (its
+ * signed "generated" time), so a source can't be rolled back to an old
+ * index that hides updates.
  */
 
 const crypto = require('crypto');
@@ -107,6 +111,7 @@ function createExtensionManager({
   fetchUrl = null, installed = () => [], warn = message => console.warn(message),
 }) {
   const files = {
+    seen: path.join(userData, 'extension-index-seen.json'),
     sources: path.join(userData, 'extension-sources.json'),
     pending: path.join(userData, 'extension-pending.json'),
     applied: path.join(userData, 'extension-applied.json'),
@@ -193,9 +198,31 @@ function createExtensionManager({
     if (index?.format !== 1 || !Array.isArray(index.packages)) throw new Error('index.json has an unsupported format');
     const signature = checkIndexSignature(index, trustedKeys);
     if (!signature.ok) throw new Error(signature.reason);
+    checkFreshness(source.location, index.generated);
     const packages = index.packages.map(readIndexEntry).filter(Boolean)
       .map(item => ({ ...item, source: source.location }));
     return { name: typeof index.name === 'string' ? index.name : null, packages };
+  }
+
+  /**
+   * Refuse an index older than the newest one already seen from the same
+   * source (its signed "generated" time), and remember a newer one. Someone
+   * who controls where a source points can then serve an old, genuinely
+   * signed index to hide updates only until Atmos has seen a newer one.
+   */
+  function checkFreshness(location, generated) {
+    const time = typeof generated === 'string' ? Date.parse(generated) : NaN;
+    if (!Number.isFinite(time)) return;
+    const seen = readJson(files.seen, null)?.sources || {};
+    const newest = Date.parse(seen[location] || '');
+    if (Number.isFinite(newest) && time < newest) {
+      throw new Error(`This source's index (${generated}) is older than one Atmos has already seen (${seen[location]}), so it was not used`);
+    }
+    if (!Number.isFinite(newest) || time > newest) {
+      try { writeJson(files.seen, { format: 1, sources: { ...seen, [location]: new Date(time).toISOString() } }); } catch (error) {
+        warn(`[extensions] could not record ${location}'s index time: ${error.message}`);
+      }
+    }
   }
 
   // ── What is installed, pending and available ──────────────────────────
@@ -372,7 +399,8 @@ function createExtensionManager({
 
   /** Download, check and unpack one package into staging. */
   async function stage(item) {
-    const buffer = await readFrom(item.source, item.file, MAX_PACKAGE_BYTES);
+    // Never more than the signed index says the package is.
+    const buffer = await readFrom(item.source, item.file, item.size);
     if (buffer.length !== item.size || sha256(buffer) !== item.sha256) throw new Error(`${item.file} doesn't match the source's index`);
     const entries = readPackage(buffer);
     const target = path.join(dirs.staging, `${item.kind}-${item.id}-${item.version}`);

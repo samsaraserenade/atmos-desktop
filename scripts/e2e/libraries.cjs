@@ -5,7 +5,7 @@
 // Usage: node scripts/e2e/libraries.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), path = require('path');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, atmosWindow } = require('./isolate.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'libraries'));
@@ -55,6 +55,8 @@ try {
   metadata.setInvoke((channel, ...args) => atmos.invoke('service:media-metadata', channel, ...args));
   const tags = await metadata.readTags(${JSON.stringify(song)});
   results.title = tags.title ?? null;
+  // Media Metadata shares its file handlers with official extensions only.
+  results.readRefused = await atmos.invoke('service:media-metadata', 'read-file-bytes', ${JSON.stringify(song)}).then(() => 'read', error => error.message);
 } catch (error) { results.metadata = 'ERR ' + error.message; }
 results.done = true;
 `);
@@ -62,7 +64,7 @@ results.done = true;
 async function launch() {
   const app = await electron.launch({ executablePath: ELECTRON, args: [repo, `--extensions-root=${repo}`, '--no-sandbox', '--disable-gpu'], cwd: repo, env });
   const logs = []; app.process().stdout.on('data', d => logs.push(String(d))); app.process().stderr.on('data', d => logs.push(String(d)));
-  const page = await app.firstWindow();
+  const page = await atmosWindow(app);
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('response', res => { if (res.status() >= 400) errors.push(`HTTP ${res.status()} ${res.url()}`); });

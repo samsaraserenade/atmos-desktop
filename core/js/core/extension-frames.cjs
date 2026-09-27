@@ -4,12 +4,14 @@
  * each frame is told about itself.
  *
  * Runtimes
- *   page   — the extension's code runs in the Atmos page itself and uses
- *            Core modules directly. System extensions always; first-party
- *            extensions until they migrate (manifest "runtime": "frame").
- *   frame  — every surface (panel, sidebar widget, settings, boot) runs in
- *            its own sandboxed <iframe> and talks to Core only through the
- *            Atmos SDK bridge. Third-party extensions always.
+ *   page    — the system services (core/system): part of Core, their code
+ *             runs in the Atmos page. Nothing else does.
+ *   library — a first-party library service: its modules run inside the
+ *             frames that import them (atmos.library()); it has no frames.
+ *   frame   — every other extension: each surface (panel, sidebar widget,
+ *             settings, boot) runs in its own sandboxed <iframe> and talks
+ *             to Core only through the Atmos SDK bridge. "runtime": "frame"
+ *             in a manifest is what every extension gets now, and ignored.
  *
  * Origins
  *   atmos-ext://first-party         shared by framed first-party extensions
@@ -59,8 +61,8 @@ function isLibrary(entry) {
 
 function resolveRuntime(entry) {
   if (entry.tier === 'system') return 'page';
-  if (entry.tier === 'third-party') return 'frame';
-  return entry.manifest?.runtime === 'frame' ? 'frame' : 'page';
+  if (entry.tier !== 'third-party' && isLibrary(entry)) return 'library';
+  return 'frame';
 }
 
 /**
@@ -74,9 +76,79 @@ function isIsolated(entry) {
   return entry.tier === 'first-party' && entry.manifest?.isolation === 'origin';
 }
 
+/**
+ * An isolated extension whose data couldn't be moved out of the shared
+ * origin this start (entry.originFallback, set by main.js) runs from the
+ * shared origin once more, where its data still is.
+ */
 function frameHost(entry) {
   if (entry.tier === 'third-party') return `${entry.kind}-${entry.id}`;
-  return isIsolated(entry) ? `${FIRST_PARTY_HOST}-${entry.kind}-${entry.id}` : FIRST_PARTY_HOST;
+  return isIsolated(entry) && !entry.originFallback ? `${FIRST_PARTY_HOST}-${entry.kind}-${entry.id}` : FIRST_PARTY_HOST;
+}
+
+const STORAGE_PATTERN = item => typeof item === 'string' && item.length > 0 && item.length <= 100
+  && (!item.includes('*') || (item.indexOf('*') === item.length - 1 && item.length > 4));
+
+/**
+ * What an isolated extension kept in the shared first-party origin and takes
+ * with it to its own ("legacyStorage.sharedOrigin": { "indexedDB": [...],
+ * "localStorage": [...] }, exact names or "prefix*" of at least four
+ * characters): Core copies it across once, before the extension's frames
+ * start there, and deletes the shared copies at a later start. Null when
+ * there is nothing to move.
+ */
+function sharedOriginMove(entry) {
+  if (!isIsolated(entry)) return null;
+  const declared = entry.manifest?.legacyStorage?.sharedOrigin;
+  if (!declared || typeof declared !== 'object') return null;
+  const list = value => (Array.isArray(value) ? [...new Set(value.filter(STORAGE_PATTERN))] : []);
+  const move = { indexedDB: list(declared.indexedDB), localStorage: list(declared.localStorage) };
+  return move.indexedDB.length || move.localStorage.length ? move : null;
+}
+
+/**
+ * Run in Core's hidden storage page (atmos-app://local/__atmos/storage.html):
+ * opens the shared origin's frame and, for a copy, the extension's own, and
+ * has them copy `spec` across (or, with `remove`, delete those patterns from
+ * the shared origin). Resolves what the export frame reports.
+ */
+function storageHostScript({ from, to = null, spec = null, remove = null }) {
+  return `(async (from, to, spec, remove) => {
+    const load = src => new Promise((resolve, reject) => {
+      const frame = document.createElement('iframe');
+      const timer = setTimeout(() => reject(new Error('a storage frame did not load')), 20000);
+      frame.onload = () => { clearTimeout(timer); resolve(frame); };
+      frame.src = src;
+      document.body.append(frame);
+    });
+    const exporter = await load(from + '/__atmos/move.html?role=export');
+    const result = new Promise((resolve, reject) => window.addEventListener('message', event => {
+      if (event.source !== exporter.contentWindow || !event.data?.atmosMoveResult) return;
+      if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
+    }));
+    if (remove) {
+      exporter.contentWindow.postMessage({ atmosMove: 'remove', ...remove }, from);
+      return result;
+    }
+    const importer = await load(to + '/__atmos/move.html?role=import');
+    const channel = new MessageChannel();
+    importer.contentWindow.postMessage({ atmosMove: 'port' }, to, [channel.port2]);
+    exporter.contentWindow.postMessage({ atmosMove: 'export', spec }, from, [channel.port1]);
+    return result;
+  })(${JSON.stringify(from)}, ${JSON.stringify(to)}, ${JSON.stringify(spec)}, ${JSON.stringify(remove)})`;
+}
+
+/** The Core pages that copy an extension's storage from one origin to another (extension-origin-move.js). */
+function moveDocument(role) {
+  return '<!doctype html>\n<html><head><meta charset="utf-8"><title></title>'
+    + `<script src="/__atmos/move.js" data-role="${role === 'import' ? 'import' : 'export'}"></script>`
+    + '</head><body></body></html>\n';
+}
+
+function moveCsp(role) {
+  return role === 'import'
+    ? "default-src 'none'; script-src 'self'"
+    : `default-src 'none'; script-src 'self'; frame-src ${SCHEME}:`;
 }
 
 /**
@@ -87,24 +159,7 @@ function frameHost(entry) {
 function sharedOriginCleanupPatterns(entry) {
   if (!isIsolated(entry)) return [];
   const declared = entry.manifest?.legacyStorage?.sharedOriginIndexedDB;
-  return Array.isArray(declared)
-    ? declared.filter(item => typeof item === 'string' && item.length <= 100
-      && (!item.includes('*') || (item.indexOf('*') === item.length - 1 && item.length > 4)))
-    : [];
-}
-
-/** Script run in the shared first-party origin: deletes the databases matching
- *  `patterns` (exact names, or "prefix*"), and resolves the names deleted. */
-function sharedOriginCleanupScript(patterns) {
-  return `(async patterns => {
-    const matches = name => patterns.some(p => p.endsWith('*') ? name.startsWith(p.slice(0, -1)) : name === p);
-    const names = (await indexedDB.databases()).map(db => db.name).filter(name => name && matches(name));
-    await Promise.all(names.map(name => new Promise(resolve => {
-      const request = indexedDB.deleteDatabase(name);
-      request.onsuccess = request.onerror = request.onblocked = () => resolve();
-    })));
-    return names;
-  })(${JSON.stringify(patterns)})`;
+  return Array.isArray(declared) ? declared.filter(STORAGE_PATTERN) : [];
 }
 
 function frameOrigin(entry) {
@@ -295,7 +350,7 @@ function frameDocument() {
 module.exports = {
   SCHEME, FIRST_PARTY_HOST, SURFACES, UNSERVED_DIRS, IMPORT_MAP_HASH,
   isLibrary, isIsolated, resolveRuntime, frameHost, frameOrigin, extensionPath,
-  sharedOriginCleanupPatterns, sharedOriginCleanupScript,
+  sharedOriginCleanupPatterns, sharedOriginMove, moveDocument, moveCsp, storageHostScript,
   frameCsp, framePermissionsPolicy, describeContributions, frameDocument,
   safeRelative, plainLabel, networkSources,
 };

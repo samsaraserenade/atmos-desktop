@@ -9,15 +9,21 @@ const path = require('node:path');
 const { auditExtension, auditLibrary } = require('./extension-audit.cjs');
 
 const repo = path.resolve(__dirname, '..');
-const extensions = ['plugins', 'services'].flatMap(kind =>
+// The bundled plugins and services, and the system services (part of Core, in core/system).
+const extensions = ['plugins', 'services', path.join('core', 'system')].flatMap(kind =>
   fs.readdirSync(path.join(repo, kind), { withFileTypes: true })
     .filter(entry => entry.isDirectory() && fs.existsSync(path.join(repo, kind, entry.name, 'extension.json')))
     .map(entry => path.join(kind, entry.name)));
+const refOf = relative => {
+  const parts = relative.split(path.sep);
+  return `${parts[0] === 'plugins' ? 'plugin' : 'service'}:${parts.at(-1)}`;
+};
 
 test('bundled extensions have a tier and declare their permissions', () => {
   for (const relative of extensions) {
     const manifest = JSON.parse(fs.readFileSync(path.join(repo, relative, 'extension.json'), 'utf8'));
-    assert.ok(['system', 'first-party'].includes(manifest.tier), `${relative}: tier must be system or first-party`);
+    const inCore = relative.startsWith(path.join('core', 'system'));
+    assert.equal(manifest.tier, inCore ? 'system' : 'first-party', `${relative}: tier must be ${inCore ? 'system (it is in core/system)' : 'first-party (system services live in core/system)'}`);
     assert.ok(manifest.permissions && typeof manifest.permissions === 'object', `${relative}: missing "permissions"`);
   }
 });
@@ -28,12 +34,11 @@ test('bundled extensions have a tier and declare their permissions', () => {
 test('bundled extensions have a version, a publisher and complete dependencies', () => {
   const { isValidVersion, satisfies } = require('../core/js/core/extension-version.cjs');
   const { normalizeDependencies } = require('../core/js/core/extension-dependencies.cjs');
-  const manifests = new Map(extensions.map(relative => {
-    const [kind, id] = relative.split(path.sep);
-    return [`${kind === 'plugins' ? 'plugin' : 'service'}:${id}`, JSON.parse(fs.readFileSync(path.join(repo, relative, 'extension.json'), 'utf8'))];
-  }));
+  const manifests = new Map(extensions.map(relative => [refOf(relative), JSON.parse(fs.readFileSync(path.join(repo, relative, 'extension.json'), 'utf8'))]));
   const release = JSON.parse(fs.readFileSync(path.join(repo, 'release.json'), 'utf8'));
-  const released = new Set([...release.plugins.map(id => `plugin:${id}`), ...release.services.map(id => `service:${id}`)]);
+  // The system services always go with Core.
+  const system = extensions.filter(relative => relative.startsWith(path.join('core', 'system'))).map(refOf);
+  const released = new Set([...release.plugins.map(id => `plugin:${id}`), ...release.services.map(id => `service:${id}`), ...system]);
   const problems = [];
   for (const [ref, manifest] of manifests) {
     if (!isValidVersion(manifest.version)) problems.push(`${ref}: "version" must be MAJOR.MINOR.PATCH`);
@@ -101,4 +106,22 @@ test('the library audit catches entry points, foreign imports, Atmos globals and
   }
   assert.doesNotMatch(problems, /ok\.js|main\.cjs/);
   assert.deepEqual(auditLibrary(lib, { allowStorage: ['api.js'] }).filter(p => /persists/.test(p)), []);
+});
+
+test('the audit checks that what an extension shares exists', t => {
+  const os = require('node:os');
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-exports-')), 'sharer');
+  t.after(() => fs.rmSync(path.dirname(dir), { recursive: true, force: true }));
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'main.cjs'), "module.exports = context => { context.handle('read-tags', () => 1); };");
+  const write = exportsBlock => fs.writeFileSync(path.join(dir, 'extension.json'), JSON.stringify({ permissions: { ipc: true }, exports: exportsBlock }));
+  write({ ipc: { 'read-tags': 'official' } });
+  assert.deepEqual(auditExtension(dir), []);
+  write({ ipc: { 'read-tags': 'official', 'read-any-file': 'all' }, resources: { art: 'official' } });
+  assert.deepEqual(auditExtension(dir), [
+    "sharer: shares IPC handler 'read-any-file' (\"exports.ipc\") but never registers it",
+    "sharer: shares resource provider 'art' (\"exports.resources\") but doesn't declare it",
+  ]);
+  write({ ipc: { 'read-tags': 'everyone' } });
+  assert.deepEqual(auditExtension(dir), ['sharer: exports.ipc.read-tags must be "official" or "all"']);
 });

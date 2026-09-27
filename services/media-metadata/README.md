@@ -18,7 +18,7 @@ A consumer in the Atmos page passes Core's bridge instead:
 `(channel, ...args) => window.atmos.extensionInvoke('service', 'media-metadata', channel, ...args)`
 (Audio Player does this in `src/media-metadata.js`). Until `setInvoke()` is
 called, `readTags()` returns `{}` and `writeCoverArt()` fails. The library
-follows the library rules in ATMOS_CORE_INTEGRATION.md § 19.
+follows the library rules in ATMOS_CORE_INTEGRATION.md § 5.
 
 Renderer exports:
 

@@ -6,13 +6,13 @@
 // Usage: node scripts/e2e/audio-player.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), path = require('path'), zlib = require('zlib');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, forgetFrameState, atmosWindow } = require('./isolate.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'audio-player'));
 const ELECTRON = process.env.ELECTRON_PATH || require('electron');
 fs.mkdirSync(out, { recursive: true });
-const { home, env } = isolatedEnv('atmos-audio-');
+const { home, env, installRoot } = isolatedEnv('atmos-audio-');
 
 // Three short tones in <music>/Tester/Test Album.
 function wav(file, frequency, seconds = 2.5, rate = 8000) {
@@ -50,7 +50,7 @@ function png([r, g, b], size = 32) {
 async function launch() {
   const app = await electron.launch({ executablePath: ELECTRON, args: [repo, `--extensions-root=${repo}`, '--no-sandbox', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'], cwd: repo, env });
   const logs = []; app.process().stdout.on('data', d => logs.push(String(d))); app.process().stderr.on('data', d => logs.push(String(d)));
-  const page = await app.firstWindow();
+  const page = await atmosWindow(app);
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('response', res => { if (res.status() >= 400) errors.push(`HTTP ${res.status()} ${res.url()}`); });
@@ -129,6 +129,14 @@ const r = {};
     request.onerror = () => resolve(false);
   })).catch(() => {});
   await s.app.close();
+  // Its state file from this setup run goes too (Atmos 0.12 keeps it apart
+  // from the page), and so does the readable-folder list its main process
+  // may already have created: it takes over a library's folders only when
+  // it creates that list, which would otherwise have happened here, empty,
+  // whenever this setup run got that far (why this check used to find no
+  // playable files now and then).
+  forgetFrameState(installRoot, 'plugin', 'audio-player');
+  fs.rmSync(path.join(installRoot, 'audio-player', 'library-folders.json'), { force: true });
 
   // 2. The background layer and framed Audio Player.
   s = await launch();

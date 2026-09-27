@@ -21,4 +21,33 @@ function isolatedEnv(prefix) {
   return { home, installRoot, env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config') } };
 }
 
-module.exports = { isolatedEnv };
+/**
+ * An extension's saved atmos.state (Atmos 0.12 keeps each in a file of its
+ * own in user data, which is the install folder here), or null.
+ */
+function savedFrameState(installRoot, kind, id) {
+  try { return JSON.parse(fs.readFileSync(path.join(installRoot, 'extension-state', `${kind}-${id}.json`), 'utf8')).data ?? null; }
+  catch { return null; }
+}
+
+/** Forget an extension's saved atmos.state, as if it had never run in frames. */
+function forgetFrameState(installRoot, kind, id) {
+  fs.rmSync(path.join(installRoot, 'extension-state', `${kind}-${id}.json`), { force: true });
+}
+
+/**
+ * The Atmos window's page. Not app.firstWindow(): Atmos also opens hidden
+ * pages of its own at startup (moving or cleaning up extension storage),
+ * which Playwright lists as windows too, and they close again.
+ */
+async function atmosWindow(app, { timeout = 30000 } = {}) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const page = app.windows().find(w => !w.isClosed() && w.url().startsWith('atmos-app://local/index.html'));
+    if (page) return page;
+    if (Date.now() > deadline) throw new Error('the Atmos window did not open');
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+module.exports = { isolatedEnv, savedFrameState, forgetFrameState, atmosWindow };

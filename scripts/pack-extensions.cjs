@@ -17,8 +17,20 @@
  *            --all packs every extension except system ones (they are part of Core).
  *   --from   the tree to pack (default: this repo). Point it at an export
  *            (scripts/export-release.cjs) to sign exactly what is published.
- *   --out    default: dist/packages
- *   --key    default: $ATMOS_SIGNING_KEY
+ *   --out    default: dist/packages. Packages and index.json already there
+ *            are cleared first, so the signed index lists only this run's
+ *            packages; --keep adds to them instead.
+ *   --key    default: $ATMOS_SIGNING_KEY. It must be an official key in
+ *            core/trusted-keys.json (--untrusted allows another, for tests).
+ *   --previous  a folder or https:// source to compare with (default: the
+ *            official source in the tree's core/extension-sources.json). An
+ *            extension whose files changed while its version didn't, or
+ *            whose version went down, stops the run: existing installs would
+ *            never see the change. --same-version allows it. Unreachable:
+ *            a warning, and the run carries on.
+ *
+ * Extensions with uncommitted changes in --from (a git checkout) are
+ * refused, so what is signed is what was pushed; --allow-dirty allows it.
  */
 const fs = require('fs');
 const os = require('os');
@@ -30,6 +42,10 @@ const { signExtension, verifyExtension, loadTrustedKeys, signIndex, SIGNATURE_FI
 const { packFolder, readPackage, PACKAGE_EXTENSION } = require('../core/js/core/extension-package.cjs');
 
 const fail = message => { console.error(`pack: ${message}`); process.exit(1); };
+const { spawnSync } = require('child_process');
+const { keyIdFor } = require('../core/js/core/extension-signing.cjs');
+const { compareVersions } = require('../core/js/core/extension-version.cjs');
+const FLAGS = { '--all': 'all', '--keep': 'keep', '--untrusted': 'untrusted', '--same-version': 'sameVersion', '--allow-dirty': 'allowDirty' };
 
 /** electron-builder style glob (relative to the kind folder) → RegExp. */
 function globToRegExp(glob) {
@@ -72,13 +88,17 @@ function copyBundled(root, kind, id, dest, filters) {
 }
 
 function parseArgs(argv) {
-  const args = { ids: [], all: false, key: process.env.ATMOS_SIGNING_KEY || null, out: path.join(repo, 'dist', 'packages'), from: repo };
+  const args = {
+    ids: [], all: false, keep: false, untrusted: false, sameVersion: false, allowDirty: false, previous: null,
+    key: process.env.ATMOS_SIGNING_KEY || null, out: path.join(repo, 'dist', 'packages'), from: repo,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--all') args.all = true;
-    else if (['--key', '--out', '--from'].includes(arg)) {
+    if (FLAGS[arg]) args[FLAGS[arg]] = true;
+    else if (['--key', '--out', '--from', '--previous'].includes(arg)) {
       if (!argv[i + 1]) fail(`${arg} needs a value`);
-      args[arg.slice(2)] = path.resolve(argv[i += 1]);
+      const value = argv[i += 1];
+      args[arg.slice(2)] = /^https:\/\//i.test(value) ? value : path.resolve(value);
     } else if (arg.startsWith('--')) fail(`unknown option ${arg}`);
     else args.ids.push(arg);
   }
@@ -124,11 +144,25 @@ async function main() {
     if (!/^\d+\.\d+\.\d+/.test(manifest.version || '')) fail(`${kind}/${id} has no "version" in extension.json`);
     if (manifest.publisher !== 'atmos') fail(`${kind}/${id} must have "publisher": "atmos"`);
   }
+  if (!args.allowDirty) {
+    const dirty = uncommitted(args.from, selected);
+    if (dirty.length) fail(`uncommitted changes in ${dirty.join(', ')} (commit them, or --allow-dirty)`);
+  }
   const privateKey = await loadSigningKey(args.key);
   const trustedKeys = loadTrustedKeys([path.join(repo, 'core', 'trusted-keys.json')]);
+  const keyId = keyIdFor(crypto.createPublicKey(privateKey));
+  if (!trustedKeys.get(keyId)?.official && !args.untrusted) {
+    fail(`key ${keyId} is not an official key in core/trusted-keys.json, so every Atmos would refuse these packages and their index (--untrusted to pack anyway, for tests)`);
+  }
   const filters = bundleFilters(args.from);
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-pack-'));
   fs.mkdirSync(args.out, { recursive: true });
+  if (!args.keep) {
+    const old = fs.readdirSync(args.out).filter(file => file.endsWith(PACKAGE_EXTENSION) || file === 'index.json');
+    for (const file of old) fs.rmSync(path.join(args.out, file));
+    if (old.length) console.log(`  cleared ${old.length} file${old.length === 1 ? '' : 's'} from ${path.relative(process.cwd(), args.out) || '.'}`);
+  }
+  const written = [];
   let untrusted = false;
   try {
     for (const { kind, id, manifest } of selected) {
@@ -140,16 +174,75 @@ async function main() {
       const check = verifyExtension(dir, { kind: singular, id, manifest, trustedKeys, hasher });
       if (check.status !== 'verified') untrusted = true;
       const out = path.join(args.out, `${id}-${manifest.version}${PACKAGE_EXTENSION}`);
-      fs.writeFileSync(out, packFolder(dir, listFiles));
+      const buffer = packFolder(dir, listFiles);
+      fs.writeFileSync(out, buffer);
+      written.push({ kind: singular, id, version: manifest.version, out, sha256: crypto.createHash('sha256').update(buffer).digest('hex') });
       const size = fs.statSync(out).size;
       console.log(`  ${path.relative(process.cwd(), out)}  ${files} files, ${(size / 1024).toFixed(0)} KB${check.status === 'verified' ? '' : `  (${check.reason})`}`);
     }
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
   }
+  const problems = await compareWithPrevious(args, written);
+  if (problems.length && !args.sameVersion) {
+    for (const { out } of written) fs.rmSync(out, { force: true });
+    fail(`${problems.join('; ')}. Existing installs only update to a higher version: bump "version" in extension.json (or --same-version). Nothing was written.`);
+  }
   const index = buildIndex(args.out, privateKey);
   console.log(`  ${path.relative(process.cwd(), path.join(args.out, 'index.json'))}  ${index.packages.length} packages, signed`);
-  if (untrusted) console.log('pack: the key is not an official key in core/trusted-keys.json, so Atmos will treat these packages as community ones.');
+  if (untrusted) console.log('pack: packed with --untrusted: Atmos will refuse these packages unless it trusts the key (--trusted-keys, unpackaged).');
+}
+
+/** Selected extensions (as "plugins/<id>") with uncommitted changes in `root`, if it is a git checkout. */
+function uncommitted(root, selected) {
+  const paths = selected.map(({ kind, id }) => `${kind}/${id}`);
+  const status = spawnSync('git', ['status', '--porcelain', '--', ...paths], { cwd: root, encoding: 'utf8' });
+  if (status.status !== 0) return []; // not a git checkout
+  const changed = status.stdout.split('\n').filter(Boolean).map(line => line.slice(3).replace(/^"|"$/g, ''));
+  return paths.filter(prefix => changed.some(file => file === prefix || file.startsWith(`${prefix}/`)));
+}
+
+/** The index a source published last, or null (with a warning) if it can't be read. */
+async function readPreviousIndex(location) {
+  try {
+    if (/^https:\/\//i.test(location)) {
+      const response = await fetch(new URL('index.json', location.endsWith('/') ? location : `${location}/`), { redirect: 'follow' });
+      if (response.status === 404) return { packages: [] };
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    }
+    const file = path.join(location, 'index.json');
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { packages: [] };
+  } catch (error) {
+    console.log(`pack: couldn't read the previous index at ${location} (${error.message}); versions not compared`);
+    return null;
+  }
+}
+
+/**
+ * Packages whose version stayed the same while their files changed, or went
+ * down, compared with what the previous source published.
+ */
+async function compareWithPrevious(args, written) {
+  let location = args.previous;
+  if (!location) {
+    try {
+      location = JSON.parse(fs.readFileSync(path.join(args.from, 'core', 'extension-sources.json'), 'utf8')).sources?.[0]?.location || null;
+    } catch { location = null; }
+  }
+  if (!location || (!/^https:\/\//i.test(location) && path.resolve(location) === path.resolve(args.out))) return [];
+  const previous = await readPreviousIndex(location);
+  if (!previous) return [];
+  const problems = [];
+  for (const item of written) {
+    const before = (previous.packages || []).find(pkg => pkg.kind === item.kind && pkg.id === item.id);
+    if (!before) continue;
+    const order = compareVersions(item.version, before.version);
+    if (order < 0) problems.push(`${item.id} ${item.version} is older than the published ${before.version}`);
+    else if (order === 0 && before.sha256 && before.sha256 !== item.sha256) problems.push(`${item.id} changed but is still ${item.version}`);
+  }
+  if (!problems.length) console.log(`  compared with ${location}: versions ok`);
+  return problems;
 }
 
 /**

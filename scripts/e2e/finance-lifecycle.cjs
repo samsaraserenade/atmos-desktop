@@ -11,7 +11,7 @@
 //     hidden, the panel on Portfolio and a watchlist click opening nothing,
 //     and offers "Optional: Market Data"; installed from that offer, the
 //     charts are back.
-//  4. Finance 1.0.1 is published: only Finance updates; its connection and
+//  4. A newer Finance (patch + 1) is published: only Finance updates; its connection and
 //     state stay.
 //  5. Remove Finance, keeping its data: gone after the restart, its
 //     dependencies and connection file still there; installed again, it is
@@ -26,7 +26,7 @@
 // Usage: node scripts/e2e/finance-lifecycle.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const crypto = require('crypto'), fs = require('fs'), os = require('os'), path = require('path');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, atmosWindow } = require('./isolate.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'finance-lifecycle'));
@@ -61,6 +61,11 @@ const setVersion = version => dir => {
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/"version": "[^"]+"/, `"version": "${version}"`));
 };
 const manifestOf = (kind, id) => JSON.parse(fs.readFileSync(path.join(repo, kind, id, 'extension.json'), 'utf8'));
+/** The repo manifest's version with its patch number raised. */
+const nextPatch = (kind, id) => {
+  const [major, minor, patch] = manifestOf(kind, id).version.split('.').map(Number);
+  return `${major}.${minor}.${patch + 1}`;
+};
 
 // The source: Finance and the three services it uses, at their repo versions.
 const source = path.join(home, 'source');
@@ -75,14 +80,10 @@ function publish(kind, id, edit = null) {
 for (const id of ['charting', 'currency', 'market-data']) publish('services', id);
 publish('plugins', 'finance');
 
-// A minimal Atmos: the system services only (audio, location, wallpaper).
+// A minimal Atmos: Core (with its system services) and no bundled extensions.
 const bundled = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-minimal-'));
 fs.mkdirSync(path.join(bundled, 'plugins'), { recursive: true });
 fs.mkdirSync(path.join(bundled, 'services'), { recursive: true });
-for (const id of fs.readdirSync(path.join(repo, 'services'))) {
-  if (manifestOf('services', id).tier !== 'system') continue;
-  fs.cpSync(path.join(repo, 'services', id), path.join(bundled, 'services', id), { recursive: true, filter: src => !/node_modules|[\\/]tests[\\/]/.test(src) });
-}
 
 async function launch({ timeout = 60000 } = {}) {
   const started = Date.now();
@@ -92,7 +93,7 @@ async function launch({ timeout = 60000 } = {}) {
     cwd: repo, env, timeout,
   });
   const logs = []; app.process().stdout.on('data', d => logs.push(String(d))); app.process().stderr.on('data', d => logs.push(String(d)));
-  const page = await app.firstWindow({ timeout });
+  const page = await atmosWindow(app, { timeout });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => {
@@ -253,9 +254,10 @@ const r = { home };
   r['3-charts'] = await marketCharts(s.page, '32-market-data-again.png');
   r['3-errors'] = s.errors;
 
-  // 4. Finance 1.0.1: only Finance updates.
+  // 4. A newer Finance: only Finance updates.
   step('4');
-  const bump = setVersion('1.0.1'); bump.version = '1.0.1';
+  const newer = nextPatch('plugins', 'finance');
+  const bump = setVersion(newer); bump.version = newer;
   publish('plugins', 'finance', bump);
   await openManager(s.page);
   await check(s.page);
@@ -263,7 +265,7 @@ const r = { home };
   r['4-updates'] = await s.page.evaluate(async () => (await window.atmosCore.extensionManager.status()).status.packages
     .filter(p => p.action === 'update').map(p => `${p.id} ${p.installedVersion} → ${p.version}`));
   await press(s.page, 'plugin:finance', 'install');
-  await waitFor(s.page, () => /Update to 1\.0\.1/.test(document.getElementById('settings-menu-list').textContent));
+  await waitFor(s.page, text => document.getElementById('settings-menu-list').textContent.includes(`Update to ${text}`), newer);
   r['4-pending'] = await pendingIds(s.page);
   await s.app.close();
   s = await launch();

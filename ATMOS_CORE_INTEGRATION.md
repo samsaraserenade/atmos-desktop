@@ -1,98 +1,104 @@
 # Atmos Core integration guide
 
-This guide describes how plugins and shared services integrate with Atmos Core.
-Atmos owns the workspace shell, discovery, lifecycle, layouts, persistence,
-permissions and safe module/resource routing. Extensions own their behavior,
-state, markup, styling, and external integrations.
+How extensions (plugins and services) work with Atmos Core. Atmos owns the
+workspace shell, discovery, lifecycle, layouts, persistence, permissions and
+routing between extensions. Extensions own their behaviour, state, markup,
+styling and external integrations.
 
-Extensions run in one of two ways:
+Every extension runs in sandboxed frames and talks to Atmos only through the
+**Atmos SDK** (section 4). An official (first-party) extension may also have
+a `main.cjs` for work only Electron's main process can do (section 6). The
+system services (Wallpaper, Audio and Location) are part of Core itself.
+Security rules are in section 7.
 
-| Runtime | Who | API |
-|---|---|---|
-| **page** | System extensions (Wallpaper, Audio, Location) and first-party services' page code (libraries and `main.cjs` IPC); no bundled plugin any more | Core modules imported from `atmos-core/…` (sections 2–14) |
-| **frame** | Every third-party extension, and first-party ones with `"runtime": "frame"` (every bundled plugin, such as the Audio Player) | The Atmos SDK, from sandboxed frames (section 19) |
+| Section | |
+|---|---|
+| 1 | Extension types, tiers, where extensions come from |
+| 2 | Files and surfaces: panels, sidebar widgets, settings, the boot frame |
+| 3 | The manifest (`extension.json`): versions, dependencies, start order |
+| 4 | The Atmos SDK |
+| 5 | Services and libraries |
+| 6 | Main-process code (`main.cjs`) |
+| 7 | Permissions and security, signed packages, the extension manager |
+| 8 | Checklist |
+| 9 | Compatibility |
 
-The contract is additive: an extension may contribute to any combination of
-surfaces. Security rules for both runtimes are in section 18.
+Until Atmos 0.12, extensions could also run inside the Atmos page itself
+and import Core's modules (`atmos-core/…`). That page runtime is gone: see
+section 9.
 
 ## 1. Extension types
 
 Atmos has two kinds of extension:
 
-- A **plugin** is user-facing. It may contribute a panel, sidebar widget,
-  settings panel, startup behavior, persistence, and main-process behavior.
-- A **service** supplies shared behavior or data. It may contribute a sidebar
-  widget, settings panel, persistence, main-process behavior, and renderer
-  modules that plugins import.
+- A **plugin** is user-facing. It may contribute a panel, sidebar widgets,
+  a settings page and a background (boot) frame, and, if official, a
+  `main.cjs`.
+- A **service** supplies shared behaviour or data to other extensions: methods
+  its boot frame exposes, main-process IPC it shares, or modules they import.
 - A **library** is a service marked `"library": true`: code its consumers
-  import, with no lifecycle, UI or state of its own. See section 19,
+  import, with no lifecycle, UI or state of its own. See section 5,
   "Services and libraries".
 
-Use a stable lowercase id containing letters, numbers, and hyphens, such as
+Use a stable lowercase id containing letters, numbers and hyphens, such as
 `audio-player` or `weather-data`. The folder name is the extension id and is
-also used for state, events, IPC, and DOM persistence.
+also used for state, events and IPC.
 
 ### Where extensions come from, and tiers
 
-Atmos loads extensions from two places:
+Atmos finds extensions in three places:
 
 | Source | Location |
 |---|---|
-| Bundled with Atmos | `resources/extensions/{plugins,services}` in an installed build; the repo's `plugins/` and `services/` when running from source |
-| Installed later | `%APPDATA%/atmos/{plugins,services}/<id>/` |
+| Part of Atmos | `core/system/<id>`: the system services only |
+| Bundled with Atmos | the repo's `plugins/` and `services/` when running from source (`npm start`); an installer bundles none, and offers them as packages on the first start |
+| Installed | `%APPDATA%/atmos/{plugins,services}/<id>/`, by Settings → Extensions or by hand |
 
 Where an extension sits does not decide who vouches for it; its signature
 does. Settings shows the tier as **System**, **Official** or **Community**:
 
 | Tier | Settings | Which extensions |
 |---|---|---|
-| `system` | System | Bundled with `"tier": "system"`: part of Atmos itself (Wallpaper, Audio, Location). Always loaded; can't be disabled. |
-| `first-party` | Official | Bundled with Atmos (a bundled extension without a tier is first-party), **or installed with a valid signature from an official key** in `core/trusted-keys.json` (section 18, "Signed packages"). Can be disabled. |
+| `system` | System | In `core/system`: part of Atmos itself (Wallpaper, Audio, Location). Always loaded; can't be disabled. A manifest elsewhere can't claim it. |
+| `first-party` | Official | Running from the repo (`npm start`), **or installed with a valid signature from an official key** in `core/trusted-keys.json` (section 7, "Signed packages"). Can be switched off. |
 | `third-party` | Community | Installed and not signed by an official key. The `tier` field is ignored, so nothing installed can claim to be system or official. |
 
 **The background layer.** Two system services run behind every panel for the
-whole session, in the Atmos page:
+whole session, in the Atmos page. Extensions reach them through the SDK:
 
 - **Wallpaper** (`services/wallpaper`, formerly the Background plugin) paints
-  the wallpaper and its effects and owns desktop blending. Page code uses the
-  `visual.wallpaper` capability; frames use `atmos.wallpaper` with
-  `"invokes": ["service:wallpaper"]`.
+  the wallpaper and its effects and owns desktop blending. Frames use
+  `atmos.wallpaper` with `"invokes": ["service:wallpaper"]`.
 - **Audio** (`services/audio`) gives each extension its own playback
   channel (an `<audio>` element keyed by the extension), so sound carries on
   through panel switches, layouts and frame reloads. The extension decides
-  what plays; the channel loads, plays, pauses, seeks and reports back. Page
-  code uses the `media.audio` capability; frames use `atmos.audio` with
-  `"invokes": ["service:audio"]`.
+  what plays; the channel loads, plays, pauses, seeks and reports back.
+  Frames use `atmos.audio` with `"invokes": ["service:audio"]`.
 
-Services may have a `boot.js`, like plugins; these two start from theirs.
-
-If the same id exists in both places: a system extension always wins; among
+If the same id exists in several places: a system service always wins; among
 official copies (bundled, or installed and signed) the highest `version` wins,
 the bundled one on a tie, and the next one down is kept as a fallback that
 loads instead if the winner can't (a damaged update, say; Settings says so);
 a community copy never replaces an official one. The ignored copies are
-logged. Declare `"extensions.tiers": 1` if an extension depends on this
-behaviour. Installs from before the
-`services` rename used a singular `service/` folder, which Atmos moves on
-first launch.
+logged. Installs from before the `services` rename used a singular
+`service/` folder, which Atmos moves on first launch.
 
 Extensions are loaded at runtime. Adding a third-party extension does not
 require rebuilding Atmos, but Atmos must be restarted because discovery is
 cached for the session. A third-party extension also needs the user's
 approval before it loads, and it cannot have a `main.cjs`; see
-[18. Permissions and security](#18-permissions-and-security).
+[7. Permissions and security](#7-permissions-and-security).
 
-## 2. Recommended layout
+## 2. Files and surfaces
 
 ```text
 example-plugin/
-├── extension.json       # manifest: compatibility, tier, permissions (section 4)
-├── main.cjs             # optional main-process entry
-├── persist.js           # optional state registration
-├── sidebar.js           # optional sidebar contribution
-├── settings.js          # optional settings-panel contribution
-├── panel.js             # optional panel contribution; plugins only
-├── boot.js              # optional startup hook; plugins only in the page (any framed extension)
+├── extension.json       # the manifest (section 3)
+├── panel.js             # a panel
+├── sidebar.js           # a sidebar widget (more with "contributes")
+├── settings.js          # a settings page (Settings → Appearance)
+├── boot.js              # a background frame for the whole session
+├── main.cjs             # official extensions only: main-process code (section 6)
 ├── src/
 │   ├── engine.js
 │   └── view.js
@@ -100,1050 +106,15 @@ example-plugin/
     └── icon.svg
 ```
 
-Every renderer entry point is an ES module. `main.cjs` is CommonJS because it
-runs in Electron's main process. The table below is for page-runtime
-extensions; framed ones are listed in section 19.
-
-### Discovery conventions
-
-| Entry point | Plugin | Service | Loaded when |
-|---|:---:|:---:|---|
-| `main.cjs` | Yes | Yes | Before the Atmos window is created |
-| `persist.js` | Yes | Yes | Before core state is loaded |
-| `sidebar.js` | Yes | Yes | After state is loaded |
-| `*-sidebar.js` | Yes | No | Alongside `sidebar.js` |
-| `settings.js` | Yes | Yes | Alongside `sidebar.js` |
-| `panel.js` | Yes | No | Before the default panel is mounted |
-| `boot.js` | Yes | No | Registered after `panel.js`, run after panel mounting |
-
-Persistence entry points load sequentially, in start order (see `after`), to
-preserve legacy hydration order.
-Independent sidebar and settings entry points load in parallel. Only files at
-the extension root are discovered; files in subfolders load only when
-imported. Plugin `panel.js` and
-`boot.js` load together in start order (plugin id, adjusted by `after`).
-
-## 3. Importing Atmos Core
-
-Renderer modules import core APIs through the stable `atmos-core/` prefix:
-
-```js
-import { registerSection } from 'atmos-core/core/sidebar-registry.js';
-import { registerStateNamespace, save } from 'atmos-core/persist.js';
-```
-
-Use normal relative imports for files inside the same extension:
-
-```js
-import { render } from './src/view.js';
-```
-
-Styles and assets resolve relative to the importing module:
-
-```js
-const href = new URL('./styles.css', import.meta.url).href;
-if (!document.querySelector(`link[href="${href}"]`)) {
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.appendChild(link);
-}
-```
-
-Atmos routes plugin and service files through confined custom protocols, so
-JavaScript, CSS, JSON, images, fonts, and WASM can live outside the installed
-application bundle.
-
-## 4. Compatibility manifest
-
-`extension.json` is optional for bundled extensions (one without it is
-treated as a legacy, compatible extension with no permissions) and required
-for third-party ones. Every extension should declare its `permissions`; see
-section 18.
-
-```json
-{
-  "apiVersion": 3,
-  "requires": {
-    "lifecycle.context": 1,
-    "state.namespaced": 1
-  },
-  "permissions": {}
-}
-```
-
-| Key | Meaning | Section |
-|---|---|---|
-| `apiVersion`, `requires` | Core API targeted and capabilities needed | this section |
-| `tier` | `system` or `first-party` (bundled extensions only) | 1 |
-| `version` | The extension's own version, `MAJOR.MINOR.PATCH` (semver). Required to be packaged, and for others to depend on a range of it | this section |
-| `publisher` | Who publishes it (`"atmos"` for official extensions); must match the key that signs it | 18 |
-| `dependencies` | Services (or plugins) it needs, with version ranges; also its start order | this section |
-| `description`, `contract` | A one-line description; for a service, its own API contract (renderer API file, API version, events), formerly `service.json` | 13 |
-| `after`, `supersedesServices` | Start order only (prefer `dependencies`); legacy services this plugin replaces | this section |
-| `permissions` | Everything the extension uses | 18 |
-| `auditExclude` | Folders the permission audit skips | 18 |
-| `displayName` | Name shown in Settings and, for framed extensions, the default label | 9, 19 |
-| `runtime` | `"frame"` moves a first-party extension into frames | 19 |
-| `isolation` | `"origin"` gives a framed first-party extension an origin of its own, for one that keeps secrets (keys, tokens) in its storage | 19 |
-| `contributes` | Labels, icons and entry files for framed surfaces | 19 |
-| `library` | `true` on a service that is a library: imported by consumers, no lifecycle, UI or state of its own | 19 |
-| `legacyStorage` | Databases a migrating first-party extension may copy from the page; with `isolation`, `"sharedOriginIndexedDB"` lists databases it left in the shared first-party origin, which Core deletes once | 19 |
-
-`apiVersion` is the newest core API the extension targets. `requires` may be
-an object of capability names and minimum versions, or an array of names when
-version 1 is sufficient. Atmos skips incompatible renderer contributions and
-reports the reason instead of allowing a partial, unpredictable mount.
-
-Core API v3 currently advertises:
-
-- `extensions.manifest`
-- `events.namespaced`
-- `lifecycle.context`
-- `panel.explicit-default`
-- `panel.pass-through`
-- `panel.surface-presentation`
-- `renderer.capabilities`
-- `state.namespaced`
-- `surface.workspace`
-- `context-menu.contributions`
-- `appearance.semantic-colors`
-- `settings.appearance-contributions`
-- `sidebar.resizable-sections`
-- `extensions.after`
-- `extensions.tiers`
-- `extensions.permissions`
-- `extensions.frames`
-
-The main process keeps its own copy of this list in
-`js/core/extension-host.cjs`; update both when adding a capability.
-
-Capabilities can also be checked at runtime:
-
-```js
-import { hasCapability, listCapabilities } from 'atmos-core/core/capabilities.js';
-
-if (hasCapability('panel.pass-through')) {
-  // Offer an enhanced presentation without making it mandatory.
-}
-```
-
-Declare a capability as required only when the extension cannot operate
-without it. Prefer runtime checks for optional enhancements.
-
-### Versions and dependencies
-
-Every extension has a `version`, and lists what it needs in `dependencies`:
-
-```json
-{
-  "version": "1.0.0",
-  "publisher": "atmos",
-  "dependencies": {
-    "charting": "^1.2.0",
-    "currency": "^1.0.0",
-    "market-data": { "version": "^0.4.0", "optional": true }
-  }
-}
-```
-
-A bare id is a service; write `"plugin:<id>"` for a plugin. Ranges are
-`1.2.3` (exactly), `^1.2.3` (compatible: `<2.0.0`, or `<0.5.0` for `^0.4.x`),
-`~1.2.3` (patch updates), `>=1.2.3` and `*`. Every `service:<id>` in
-`permissions.invokes` must also be a dependency (`npm run test:permissions`
-checks it, along with the ranges against the repo's copies and that a
-released extension's required dependencies are released too).
-
-At startup, after trust is decided, an extension whose **required**
-dependency is missing, switched off, can't load, or has a version outside
-the range doesn't load either, and Settings says why ("Needs Charting, which
-is switched off"). The dependency's own row lists what uses it. An
-**optional** dependency never stops loading: the extension checks for it
-itself and hides what needs it. Dependencies of the same kind also order
-startup.
-
-A library service that isn't loading this session (not installed, switched
-off, missing a dependency, or failed to start) can't be imported:
-`atmos.library('service:<id>', file)` rejects, which is how a frame checks
-for an optional one. Finance does this once per frame before it mounts
-(`plugins/finance/src/host/market-data.js`) and, without Market Data, hides
-its market charts rather than showing them offline.
-
-The extension manager installs required dependencies with the extension
-and **offers** optional ones: Settings → Extensions shows "Optional: <name>"
-with its own Install beside the extension, as long as a source has a
-version in range and it isn't installed. An optional dependency marked
-`"recommended": true` is installed together with the extension on its
-first install (when a source has it), but stays optional: it can be removed
-or switched off, or fail to start, without stopping the extension, and an
-update doesn't bring it back. Finance does this with Market Data for now:
-
-```json
-"market-data": { "version": "^0.4.0", "optional": true, "recommended": true }
-```
-
-### Start order
-
-Extensions of the same kind start in alphabetical id order, after their
-dependencies of that kind. The older `after` list still orders startup
-(and nothing else):
-
-```json
-{
-  "after": ["media-library"]
-}
-```
-
-`after` applies to main-process activation and to the order the renderer
-loads entry points (and therefore to the default panel order). Only ids of the
-same kind (plugin or service) that are installed, enabled and compatible are
-considered; missing ids are ignored, so `after` never prevents startup. A cycle
-is logged and broken alphabetically. Services always start before plugins, so
-a plugin never needs `after` for a service. Declare `"extensions.after": 1`
-if the order is required rather than preferred; older Cores ignore the field.
-
-A plugin replacing a legacy standalone service may also declare:
-
-```json
-{
-  "supersedesServices": ["old-service-id"]
-}
-```
-
-Only valid service ids are accepted. This prevents the old main-process
-service from activating when its replacement plugin is installed.
-
-## 5. Lifecycle context
-
-Atmos passes a lifecycle context to every mounted renderer contribution as
-its last argument.
-
-| Contribution | Signature |
-|---|---|
-| Panel mount/unmount | `(surfaceEl, context)` |
-| Sidebar mount/unmount | `(bodyEl, context)` |
-| Settings mount/unmount | `(bodyEl, context)` |
-| Boot hook | `run(context)` |
-
-Every context contains:
-
-```js
-{
-  id,                       // extension id
-  surface,                  // 'panel', 'sidebar', 'settings', or 'boot'
-  signal,                   // aborted during disposal
-  apiVersion,
-  capabilities: { has, list },
-  events,                   // extension-namespaced event facade
-  onCleanup(fn),
-  listen(target, type, handler, options),
-  setTimeout(fn, delay, ...args),
-  setInterval(fn, delay, ...args),
-  requestAnimationFrame(fn)
-}
-```
-
-Prefer context helpers for resources tied to a mounted surface:
-
-```js
-function mount(bodyEl, context) {
-  context.listen(window, 'resize', repaint, { passive: true });
-  context.setInterval(refresh, 30_000);
-
-  const observer = new ResizeObserver(repaint);
-  observer.observe(bodyEl);
-  context.onCleanup(() => observer.disconnect());
-}
-```
-
-Atmos disposes these resources automatically:
-
-- when a panel is replaced;
-- when a sidebar widget is disabled or unregistered;
-- when the application unloads after a boot hook.
-
-An optional `unmount()` still runs before disposal for teardown that needs the
-live context. Cleanup functions should be safe to call once, and mounts should
-be repeatable because a surface may be recreated many times in one session.
-
-Long-lived engines—audio playback, connection pools, background indexing—do
-not belong in a panel lifecycle. Initialize them once from module scope or a
-boot hook, then make panel/sidebar views disposable consumers of that
-engine. Framed extensions do the same with a background frame (section 19).
-
-## 6. Sidebar widgets
-
-Register a sidebar contribution from `sidebar.js`:
-
-```js
-import { registerSection } from 'atmos-core/core/sidebar-registry.js';
-
-registerSection('example-plugin', {
-  order: 20,
-  icon: '<svg viewBox="0 0 24 24">...</svg>',
-  label: 'Example',
-  defaultEnabled: true,
-  resizable: true,
-  resizeStep: 28,
-  headerExtra: '<button class="example-refresh">Refresh</button>',
-
-  mount(bodyEl, context) {
-    bodyEl.innerHTML = '<div class="example-status"></div>';
-    context.listen(bodyEl, 'click', handleClick);
-    render(bodyEl);
-  },
-
-  unmount(bodyEl, context) {
-    // Optional custom teardown. Context resources are disposed afterward.
-  },
-});
-```
-
-Core owns the section shell, label row, expand/collapse behavior, enable state,
-drag ordering, and panel-specific visibility. Every accordion's Core-provided
-right-click menu lets the user show it globally (the default) or only while a
-particular registered panel is active. The extension owns only the content
-placed in `bodyEl` and any markup placed inside `headerExtra`.
-
-Open accordions can be resized by dragging their invisible lower edge. Heights
-move in 28px intervals by default, are persisted by section ID, and stop at a
-28px minimum unless the extension declares a different `minHeight`. There is no
-maximum: the sidebar scrolls when a section grows beyond the available space.
-Untouched sections fit their content naturally, and double-clicking the lower
-edge returns to that natural height. Extensions that genuinely need a fixed
-starting size can override it with `defaultHeight`, and can set their own
-interval with `resizeStep`. A fixed-content contribution can set
-`resizable: false`; Core then omits its resize edge, ignores saved sizing, and
-always uses its natural content height.
-
-Extensions that depend on these sizing fields should declare
-`"sidebar.resizable-sections": 1` in their compatibility manifest.
-
-Registry utilities:
-
-```js
-import {
-  setSectionEnabled,
-  getRegisteredSections,
-  unregisterSection,
-} from 'atmos-core/core/sidebar-registry.js';
-```
-
-`setSectionEnabled()` persists the user's choice and mounts or unmounts the
-widget. `unregisterSection()` removes its runtime registration; disabling a
-widget keeps it available in Settings.
-
-## 7. Appearance
-
-### Settings contributions
-
-Plugins and services can place controls beneath Core's Theme, App Font, and
-semantic-color settings without creating a sidebar accordion. Register a
-settings panel with `category: 'Appearance'`; Core mounts it with a scoped
-lifecycle context whenever the Appearance page is shown.
-
-```js
-import { registerSettingsPanel } from 'atmos-core/core/settings-registry.js';
-
-registerSettingsPanel('example-appearance', {
-  label: 'Example',
-  category: 'Appearance',
-  order: 10,
-  mount(bodyEl, context) {
-    // Build controls and bind listeners through context.listen(...).
-  },
-});
-```
-
-Declare `"settings.appearance-contributions": 1` in the extension manifest.
-
-### Shared semantic colors
-
-Core owns the positive, negative, and neutral palette. Users configure it in
-Settings → Appearance; changes are persisted and published to all subscribers.
-Plugins can import `getSemanticColors`, `setSemanticColor(role, hex)`, and
-`onSemanticColorChange` from `atmos-core/core/semantic-colors.js`. Roles are
-`positive`, `negative`, and `neutral`; colors are six-digit hex values.
-Subscriptions return an unsubscribe function to register with `context.onCleanup`.
-CSS consumers can use `--color-positive`, `--color-negative`, and `--color-neutral`.
-
-The capability `appearance.semantic-colors` is version 1. The same module also
-exports price-oriented helpers: `getPriceColors()` (`{ up, down, neutral }`),
-`setPriceColorUp`, `setPriceColorDown`, `setPriceColorNeutral`,
-`classifyChange`, `colorForChange`, and `onPriceColorChange`. An explicit
-second argument to `colorForChange` overrides the shared neutral color.
-
-The standalone `price-color` service and its `getServiceFileUrl('price-color',
-'index.js')` / `atmos-core/services/price-color.js` routes have been removed;
-import `atmos-core/core/semantic-colors.js` directly.
-
-Plugins must not restore their own saved palettes over Core at startup.
-
-## 8. Panel plugins
-
-### Ownership boundary
-
-Core supplies a mountable surface, lifecycle, layouts, freeform window
-movement/resizing, and persistence. It does not supply a plugin header, visual
-identity, toolbar, or content layout. In particular, the Music Player's
-waveform, track metadata, album art, playback controls, and media layout are
-owned entirely by `audio-player`. They are not a panel convention or a
-template for other plugins.
-
-Start every new panel with one empty surface and design its contents from the
-plugin's own domain. A plugin may use Core's window and panel APIs when its
-requirements call for them; it must not reproduce another plugin's internal
-interactions merely because they already exist.
-
-Register a panel from `panel.js`:
-
-```js
-import { registerPanelPlugin } from 'atmos-core/core/panel-registry.js';
-
-registerPanelPlugin('example-plugin', {
-  icon: '<svg viewBox="0 0 24 24">...</svg>',
-  label: 'Example',
-  default: false,
-
-  mount(surfaceEl, context) {
-    surfaceEl.innerHTML = '<main class="example-panel"></main>';
-    context.listen(surfaceEl, 'click', handlePanelClick);
-  },
-
-  unmount(surfaceEl, context) {
-    // Core clears the surface after this returns.
-  },
-});
-```
-
-A plugin owns one panel section at a time. In the default `single` layout
-the surface fills the window. Multi-panel layouts mount each assigned plugin
-into its own tile or floating window, with its own surface and lifecycle
-scope. The workspace background remains a separate surface behind the whole
-layout. Core gives each plugin the section's real width and height (including
-section-scoped `--panel-content-vis-h`, `--panel-section-width`, and
-`--panel-section-height` variables), so responsive plugin CSS fits without a
-transformed canvas or a Core-owned scroll viewport.
-
-A panel's lifecycle context also carries:
-
-- `surfaceEl` — the element passed to `mount`;
-- `hostEl` — the section element that contains it;
-- `presentation` — `'full'` (the whole workspace), `'tile'` (a split layout
-  section) or `'window'` (a freeform window). Use it when the same panel
-  should behave differently in a small section, as the Audio Player does by
-  pinning its drawer open outside `'full'`.
-
-### Panel descriptor options
-
-- `default`: makes this the explicit default panel. Only one plugin may claim
-  it. If none does, the first registered panel is the fallback.
-- `passThrough`: the full-window surface only takes pointer events where the
-  plugin draws something, so clicks and scrolls elsewhere reach the workspace
-  background. Give your own interactive elements `pointer-events: auto`. Used
-  by panels that cover only part of the window, such as the Audio Player's
-  drawer. Declare `"panel.pass-through": 1` if you rely on it.
-- `panelAppearance`: opt into Core's per-panel blur/opacity settings, exposed
-  as `--panel-blur` and `--panel-opacity` on the section.
-
-The registry owns section geometry. Plugins own everything rendered inside
-their surface and should not change Core container positioning directly.
-Core has no panel bar, drawer or slide physics: a plugin that wants one (like
-the Audio Player) builds it inside its own surface.
-
-Registry controls include:
-
-```js
-import {
-  activatePanelPlugin,
-  activateDefaultPanelPlugin,
-  activatePreviousPanelPlugin,
-  getActivePanelPluginId,
-  getPanelLayout,
-  getPanelSections,
-  listPanelPlugins,
-  setPanelLayout,
-  assignPanelPlugin,
-} from 'atmos-core/core/panel-registry.js';
-```
-
-`setPanelLayout()` accepts `single`, `columns`, `rows`, `right-stack`,
-`left-stack`, `quad`, or `freeform`. Use `assignPanelPlugin(sectionId, pluginId)` to fill a
-visible section; pass `null` to empty any section except `main`. Core prevents
-the same plugin instance from being mounted in two sections simultaneously.
-Multi-panel dividers are pointer- and keyboard-resizable. Core saves the X/Y
-split independently for each layout; double-clicking a divider restores that
-layout's default proportion.
-
-The `freeform` layout exposes four floating window slots. Core supplies a
-dedicated drag title bar and bottom-right resize handle, raises a window when
-it is clicked, and persists normalized position, size, and stacking order.
-Plugin content remains interactive and is never repurposed as a drag area.
-Unassigned slots exist only in Settings; Core does not render empty tiled
-sections, floating windows, or orphaned splitter handles for them.
-
-The mouse back button cycles through recently used panels; holding it opens
-Task View.
-
-## 9. Extension controls and configuration
-
-The Settings menu is the Atmos Control Centre. Its existing Plugins and
-Services pages are populated from discovery metadata and let the user enable
-or disable an installed extension. A disabled extension is filtered before
-`main.cjs` or any renderer entry point runs. Changes take effect after an Atmos
-restart. Each row also shows the extension's tier, its permissions and, for
-third-party extensions, the approval prompt (section 18).
-
-Plugin-specific preferences do not belong in the Control Centre. Put those
-controls in a surface owned by the plugin, normally its panel or sidebar
-widget, and keep their state in the plugin's namespaced persistence module.
-
-## 10. State and persistence
-
-Prefer one collision-free, versioned namespace per extension. Register it from
-`persist.js`, which Atmos imports before calling the core `load()`:
-
-```js
-import { registerStateNamespace, save } from 'atmos-core/persist.js';
-
-export const prefs = registerStateNamespace('example-plugin', {
-  version: 2,
-  defaults: {
-    density: 'comfortable',
-    refreshMinutes: 30
-  },
-
-  migrate(data, fromVersion, toVersion) {
-    if (fromVersion < 2) data.refreshMinutes ??= 30;
-    return data;
-  },
-});
-
-export function updateDensity(value) {
-  prefs.density = value;
-  save();
-}
-```
-
-`save()` writes all state synchronously. For changes that arrive in bursts —
-slider and colour-picker `input` events, drag gestures — call `scheduleSave()`
-instead: it coalesces the burst into one write about 250 ms after the last
-change. A later `save()` absorbs any pending scheduled write, and Core flushes
-pending writes before the page unloads (reload, window close, restart). Call
-`flushPendingSave()` when something outside the page must see the data now.
-
-The returned object keeps the same identity for the renderer session. Optional
-advanced hooks are:
-
-- `serialize(namespace)`: return the data to save;
-- `hydrate(namespace, savedData)`: apply saved data manually;
-- `migrate(savedData, fromVersion, toVersion)`: transform old data first.
-
-Unknown namespaces are retained when saving, so temporarily disabling or
-removing an extension does not erase its data. `registerPersist()` remains for
-legacy flat-state integrations, but new extensions should use namespaces.
-
-Other persistence helpers:
-
-```js
-import {
-  onStateLoaded,
-  scheduleSave,
-  flushPendingSave,
-  saveAsset,
-  loadAsset,
-  deleteAsset,
-} from 'atmos-core/persist.js';
-```
-
-`saveAsset()`, `loadAsset()`, and `deleteAsset()` use IndexedDB for blobs or larger values.
-Prefix asset keys with the extension id because asset keys are not
-automatically namespaced.
-
-## 11. Namespaced events
-
-Every lifecycle context exposes `context.events`. Event names are automatically
-prefixed with the extension id, allowing the same plugin's panel, sidebar, and
-boot contributions to communicate without colliding with another plugin:
-
-```js
-// panel.js
-context.events.emit('selection-changed', selection);
-
-// sidebar.js
-context.events.on('selection-changed', renderSelection);
-```
-
-Listeners registered through a context end when that context is disposed.
-The facade supports `on`, `once`, `off`, and `emit`.
-
-For a long-lived engine outside a mounted surface, create an explicit scope:
-
-```js
-import { createEventScope } from 'atmos-core/core/events.js';
-
-export const events = createEventScope('example-plugin');
-```
-
-Prefer a shared service module when multiple unrelated extensions need a formal
-cross-extension data contract; do not couple them through accidental global
-event names.
-
-### Optional renderer capabilities
-
-When one user-facing plugin optionally enhances another, publish a runtime
-capability instead of importing the provider's files or DOM:
-
-```js
-// provider
-import { provideCapability } from 'atmos-core/core/renderer-capabilities.js';
-const revoke = provideCapability('visual.wallpaper', api, { owner: 'wallpaper' });
-context.onCleanup(revoke);
-
-// consumer
-import { getCapability } from 'atmos-core/core/renderer-capabilities.js';
-getCapability('visual.wallpaper')?.setTemporaryEffects('my-plugin', effects);
-```
-
-When effects are computed relative to the user's saved values, providers may
-also expose `getPersistentState()` so a consumer does not feed its own current
-temporary override back into the next animation frame.
-
-`onCapabilityChange()` observes installation and removal. Capability names use
-lowercase letters, numbers, dots, and hyphens. A missing optional capability is
-`null`; consumers must continue operating normally.
-
-### Workspace surfaces
-
-Plugins that render outside a panel, sidebar, or settings body register a
-Core-owned full-window surface:
-
-```js
-import { registerSurface } from 'atmos-core/core/surface-registry.js';
-
-context.onCleanup(registerSurface('example-visual', {
-  layer: 'workspace-background',
-  mount(hostEl, surfaceContext) {},
-}));
-```
-
-Core owns the mount node, stacking, and disposal. The plugin owns everything
-rendered inside it. Available layers are `workspace-background` and
-`workspace-overlay`; neither implies a particular product feature.
-
-Workspace context-menu actions follow the same rule through
-`registerContextMenuItem()` from `core/context-menu-registry.js`.
-
-## 12. Boot hooks
-
-Register startup work from `boot.js`:
-
-```js
-import { registerBootHook } from 'atmos-core/core/boot-registry.js';
-
-registerBootHook('example-plugin', {
-  order: 20,
-  async run(context) {
-    await refreshInitialData();
-    context.setInterval(refresh, 30_000);
-  },
-});
-```
-
-Boot hooks run sequentially by `order`; registration order breaks ties. One
-failure is logged and isolated from later hooks. Use boot for application-wide
-work, not DOM that belongs to a panel or sidebar mount.
-
-## 13. Shared services
-
-A service can export ordinary renderer modules in addition to its conventional
-entry points. Consumers should ask the service loader for a verified URL:
-
-```js
-import { getServiceFileUrl } from 'atmos-core/core/service-loader.js';
-
-const url = await getServiceFileUrl('weather-data', 'api.js');
-if (url) {
-  const { getForecast } = await import(url);
-  const forecast = await getForecast();
-}
-```
-
-This keeps service discovery and compatibility checks in the core. A plugin
-file can be addressed similarly with `getPluginFileUrl()` from
-`plugin-loader.js` when another core-managed consumer genuinely needs it.
-Both return `null` for framed extensions, whose files are never served to the
-page. A service that framed extensions should also be able to use declares
-`"library": true`; frames reach it with `atmos.library()`. Libraries have
-rules of their own (section 19, "Services and libraries").
-
-Services load before plugins in the main process, which allows a service to
-publish a main-process capability that a plugin consumes.
-
-## 14. Main-process extensions and IPC
-
-Use `main.cjs` only when renderer APIs are insufficient—for filesystem work,
-native integration, resource streaming, or privileged network behavior.
-
-```js
-module.exports = async context => {
-  context.handle('read:value', async (_event, key) => {
-    return readValue(key);
-  });
-
-  context.registerResourceProvider('example-art', async ({ pathname }) => {
-    const bytes = await loadArt(pathname);
-    return new Response(bytes, {
-      headers: { 'Content-Type': 'image/png' },
-    });
-  });
-};
-```
-
-Atmos waits for the returned promise before it starts the next extension
-and opens its window, so `activate()` should register its handlers and
-return; start slow work (connections, scans) without awaiting it. An
-`activate()` that throws, or hasn't finished after **10 seconds**, fails
-the extension for this session: what it registered is withdrawn (later
-registrations are refused), whatever requires it is skipped ("Needs X,
-which failed to start"), the rest of Atmos starts as usual, and Settings →
-Extensions lists it under Needs attention. It is tried again at the next
-start.
-
-Renderer calls are automatically scoped by extension kind and id:
-
-```js
-const value = await window.atmos.extensionInvoke(
-  'plugin', 'example-plugin', 'read:value', 'key'
-);
-
-const unsubscribe = window.atmos.extensionOn(
-  'plugin', 'example-plugin', 'changed', payload => render(payload)
-);
-
-const imageUrl = window.atmos.resourceUrl('example-art', 'covers/1.png');
-```
-
-The main-process context provides, each only when `extension.json`
-declares it (section 18):
-
-- `id`, `kind`, the extension `root` path and its normalised `permissions`;
-- the Electron objects listed in `permissions.electron` that Core hands out
-  (`app`, `BrowserWindow`, `dialog`, `shell`) — never `ipcMain` or `protocol`;
-- `handle(name, handler)` and `send(webContents, name, ...args)` for isolated
-  IPC, with `"ipc": true`;
-- `provide(name, value)` and `use(name)` for main-process capabilities, for
-  names listed in `provides` / `uses`;
-- `registerResourceProvider(name, handler)` for streamed resources, for names
-  listed in `resources`.
-
-Anything undeclared throws `… is not permitted to …; declare it in
-extension.json "permissions"`. IPC ids and names are validated and handlers
-cannot overwrite another extension's scoped channel. Resource providers must
-use globally unique names.
-
-Only system and first-party extensions may have a `main.cjs`. It runs with
-full Node.js access, so the gating above catches mistakes rather than
-containing hostile code. Keep privileged operations in narrowly scoped
-handlers, validate renderer arguments, and avoid exposing raw filesystem or
-shell access when a smaller operation will do.
-
-## 15. Complete minimal panel plugin
-
-A bundled, page-runtime panel. A third-party (framed) panel is a
-`panel.js` that imports `atmos-sdk` and renders into its own `document`;
-the smallest working example is `scripts/e2e/fixtures/plugins/hello-frame`.
-
-`extension.json`:
-
-```json
-{
-  "apiVersion": 3,
-  "requires": {
-    "lifecycle.context": 1,
-    "state.namespaced": 1
-  },
-  "permissions": {}
-}
-```
-
-`panel.js`:
-
-```js
-import { registerPanelPlugin } from 'atmos-core/core/panel-registry.js';
-
-registerPanelPlugin('example-plugin', {
-  label: 'Example',
-  mount(surfaceEl, context) {
-    surfaceEl.innerHTML = '<main class="example-grid"></main>';
-    renderGrid(surfaceEl.querySelector('.example-grid'));
-  },
-});
-```
-
-That is enough for discovery, compatibility checking, persisted preferences,
-automatic cleanup, multi-panel assignment, and a domain-neutral mount surface.
-
-## 16. Integration checklist
-
-Before shipping an extension:
-
-1. Use one stable lowercase, hyphenated id everywhere.
-2. Keep conventional entry points at the extension root.
-3. Add `extension.json` with `apiVersion`, `permissions` and, for bundled
-   extensions, `tier`.
-4. Put persistent state in `registerStateNamespace()` and call `save()` after
-   user-visible changes.
-5. Use lifecycle helpers for listeners, timers, animation frames, and custom
-   cleanup.
-6. Keep long-lived engines separate from disposable views.
-7. Let registries own shell geometry, ordering, switching, and enable state.
-8. Prefix extension-owned CSS selectors, DOM ids, and IndexedDB asset keys.
-9. Keep branding, headers, controls, and content layout inside the plugin.
-10. Do not copy the Audio Player's drawer or internal interaction model.
-11. Isolate privileged operations behind extension-scoped IPC handlers.
-12. Restart Atmos and test repeated mount/unmount cycles, not only first load.
-13. Declare every permission the extension uses in `extension.json`, and
-    nothing it doesn't.
-14. Run `npm run test:core`, `npm run test:services` and
-    `npm run test:permissions` before distributing a modified Atmos.
-
-## 17. Backward compatibility
-
-Core API v3 keeps the original extension model:
-
-- `extension.json` is optional for bundled extensions (third-party ones need
-  one to be approved);
-- manual `unmount()` hooks continue to work;
-- legacy flat persistence remains available;
-- a first-registered panel remains the fallback when no explicit default is
-  declared.
-
-API v3 removed the panel bar, drawer physics and panel shell
-(`panel-shell.js`, `panel-physics.js`), the `barPlacement`, `hideBar` and
-`lockOpen` descriptor options, the four-argument
-`mount(barEl, contentEl, extrasEl, context)` signature, and the
-`panel.bar-placement`, `panel.immediate-state`, `panel.normalized-position`
-and `panel.geometry-observer` capabilities. Every panel now receives
-`mount(surfaceEl, context)`; Core logs a warning for a mount function that
-still declares three or more parameters.
-
-## 18. Permissions and security
-
-### Trust model
-
-| Tier | Runs in | Model |
-|---|---|---|
-| **system** | the Atmos page | Privileged and declared. Always on. |
-| **first-party** (Official) | frames with `"runtime": "frame"` (every first-party plugin), otherwise the page | Installed as a signed package (an installer carries them as packages offered on the first start; `npm start` runs them from the repo). Trusted, declared and audited; may have a `main.cjs`. |
-| **third-party** (Community) | sandboxed frames only (section 19) | Approved, fingerprinted, sandboxed, with `network`, `browser` and `invokes` enforced. No `main.cjs`. |
-
-Every extension, whatever its tier, lists what it uses in `extension.json`:
-
-```json
-{
-  "permissions": {
-    "network":   ["api.example.com", "*.example.org"],
-    "browser":   ["geolocation"],
-    "invokes":   ["service:example-service"],
-    "node":      ["fs", "path"],
-    "electron":  ["dialog", "shell"],
-    "ipc":       true,
-    "provides":  ["example-data"],
-    "uses":      ["media-library"],
-    "resources": ["example-art"]
-  }
-}
-```
-
-| Key | Meaning |
-|---|---|
-| `network` | Hosts the extension contacts, from any process. `*.host` covers subdomains; `["*"]` means any host (user-configured servers, arbitrary URLs). |
-| `browser` | Browser permissions: `geolocation`, `clipboard-read`, `notifications`, `media` (camera/microphone), `display-capture`, and `wasm` (not a Chromium permission: the extension's frames may compile WebAssembly, e.g. an encryption library). Writing to the clipboard, fullscreen and audio autoplay need nothing. Chromium doesn't allow the `Notification` API in frames, so a framed extension shows notifications with `atmos.notifications.show()` instead (Core shows them for it). |
-| `invokes` | Other extensions it talks to, as `plugin:<id>` or `service:<id>`: their IPC (`window.atmos.extensionInvoke`, or `invoke()` in the SDK), methods a service exposes (`call()`), their events, and library services' modules (`library()`). |
-| `node` | Modules `main.cjs` (and the `.cjs` files it loads) `require()`, including `electron` and npm packages. |
-| `electron` | Electron APIs used from the main process, whether received from the context or required directly. |
-| `ipc` | `main.cjs` registers IPC handlers or sends events. |
-| `provides` / `uses` | Main-process capabilities it shares or consumes. |
-| `resources` | `atmos-resource://` providers it registers. |
-
-Omitted keys mean none; an empty block (`"permissions": {}`) is a valid
-declaration of no special permissions. Unknown keys and malformed values make
-the block invalid.
-
-### What is enforced
-
-- **Main-process context** — Electron objects, IPC, capabilities and resource
-  providers are handed out only as declared (section 14).
-- **Browser permissions** — each origin is granted only what its
-  extensions declare: the Atmos page (`atmos-app://local`) what page-runtime
-  extensions declare, each frame origin what its own extension declares.
-  Everything else is denied.
-- **Navigation** — the window never leaves `atmos-app://local/`. Links and
-  `window.open()` to `http(s)`/`mailto` open in the default browser; other
-  schemes are refused; a frame's `target="_blank"` links and
-  `window.open()` go the same way (its sandbox allows pop-ups only so they
-  reach this handler, which never opens a window). `<webview>` is disabled.
-  A frame can only navigate within its own `atmos-ext://` origin.
-- **Framed extensions** — see section 19: no access to the Atmos page,
-  other extensions or Electron; network limited to declared hosts by the
-  frame's Content-Security-Policy; every SDK request checked against the
-  manifest.
-- **Third-party approval** — a third-party extension does not load until the
-  user approves it in Settings → Plugins / Services, which shows its
-  permissions in plain language and what the sandbox does and doesn't cover. Approval
-  records a SHA-256 fingerprint of all its files (manifest included); any
-  change afterwards (code or permissions) stops it loading until it is
-  approved again, with newly requested permissions highlighted. Approvals are
-  kept in `extension-approvals.json` in Atmos's user-data folder.
-- **Signed packages** — see below. An installed extension signed by an
-  official key loads as first-party once every file matches its signature;
-  one changed, added or removed file, or a broken signature, stops it
-  loading (it shows as modified, and is never demoted to community).
-- **No third-party main-process code** — a third-party extension with a
-  `main.cjs`, or with main-process permissions (`node`, `electron`, `ipc`,
-  `provides`, `uses`, `resources`), is blocked and cannot be approved. A
-  third-party service may expose methods from its boot frame or be a
-  library, but has no IPC or main-process capabilities.
-- **Bundled integrity** — `npm run build` writes
-  `resources/extensions/integrity.json` with a SHA-256 hash of every bundled
-  file (`scripts/after-pack.cjs`). At startup Atmos rehashes each bundled
-  extension and does not load one whose files were changed, added or removed
-  (system extensions included); Settings shows it as modified. Dependency
-  folders (`node_modules`) are cached by size and modification time in
-  `extension-hash-cache.json` so later launches stay fast. When running from
-  source there is no list, and bundled extensions show as unverified.
-
-### Signed packages
-
-An official extension can be installed separately from Atmos as a signed
-`.atmos` package (a zip of the extension folder). Its `signature.json` holds
-the extension's kind, id, `version` and `publisher` and the SHA-256 of every
-other file, signed with Ed25519 (`core/js/core/extension-signing.cjs`).
-Atmos trusts the public keys in `core/trusted-keys.json`; a key is official,
-belongs to one publisher, and can be marked `"revoked"`. Signatures from keys
-not in the list are ignored (the extension is community). Community
-publishers signing their own packages comes later.
-
-```bash
-npm run keys:create -- <file outside the repo>   # new key, encrypted with a passphrase; adds it to core/trusted-keys.json
-npm run keys:show -- <file>                       # its id, and whether Atmos trusts it
-npm run pack:extensions -- --key <file>          # the released extensions → dist/packages/<id>-<version>.atmos
-npm run pack:extensions -- --key <file> finance --out <dir>
-```
-
-`pack:extensions` copies what an installer would bundle (the filters in
-`package.json` "build.extraResources"), signs the copy, checks it against
-`core/trusted-keys.json` and zips it; `--from <folder>` packs another tree,
-such as an export for the public repo. System extensions are part of Atmos
-and never packaged. The key file stays outside the repo (the scripts refuse
-one inside it) and the passphrase is asked for, or read from
-`ATMOS_SIGNING_PASSPHRASE`. To replace a key, add the new one, mark the old
-one revoked and ship an Atmos update; keep a backup of the key file.
-
-A bundled extension is checked against `integrity.json` when the build has
-one, and otherwise against its own `signature.json` if it has one.
-
-### Installing, updating and removing (Settings → Extensions)
-
-`core/js/core/extension-manager.cjs` installs official packages from
-**sources**: a folder or an `https://` address holding `index.json` and the
-`.atmos` files it lists — exactly what `pack:extensions` writes to its
-`--out` folder. The index names each package's kind, id, version, Core
-compatibility, dependencies, size and SHA-256, and is signed with an
-official key, so the host needn't be trusted. Sources are listed in
-`core/extension-sources.json` (built in; the official one is added when
-packages are published) and in `extension-sources.json` in user data
-(added on the Extensions page). Unpackaged, `--extension-source=<folder or
-url>` (or `ATMOS_EXTENSION_SOURCE`) adds one for the session.
-
-- **Checking** reads the indexes only, shortly after start and every 12
-  hours, or with Check for updates. Nothing downloads until Install or
-  Update is pressed. Packages this Core can't run are not offered.
-- **Install / Update** downloads the package and any missing or too-old
-  required dependency, checks size and hash against the index, unpacks it
-  safely and checks every file against an official signature, then stages
-  it in user data (`extension-staging/`, recorded in
-  `extension-pending.json`). Nothing running changes.
-- **Remove** is for what's in the installed folder (one bundled with Atmos
-  is switched off instead; removing an update of one goes back to the
-  bundled version). It asks every time whether to keep the extension's
-  settings and data (the default) or delete them, and is refused while an
-  installed extension needs it.
-- **At the next start**, before anything is listed, pending changes are
-  applied: staged packages move into the installed folder, removed ones are
-  deleted. The version an update replaced is kept in
-  `extension-previous/` and loads instead if the new one can't; it is
-  deleted once the new one has loaded. Deleting data removes the
-  extension's Atmos state, a `userData/<id>` folder, and the storage of an
-  origin of its own; databases a framed first-party extension keeps in the
-  shared origin stay.
-- The footer's **Extensions** button (left of Settings) opens this page and
-  turns the negative colour, with a tooltip saying why, when an update is
-  available, a change waits for a restart, or an extension failed to load.
-
-For development and the end-to-end checks, an unpackaged Atmos also trusts
-the keys in `--trusted-keys=<file>` (or `ATMOS_TRUSTED_KEYS`); a packaged
-one trusts only its own list.
-
-### What is audited, not enforced
-
-`npm run test:permissions` (`scripts/extension-permissions.test.cjs`) scans
-every bundled extension's source with `scripts/extension-audit.cjs` and fails
-when code uses a Node module, Electron API, IPC, capability, resource
-provider, browser permission, network host or other extension's IPC that its
-manifest doesn't declare — or declares one it no longer uses. It skips
-folders Atmos never runs (tests, tools, companion apps, `vendor/` for browser
-APIs) and any listed in the manifest's `"auditExclude"`. Run it directly to
-see what an extension uses:
-
-```bash
-node scripts/extension-audit.cjs plugins/audio-player
-```
-
-Direct `require()` in `main.cjs` and network access from page-runtime code
-cannot be blocked in-process, so for first-party code in the page these
-declarations are checked statically rather than enforced. Moving a
-first-party extension into frames makes its renderer-side `network`,
-`browser` and `invokes` enforced too.
-
-### Limits, and what comes next
-
-- Frames contain an extension's access, not its resource use: a frame can
-  still use a lot of CPU or memory, and whatever it shows inside its own
-  panel is up to it.
-- First-party extensions still run in the page until each one migrates to
-  frames, so their renderer permissions are audited rather than enforced.
-- `main.cjs` (first-party only) runs with full Node.js access; the context
-  gating catches mistakes, not hostile code.
-- `integrity.json` makes changes to an installed Atmos visible; it does not
-  stop someone who can also rewrite `integrity.json` (or `core/`, including
-  `trusted-keys.json`). That needs a signed installer and app. Signed
-  packages are only as trustworthy as the copy of Atmos checking them.
-
-### Licensing your extension
-
-Atmos is licensed under the GPLv3 with the Atmos Extension Exception
-(`LICENSE-EXCEPTION.md`). An extension that is your own code and works with
-Atmos only through the extension interface — the SDK, `extension.json`,
-and the plugins and services it reaches through the SDK — can be licensed
-however you like, including closed and paid. The SDK itself
-(`core/js/sdk/`) is MIT, so bundling or copying it is fine. What stays
-under the GPLv3: Atmos and modified versions of it, code copied from Atmos
-(other than the SDK and documentation examples), and an extension that
-reaches into Atmos's internal modules instead of the SDK.
-
-## 19. Atmos SDK and framed extensions
-
-Third-party extensions — and first-party ones that set `"runtime": "frame"`
-— never run in the Atmos page. Each surface runs in its own sandboxed
-`<iframe>` and reaches Atmos only through the Atmos SDK. System extensions
-(Wallpaper, Audio, Location) stay in the page as part of Core.
+Every file a frame loads is an ES module served from the extension's own
+origin (`atmos-ext://…`); `main.cjs` is CommonJS because it runs in
+Electron's main process. Relative imports, `new URL('./x.css',
+import.meta.url)`, fonts, images and WebAssembly all work as on the web.
+Folders named `data`, `tests` and `backups` are never served to a frame.
 
 ### Surfaces
 
-A framed extension uses the same entry files as any other; Core creates a
-frame for each and registers it with the usual registry, so panels work in
+Core creates a frame for each entry file and registers it with the usual registry, so panels work in
 every layout, sidebar widgets can be reordered and hidden, and so on.
 
 | File | Surface | Frame |
@@ -1214,8 +185,187 @@ the key itself.
 Labels are plain text and icons are files in the extension, drawn as a mask
 in the current text colour (so single-colour SVGs work best); nothing an
 extension declares is ever inserted into Atmos as markup. Settings frames
-appear on Settings → Appearance, like page-runtime settings contributions
-(section 7); sidebar and settings frames size themselves to their content.
+appear on Settings → Appearance; sidebar and settings frames size
+themselves to their content.
+
+### What Core owns
+
+Core owns the shell around every surface; the extension owns what is inside
+its frame.
+
+- **Panels.** Core supplies the surface, the layouts (`single`, columns,
+  rows, stacks, `quad`, and four `freeform` windows the user moves and
+  resizes), switching, the panel history (the mouse back button; hold for
+  Task View) and saved placement. A panel's frame fills its section at the
+  section's real size, and `atmos.surface.presentation` says which it is
+  in: `'full'`, `'tile'` or `'window'`. A layout change recreates the
+  frame, so read it once. Core draws no header, toolbar or visual identity
+  for a panel. Design it from the extension's own domain, and don't copy
+  another extension's interactions (the Audio Player's drawer is its own).
+- **Sidebar widgets.** Core owns the section shell, the label row,
+  expand/collapse, drag ordering, hiding and the per-panel visibility
+  (every widget's header menu lets the user show it everywhere or beside
+  one panel). Open widgets can be resized by dragging their lower edge, in
+  28 px steps, with double-click back to the natural height. The frame's
+  own height follows its content.
+- **Settings.** Settings (the Control Centre) lists every extension on its
+  Plugins, Services and System pages, where it is switched on or off (at the
+  next start), approved, and its permissions and dependencies shown.
+  Settings → Extensions installs, updates and removes packages (section 7).
+  An extension's own preferences belong in its own surfaces, or in its
+  settings page on Settings → Appearance.
+- **Theme.** The frame gets Atmos's CSS variables (`--ink-rgb`,
+  `--surface-rgb`, `--app-font-family`, the semantic colours
+  `--color-positive`, `--color-negative`, `--color-neutral`…) and the font
+  imported in Appearance, and they follow changes (`atmos.appearance`).
+
+## 3. The manifest
+
+Every extension has an `extension.json`. The smallest useful one:
+
+```json
+{
+  "apiVersion": 3,
+  "version": "1.0.0",
+  "displayName": "Weather",
+  "requires": { "extensions.frames": 3 },
+  "permissions": { "network": ["api.open-meteo.com"] },
+  "runtime": "frame"
+}
+```
+
+| Key | Meaning | Section |
+|---|---|---|
+| `apiVersion`, `requires` | Core API targeted and capabilities needed | this section |
+| `version` | The extension's own version, `MAJOR.MINOR.PATCH` (semver). Required to be packaged, and for others to depend on a range of it | this section |
+| `publisher` | Who publishes it (`"atmos"` for official extensions); must match the key that signs it | 7 |
+| `dependencies` | Services (or plugins) it needs, with version ranges; also its start order | this section |
+| `description`, `contract` | A one-line description; for a service, its own API contract (renderer API file, API version, events), formerly `service.json` | 5 |
+| `after`, `supersedesServices` | Start order only (prefer `dependencies`); legacy services this plugin replaces | this section |
+| `permissions` | Everything the extension uses | 7 |
+| `exports` | What it shares with other extensions: IPC handlers, events, exposed methods and resource providers, each for official extensions or for all | 7 |
+| `auditExclude` | Folders the permission audit skips | 7 |
+| `displayName` | Name shown in Settings and, for framed extensions, the default label | 2, 4 |
+| `runtime` | `"frame"`. Every extension runs in frames now, whatever it says; keep it for Atmos 0.11 and older, which ran first-party extensions without it in the page | 9 |
+| `isolation` | `"origin"` gives an official extension an origin of its own: storage and frames no other extension can reach. Every official extension that keeps data should have it (all the bundled ones do); without it an official extension shares `atmos-ext://first-party` | 4 |
+| `contributes` | Labels, icons and entry files for framed surfaces | 2, 4, 5 |
+| `library` | `true` on a service that is a library: imported by consumers, no lifecycle, UI or state of its own | 2, 4, 5 |
+| `legacyStorage` | What an official extension kept elsewhere before: in the Atmos page (`state`, `indexedDB`, `localStorage`, `deleteIndexedDB`, read with `atmos.legacy.*`), and in the shared first-party origin (`sharedOrigin`, moved into its own origin by Core; `sharedOriginIndexedDB`, deleted by Core) | 2, 4, 5 |
+
+`apiVersion` is the newest Core API the extension targets (3). `requires`
+lists the Core capabilities it needs, with minimum versions (an array of
+names means version 1). Atmos doesn't load an extension this Core can't run,
+and Settings says why. For a framed extension the one that matters is
+`extensions.frames`: the SDK level it needs (section 4 lists what came with
+2 and 3).
+
+Core still advertises the capabilities of its old page API, so manifests
+that name them keep loading:
+
+- `extensions.manifest`
+- `events.namespaced`
+- `lifecycle.context`
+- `panel.explicit-default`
+- `panel.pass-through`
+- `panel.surface-presentation`
+- `renderer.capabilities`
+- `state.namespaced`
+- `surface.workspace`
+- `context-menu.contributions`
+- `appearance.semantic-colors`
+- `settings.appearance-contributions`
+- `sidebar.resizable-sections`
+- `extensions.after`
+- `extensions.tiers`
+- `extensions.permissions`
+- `extensions.frames`
+
+The main process keeps its own copy of this list in
+`js/core/extension-host.cjs`; update both when adding a capability.
+
+### Versions and dependencies
+
+Every extension has a `version`, and lists what it needs in `dependencies`:
+
+```json
+{
+  "version": "1.0.0",
+  "publisher": "atmos",
+  "dependencies": {
+    "charting": "^1.2.0",
+    "currency": "^1.0.0",
+    "market-data": { "version": "^0.4.0", "optional": true }
+  }
+}
+```
+
+A bare id is a service; write `"plugin:<id>"` for a plugin. Ranges are
+`1.2.3` (exactly), `^1.2.3` (compatible: `<2.0.0`, or `<0.5.0` for `^0.4.x`),
+`~1.2.3` (patch updates), `>=1.2.3` and `*`. Every `service:<id>` in
+`permissions.invokes` must also be a dependency (`npm run test:permissions`
+checks it, along with the ranges against the repo's copies and that a
+released extension's required dependencies are released too).
+
+At startup, after trust is decided, an extension whose **required**
+dependency is missing, switched off, can't load, or has a version outside
+the range doesn't load either, and Settings says why ("Needs Charting, which
+is switched off"). The dependency's own row lists what uses it. An
+**optional** dependency never stops loading: the extension checks for it
+itself and hides what needs it. Dependencies of the same kind also order
+startup.
+
+A library service that isn't loading this session (not installed, switched
+off, missing a dependency, or failed to start) can't be imported:
+`atmos.library('service:<id>', file)` rejects, which is how a frame checks
+for an optional one. Finance does this once per frame before it mounts
+(`plugins/finance/src/host/market-data.js`) and, without Market Data, hides
+its market charts rather than showing them offline.
+
+The extension manager installs required dependencies with the extension
+and **offers** optional ones: Settings → Extensions shows "Optional: <name>"
+with its own Install beside the extension, as long as a source has a
+version in range and it isn't installed. An optional dependency marked
+`"recommended": true` is installed together with the extension on its
+first install (when a source has it), but stays optional: it can be removed
+or switched off, or fail to start, without stopping the extension, and an
+update doesn't bring it back. Finance does this with Market Data for now:
+
+```json
+"market-data": { "version": "^0.4.0", "optional": true, "recommended": true }
+```
+
+### Start order
+
+Extensions of the same kind start in alphabetical id order, after their
+dependencies of that kind. The older `after` list still orders startup
+(and nothing else):
+
+```json
+{
+  "after": ["media-library"]
+}
+```
+
+`after` applies to main-process activation and to the order frames are
+created (and therefore to the default panel order). Only ids of the
+same kind (plugin or service) that are installed, enabled and compatible are
+considered; missing ids are ignored, so `after` never prevents startup. A cycle
+is logged and broken alphabetically. Services always start before plugins, so
+a plugin never needs `after` for a service. Declare `"extensions.after": 1`
+if the order is required rather than preferred; older Cores ignore the field.
+
+A plugin replacing a legacy standalone service may also declare:
+
+```json
+{
+  "supersedesServices": ["old-service-id"]
+}
+```
+
+Only valid service ids are accepted. This prevents the old main-process
+service from activating when its replacement plugin is installed.
+
+## 4. The Atmos SDK
 
 ### Using the SDK
 
@@ -1249,8 +399,8 @@ document.addEventListener('contextmenu', event => {
 | `atmos.surface` | `{ type, presentation, fileDrops }`. A layout change recreates the frame, so `presentation` is fixed for its lifetime. Sidebar widgets and settings pages are sized to their content by the SDK, including while their section is collapsed or the sidebar closed | — |
 | `atmos.surface.setMenu(items)` | Sidebar widgets: the items Atmos adds to the widget header's right-click menu, same shapes as `contextMenu.open` (a ticked row shows as "✓ Label", like the header's own items). Call again when they change | — |
 | `atmos.surface.onFileDrag(fn)` / `onFileDrop(fn)` | Files dragged from the desktop: `{ state: 'over' \| 'leave' }` while a drag is over the frame, then `{ paths, files, types, data, x, y }` on drop (`paths[i]` is `files[i]`'s path, `''` when it has none; `data` holds `text/uri-list`, `text/plain`, `text/html`). Core takes the drop on the frame's behalf, since only the Atmos page can see paths | `"fileDrops": true` on the surface, first-party |
-| `atmos.state.get/set/update/onChange` | Persisted JSON state shared by the extension's frames (≤ 1 MB) | — |
-| `atmos.events.emit(name, payload)` / `on(name, fn)` | Own events; `on('<id>:name')` for another extension's | `invokes` for others |
+| `atmos.state.get/set/update/onChange` | Persisted JSON state shared by the extension's frames (≤ 1 MB), saved in a file of its own (`extension-state/<kind>-<id>.json` in user data) shortly after each change. `update` merges into the saved object in one step, so two frames' updates don't undo each other | — |
+| `atmos.events.emit(name, payload)` / `on(name, fn)` | Own events; `on('<id>:name')` for another extension's, if it shares them (`exports.events`) | `invokes` for others |
 | `atmos.appearance.get/onChange` | Theme; CSS variables (`--ink-rgb`, `--surface-rgb`, `--app-font-family`, `--color-positive`…) are applied to the frame automatically, and a font the user imported in Appearance is registered in the frame | — |
 | `atmos.surface.setGlass(regions)` | Panels with `"glass": true`: `[{ x, y, width, height, material: 'panel' \| 'shell', radius }]` in frame pixels (`panel`: the panel's blur and opacity; `shell`: the shell's, as behind a composer). `[]` clears it. At most 24 | `"glass"` on the panel |
 | `atmos.surface.trackGlass()` | The same, kept up to date: every element marked `data-atmos-glass="panel\|shell"` (optionally `data-atmos-glass-inset="top right bottom left"` in px; its border radius is used) becomes a region, re-measured when layout changes. Returns a function that stops | `"glass"` on the panel |
@@ -1263,9 +413,9 @@ document.addEventListener('contextmenu', event => {
 | `atmos.drawer.state` / `onChange(fn)` / `onKey(fn)` | Drawer panels: `{ open, expanded, placement, barPlacement, locked, bar }`; `--atmos-drawer-visible-h` on `:root` is the visible height below the bar while it moves. Wheel and swipes in the frame move the drawer except over elements marked `data-atmos-drawer-scroll` | `"drawer"` on the panel |
 | `atmos.drawer.open/close/expand/collapse()` / `setBarPlacement('top' \| 'bottom')` / `setPlacement(0–2)` | Move it: bar only, hidden, fully open, back to the bar; dock the bar at the bottom (the rest revealed upward); place it (0 open, 1 bar, 2 hidden; for carrying over an old position). Nothing happens while it is pinned open | `"drawer"` on the panel |
 | `atmos.surface.onKey(fn)` | Boot frames: a declared key was pressed, `fn({ code })` | `"keys"` on the boot contribution |
-| `atmos.invoke('service:x', channel, ...args)` | A first-party extension's main-process IPC handler | `invokes` |
-| `atmos.listen('plugin:<id>', channel, fn)` | Events a `main.cjs` sends with `context.send(target, channel, ...args)`; `fn(...args)`. Returns an unsubscribe function | `invokes`, except for the extension's own |
-| `atmos.call('service:x', method, ...args)` | A method an extension exposes from its boot frame (waits up to 15 s for that frame to start) | `invokes`, except for the extension's own |
+| `atmos.invoke('service:x', channel, ...args)` | A first-party extension's main-process IPC handler: its own, or one another extension shares (`exports.ipc`) | `invokes` |
+| `atmos.listen('plugin:<id>', channel, fn)` | Events a `main.cjs` sends with `context.send(target, channel, ...args)`; `fn(...args)`. Returns an unsubscribe function | `invokes` and `exports.events`, except for the extension's own |
+| `atmos.call('service:x', method, ...args)` | A method an extension exposes from its boot frame (waits up to 15 s for that frame to start) | `invokes` and `exports.methods`, except for the extension's own |
 | `atmos.expose({ method() {} })` | From `boot.js`: offer methods to `call()` | — |
 | `atmos.notifications.show({ title, body?, tag?, silent? })` | A system notification, shown by Atmos for the frame. Resolves `true` once shown, `false` where the system has none | `"notifications"` in `permissions.browser` |
 | `atmos.notifications.onClick(fn)` | The user clicked one of this extension's notifications: `fn({ tag })` in every frame of the extension, after Atmos comes to the front | — |
@@ -1289,9 +439,10 @@ button rows, `contextMenu.close`, `clipboard`, `deleteIndexedDB` and
 
 **Media from other extensions.** A frame may load `atmos-resource://<provider>`
 URLs (in `<img>`, `<video>` and `fetch()`) for providers it registers itself
-(`"resources"`) or that belong to an extension it declares in `"invokes"`, for
-example `"invokes": ["service:media-library"]` for a media library
-service's files. Its Content-Security-Policy allows exactly those.
+(`"resources"`) or that an extension it declares in `"invokes"` shares with
+it (`"exports": { "resources": { "media-library": "official" } }` in a media
+library service, say, with `"invokes": ["service:media-library"]` in the
+extension using it). Its Content-Security-Policy allows exactly those.
 
 ### Background frame and views
 
@@ -1311,20 +462,109 @@ chat timeline of thousands of events that the views read and react to, say
 `atmos.background()`. Each view must remove every listener it added to the
 engine's objects when its frame goes (`pagehide`).
 
-### Services and libraries
+### What a frame can and cannot do
+
+Each third-party extension has its own origin (`atmos-ext://plugin-<id>` or
+`atmos-ext://service-<id>`), and so does each official one with
+`"isolation": "origin"` (`atmos-ext://first-party-<kind>-<id>`; all the
+bundled ones have it). An origin is a storage partition and a process, so
+a frame may use `localStorage` and IndexedDB for larger data, and its
+frames can share them, but no other extension can read, overwrite or
+script them. Official extensions without `"isolation"` share
+`atmos-ext://first-party`, and with it each other's storage and frames.
+
+**Leaving the shared origin.** An official extension that kept data in the
+shared origin lists it when it moves out, and Core carries it across:
+
+```json
+"isolation": "origin",
+"legacyStorage": {
+  "sharedOrigin": {
+    "indexedDB": ["finance-assets"],
+    "localStorage": ["finance:state:*", "atmos:charting-*"]
+  }
+}
+```
+
+- **The copy.** At the first start with this manifest, before any of the
+  extension's frames open, Core copies those databases (schema and every
+  record, Blobs included) and keys (exact names, or `"prefix*"` of at least
+  four characters) into the extension's own origin. It then counts what
+  arrived.
+- **If the copy fails.** The extension runs from the shared origin that
+  session, where its data still is, and Settings → Extensions says so.
+  Atmos tries again at the next start.
+- **The old copies.** Core deletes the shared ones at a later start, once
+  the extension has run from its own origin. It touches nothing it wasn't
+  told about.
+- **Record.** `extension-origin-moves.json` in user data.
+- **Delete only.** `"sharedOriginIndexedDB": ["name", "prefix*"]` asks for
+  databases to be deleted from the shared origin once, without copying (an
+  extension that starts afresh, as Matrix Chat did).
+
+A frame cannot:
+
+- read or script the Atmos page, other extensions' frames, `window.atmos`,
+  `window.atmosCore` or Electron;
+- connect to hosts outside `permissions.network`, or load Atmos's own
+  resources (`atmos-app:`, and `atmos-resource:` providers it hasn't
+  declared or isn't shared) — its Content-Security-Policy refuses them;
+- navigate itself away from its origin, navigate Atmos, open windows or
+  dialogs (`alert`/`confirm`/`prompt`; use in-page UI instead), or embed
+  other frames;
+- listen for keys pressed outside it. A panel's global key is declared
+  (`"shortcut"`), not listened for;
+- use browser permissions it did not declare (and the user did not approve);
+- draw outside its surface or catch input outside it. Only Core draws
+  across the workspace: a drawer panel's pass-through and glass are Core's,
+  asked for in the manifest.
+
+Keys pressed inside a focused frame that aren't typing are passed on to
+Atmos, so its shortcuts work whichever panel or widget has focus: modifier
+combinations (Ctrl+` for Settings), F-keys, Escape, Space outside fields
+and buttons, and Atmos's single-key shortcuts outside fields and buttons
+(Tab for the sidebar, Shift+Tab to move it, and panel shortcuts such as
+Finance's `]`). A key the frame handled itself (`preventDefault()`) stays
+its own. System notifications go through
+`atmos.notifications.show()`, since Chromium refuses the `Notification` API
+in frames.
+
+### Patterns
+
+**Several frames, one extension.** An extension with a panel and several
+widgets that used to share one page's memory can run as separate frames:
+the panel and sidebar widgets run the same code in
+different roles; preferences live in `atmos.state` (every frame gets
+`onChange`), larger data in the extension's origin's localStorage (other
+frames see `storage` events), and changes to the library are announced with an
+event. A widget that needs the panel to do something (an import) records the
+request in state and calls `atmos.panel.show()`, so a panel that is only just
+starting still sees it.
+
+**One engine, many views.** To keep fetching in one place when a panel and
+several widgets all display the same data, make the boot frame the engine:
+it fetches and polls, publishes what it has as an event (debounced) and
+`expose()`s a `snapshot()` for frames that open later. The panel and the
+widgets are views: they run the extension's ordinary modules, apply what
+the engine publishes, and never fetch. Settings are saved together in
+`atmos.state` as `{ namespaces: { id: { version, data } } }`, so every frame
+sees every change; a field too big for state (an imported font) goes to the
+origin's localStorage. Views `call()` the engine's `ready()` first.
+
+## 5. Services and libraries
 
 A **service** owns lifecycle and exposes capabilities. A **library** is code
 that consumers import. It cannot own lifecycle, UI or privileged state.
 
 | | Service | Library (`"library": true`) |
 |---|---|---|
-| Runs | Once per session, as itself: `main.cjs` in the main process, and/or `boot.js` in its own background frame | Once per consumer document, inside the consumer (the Atmos page, or the consumer's frame) |
+| Runs | Once per session, as itself: `main.cjs` in the main process, and/or `boot.js` in its own background frame | Once per consumer frame, inside it |
 | Identity, permissions, storage | Its own | The consumer's |
 | Lifecycle | Yes: it starts, stops and keeps running | None: nothing runs until a consumer imports it and calls it |
 | UI | May contribute panels, widgets and settings | None of its own; it may render into elements the consumer passes it |
 | State | May keep and persist state, shared by all its consumers | None it persists; state belongs to the consumer and is passed in |
 | Privileged access (files, IPC, Electron) | Yes, through `main.cjs` and its declared permissions | Never directly; only through a route the consumer hands it |
-| Consumers reach it with | `invoke()` (its IPC), `call()` (methods its boot frame `expose()`s), events | `import()` of `getServiceFileUrl()` (page) or `atmos.library()` (frame) |
+| Consumers reach it with | `invoke()` (its IPC), `call()` (methods its boot frame `expose()`s), events, what it shares (`exports`) | `import()` of `atmos.library()` |
 
 **Choosing.** Use a library for pure computation and rendering: conversion,
 formatting, parsing, charts. Use a service when something must exist once
@@ -1339,8 +579,8 @@ anything that must be shared is a service.
    `atmos-sdk`, no other extension, no bare packages.
 2. **No entry points.** No `boot.js`, `panel.js`, `sidebar.js`,
    `settings.js` or `persist.js`, no `"contributes"` and no `"runtime"`.
-   Core never runs a library's files: the page loader skips them and a
-   library gets no frames, whatever it ships.
+   Core never runs a library's files: a library gets no frames, whatever
+   it ships.
 3. **No Atmos globals.** No `window.atmos` or `window.atmosCore`. What a
    library needs from Atmos, the consumer passes in (a function, a store, an
    element).
@@ -1368,14 +608,11 @@ metadata.setInvoke((channel, ...args) => atmos.invoke('service:media-metadata', 
 const tags = await metadata.readTags(path);
 ```
 
-In the Atmos page the consumer passes Core's bridge instead:
-`(channel, ...args) => window.atmos.extensionInvoke('service', 'media-metadata', channel, ...args)`.
-
 **Examples in Atmos**
 
 | Extension | Kind | Notes |
 |---|---|---|
-| Media Metadata | Service with a library | `main.cjs` reads and writes files; `renderer.js` parses tags and takes `setInvoke()`. |
+| Media Metadata | Service with a library | `main.cjs` reads and writes files, shared with official extensions only (it takes any path); `renderer.js` parses tags and takes `setInvoke()`. |
 | Audio Player's engine | Service (plugin-owned) | Lives in `boot.js`, `expose()`s methods, emits changes. |
 | A converter or chart renderer | Library | Pure computation or rendering into the consumer's element; any preferences go to storage the consumer passes in. |
 
@@ -1386,90 +623,396 @@ any exception would be listed by file in
 (there are none).
 
 **Exposed methods.** For a service's boot frame: it calls `atmos.expose()`;
-consumers `call()` it. Arguments and results cross frames, so they must be
-structured-cloneable (no functions or DOM nodes). Page-runtime code cannot
-`call()` a framed service yet, which is why a service whose consumers still
-run in the page is offered as a library first.
+consumers `call()` it, for the methods it shares (`"exports": { "methods":
+{ "greet": "all" } }`, section 7). Arguments and results cross frames, so
+they must be structured-cloneable (no functions or DOM nodes).
 
-### What a frame can and cannot do
+## 6. Main-process code (`main.cjs`)
 
-Each third-party extension has its own origin (`atmos-ext://plugin-<id>` or
-`atmos-ext://service-<id>`); framed first-party extensions share
-`atmos-ext://first-party`. An origin is a storage partition and a process,
-so a frame may use `localStorage` and IndexedDB for larger data, and its
-frames can share them.
+Official extensions only. Use `main.cjs` only when a frame can't do the
+work: filesystem access, native integration, resource streaming, or
+privileged network behaviour.
 
-Sharing an origin means sharing storage and being able to script each
-other's frames, so a first-party extension that keeps secrets there
-(encryption keys or sign-in tokens, say) sets `"isolation": "origin"` and gets
-`atmos-ext://first-party-<kind>-<id>`. Moving out leaves its old databases
-behind in the shared origin: list them in `"legacyStorage": {
-"sharedOriginIndexedDB": ["name", "prefix*"] }` and Core deletes them once,
-from a hidden page in that origin, touching nothing else there.
+```js
+module.exports = async context => {
+  context.handle('read:value', async (_event, key) => {
+    return readValue(key);
+  });
 
-A frame cannot:
+  context.registerResourceProvider('example-art', async ({ pathname }) => {
+    const bytes = await loadArt(pathname);
+    return new Response(bytes, {
+      headers: { 'Content-Type': 'image/png' },
+    });
+  });
+};
+```
 
-- read or script the Atmos page, other extensions' frames, `window.atmos`,
-  `window.atmosCore` or Electron;
-- connect to hosts outside `permissions.network`, or load Atmos's own
-  resources (`atmos-app:`, `atmos-plugin:`, `atmos-service:`, and
-  `atmos-resource:` providers it hasn't declared) — its
-  Content-Security-Policy refuses them;
-- navigate itself away from its origin, navigate Atmos, open windows or
-  dialogs (`alert`/`confirm`/`prompt`; use in-page UI instead), or embed
-  other frames;
-- listen for keys pressed outside it. A panel's global key is declared
-  (`"shortcut"`), not listened for;
-- use browser permissions it did not declare (and the user did not approve);
-- draw outside its surface or catch input outside it. Pass-through panels and
-  workspace overlays are page-only features.
+Atmos waits for the returned promise before it starts the next extension
+and opens its window, so `activate()` should register its handlers and
+return; start slow work (connections, scans) without awaiting it. An
+`activate()` that throws, or hasn't finished after **10 seconds**, fails
+the extension for this session: what it registered is withdrawn (later
+registrations are refused), whatever requires it is skipped ("Needs X,
+which failed to start"), the rest of Atmos starts as usual, and Settings →
+Extensions lists it under Needs attention. It is tried again at the next
+start.
 
-Keys pressed inside a focused frame that aren't typing are passed on to
-Atmos, so its shortcuts work whichever panel or widget has focus: modifier
-combinations (Ctrl+` for Settings), F-keys, Escape, Space outside fields
-and buttons, and Atmos's single-key shortcuts outside fields and buttons
-(Tab for the sidebar, Shift+Tab to move it, and panel shortcuts such as
-Finance's `]`). A key the frame handled itself (`preventDefault()`) stays
-its own. System notifications go through
-`atmos.notifications.show()`, since Chromium refuses the `Notification` API
-in frames.
+The extension's frames reach it through the SDK, scoped to the extension:
 
-### Migrating a first-party extension
+```js
+const value = await atmos.invoke('plugin:example-plugin', 'read:value', 'key');
+const unsubscribe = atmos.listen('plugin:example-plugin', 'changed', payload => render(payload));
+const imageUrl = 'atmos-resource://example-art/covers/1.png'; // <img src>, fetch()
+```
 
-1. Replace `atmos-core/...` imports with the SDK (state, events, menus, theme
-   variables, services).
-2. Move persisted state to `atmos.state` (same namespace id, so saved
-   settings carry over).
-3. Move long-lived work into `boot.js` and let the views talk to it
-   (above).
-4. Copy browser storage across once with `atmos.legacy.readIndexedDB()` and
-   `readLocalStorage()`, listing the databases and keys in
-   `"legacyStorage"`. Copy each key only if the frames don't have it yet:
-   another of the extension's frames may already have copied and changed it.
-5. Set `"runtime": "frame"` and `"contributes"` in `extension.json`.
-6. Check it in every layout; `npm run test:permissions` still applies.
+Other extensions reach only the handlers, events and providers it shares
+(`exports`, section 7), and every call arrives with the extension making it.
 
-Every bundled plugin runs in frames.
+The main-process context provides, each only when `extension.json`
+declares it (section 7):
 
-**Several frames, one extension.** An extension with a panel and several
-widgets that used to share one page's memory can run as separate frames:
-the panel and sidebar widgets run the same code in
-different roles; preferences live in `atmos.state` (every frame gets
-`onChange`), larger data in the shared origin's localStorage (other frames
-see `storage` events), and changes to the library are announced with an
-event. A widget that needs the panel to do something (an import) records the
-request in state and calls `atmos.panel.show()`, so a panel that is only just
-starting still sees it.
+- `id`, `kind`, the extension `root` path and its normalised `permissions`;
+- the Electron objects listed in `permissions.electron` that Core hands out
+  (`app`, `BrowserWindow`, `dialog`, `shell`) — never `ipcMain` or `protocol`;
+- `handle(name, handler)` and `send(webContents, name, ...args)` for isolated
+  IPC, with `"ipc": true`;
+- `provide(name, value)` and `use(name)` for main-process capabilities, for
+  names listed in `provides` / `uses`;
+- `registerResourceProvider(name, handler)` for streamed resources, for names
+  listed in `resources`.
 
-**One engine, many views.** To keep fetching in one place when a panel and
-several widgets all display the same data, make the boot frame the engine:
-it fetches and polls, publishes what it has as an event (debounced) and
-`expose()`s a `snapshot()` for frames that open later. The panel and the
-widgets are views: they run the extension's ordinary modules, apply what
-the engine publishes, and never fetch. Settings are saved together in
-`atmos.state` as `{ namespaces: { id: { version, data } } }`, so every frame
-sees every change; a field too big for state (an imported font) goes to the
-shared origin's localStorage. The engine does the one-time copy from the
-page; views `call()` its `ready()` first. Small modules that stand in for
-the Core modules the extension used in the page let the rest of it keep
-its shape.
+Anything undeclared throws `… is not permitted to …; declare it in
+extension.json "permissions"`. IPC ids and names are validated and handlers
+cannot overwrite another extension's scoped channel. Resource providers must
+use globally unique names.
+
+Only official extensions may have a `main.cjs`. It runs with
+full Node.js access, so the gating above catches mistakes rather than
+containing hostile code. Keep privileged operations in narrowly scoped
+handlers, validate renderer arguments, and avoid exposing raw filesystem or
+shell access when a smaller operation will do.
+
+## 7. Permissions and security
+
+### Trust model
+
+| Tier | Runs in | Model |
+|---|---|---|
+| **system** | the Atmos page, as part of Core | Privileged and declared. Always on. |
+| **first-party** (Official) | frames; first-party libraries inside the frames that import them; a `main.cjs` in the main process | Installed as a signed package (an installer offers them on the first start; `npm start` runs them from the repo). Trusted, declared and audited. |
+| **third-party** (Community) | sandboxed frames only | Approved, fingerprinted, sandboxed, with `network`, `browser` and `invokes` enforced, and only what other extensions share with community ones. No `main.cjs`. |
+
+Every extension, whatever its tier, lists what it uses in `extension.json`:
+
+```json
+{
+  "permissions": {
+    "network":   ["api.example.com", "*.example.org"],
+    "browser":   ["geolocation"],
+    "invokes":   ["service:example-service"],
+    "node":      ["fs", "path"],
+    "electron":  ["dialog", "shell"],
+    "ipc":       true,
+    "provides":  ["example-data"],
+    "uses":      ["media-library"],
+    "resources": ["example-art"]
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `network` | Hosts the extension contacts, from any process. `*.host` covers subdomains; `["*"]` means any host (user-configured servers, arbitrary URLs). |
+| `browser` | Browser permissions: `geolocation`, `clipboard-read`, `notifications`, `media` (camera/microphone), `display-capture`, and `wasm` (not a Chromium permission: the extension's frames may compile WebAssembly, e.g. an encryption library). Writing to the clipboard, fullscreen and audio autoplay need nothing. Chromium doesn't allow the `Notification` API in frames, so a framed extension shows notifications with `atmos.notifications.show()` instead (Core shows them for it). |
+| `invokes` | Other extensions it talks to, as `plugin:<id>` or `service:<id>`: whatever of theirs they share with it (`"exports"`, below): IPC handlers (`invoke()` in the SDK), methods a boot frame exposes (`call()`), events and resource providers; and library services' modules (`library()`). Declaring a target is not enough on its own: the target decides what it shares. |
+| `node` | Modules `main.cjs` (and the `.cjs` files it loads) `require()`, including `electron` and npm packages. |
+| `electron` | Electron APIs used from the main process, whether received from the context or required directly. |
+| `ipc` | `main.cjs` registers IPC handlers or sends events. |
+| `provides` / `uses` | Main-process capabilities it shares or consumes. |
+| `resources` | `atmos-resource://` providers it registers. |
+
+Omitted keys mean none; an empty block (`"permissions": {}`) is a valid
+declaration of no special permissions. Unknown keys and malformed values make
+the block invalid.
+
+### Sharing with other extensions (`exports`)
+
+Whatever an extension offers other extensions is private until its
+manifest shares it. That covers four things: the IPC handlers its
+`main.cjs` registers, the events it sends (`context.send()` in `main.cjs`,
+`atmos.events.emit()` in its frames), the methods its boot frame
+`expose()`s, and its `atmos-resource://` providers.
+
+```json
+{
+  "exports": {
+    "ipc":       { "subscribe": "official", "read-tags": "all" },
+    "events":    { "event": "official" },
+    "methods":   { "greet": "all" },
+    "resources": { "media-library": "official" }
+  }
+}
+```
+
+- `"official"` shares it with system and official extensions, and
+  `"all"` with community extensions too.
+- What isn't listed is the extension's own: its frames and its `main.cjs`
+  reach it as before, and so does the Atmos page.
+- Another extension reaches a shared name only if it also declares the
+  owner in `permissions.invokes`.
+- Libraries' modules (`library()`) and the Wallpaper and Audio calls are
+  not affected. A library is code the consumer runs with its own
+  permissions, and the Wallpaper and Audio calls are the SDK's own.
+
+Core checks this twice.
+
+1. The frame's bridge refuses anything not shared with the calling
+   extension's tier (an `AtmosPermissionError` naming the missing
+   `exports` entry).
+2. Every IPC call reaches the main process stamped with the extension
+   making it, and the handler runs only if it shares that name with that
+   extension. A call that got past the page would still be refused.
+
+Share only handlers that are safe for any caller of that tier. A handler
+that reads any path, fetches any URL or returns a secret should stay
+private, or be shared with official extensions only when they genuinely
+need it.
+
+Settings shows what a community extension can use of each extension it
+declares, above its Approve button ("Media Metadata shares nothing with
+community extensions"). `npm run test:permissions` checks that every
+shared IPC handler is registered, and that every shared resource provider
+is declared.
+
+### What is enforced
+
+- **Main-process context** — Electron objects, IPC, capabilities and resource
+  providers are handed out only as declared (section 6).
+- **Browser permissions** — each origin is granted only what its
+  extensions declare: the Atmos page (`atmos-app://local`) what the system
+  services declare, each frame origin what its own extension declares.
+  Everything else is denied.
+- **Navigation** — the window never leaves `atmos-app://local/`. Links and
+  `window.open()` to `http(s)`/`mailto` open in the default browser; other
+  schemes are refused; a frame's `target="_blank"` links and
+  `window.open()` go the same way (its sandbox allows pop-ups only so they
+  reach this handler, which never opens a window). `<webview>` is disabled.
+  A frame can only navigate within its own `atmos-ext://` origin.
+- **Frames** — see section 4: no access to the Atmos page,
+  other extensions or Electron; network limited to declared hosts by the
+  frame's Content-Security-Policy; every SDK request checked against the
+  manifest.
+- **Sharing between extensions** — another extension's IPC handlers,
+  events, exposed methods and resource providers only as far as it shares
+  them (`exports`, above). IPC is checked again in the main process
+  against the calling extension.
+- **Third-party approval** — a third-party extension does not load until the
+  user approves it in Settings → Plugins / Services, which shows its
+  permissions in plain language and what the sandbox does and doesn't cover. Approval
+  records a SHA-256 fingerprint of all its files (manifest included); any
+  change afterwards (code or permissions) stops it loading until it is
+  approved again, with newly requested permissions highlighted. Approvals are
+  kept in `extension-approvals.json` in Atmos's user-data folder.
+- **Signed packages** — see below. An installed extension signed by an
+  official key loads as first-party once every file matches its signature;
+  one changed, added or removed file, or a broken signature, stops it
+  loading (it shows as modified, and is never demoted to community).
+- **No third-party main-process code** — a third-party extension with a
+  `main.cjs`, or with main-process permissions (`node`, `electron`, `ipc`,
+  `provides`, `uses`, `resources`), is blocked and cannot be approved. A
+  third-party service may expose methods from its boot frame or be a
+  library, but has no IPC or main-process capabilities.
+- **Bundled integrity** — a build that bundles extensions (none does now;
+  see `scripts/after-pack.cjs`) writes `resources/extensions/integrity.json`
+  with a SHA-256 hash of every bundled file, and Atmos doesn't load one whose
+  files changed. When running from source there is no list, and bundled
+  extensions show as unverified. The system services are part of Core's own
+  files.
+
+### Signed packages
+
+An official extension can be installed separately from Atmos as a signed
+`.atmos` package (a zip of the extension folder). Its `signature.json` holds
+the extension's kind, id, `version` and `publisher` and the SHA-256 of every
+other file, signed with Ed25519 (`core/js/core/extension-signing.cjs`).
+Atmos trusts the public keys in `core/trusted-keys.json`; a key is official,
+belongs to one publisher, and can be marked `"revoked"`. Signatures from keys
+not in the list are ignored (the extension is community). Community
+publishers signing their own packages comes later.
+
+```bash
+npm run keys:create -- <file outside the repo>   # new key, encrypted with a passphrase; adds it to core/trusted-keys.json
+npm run keys:show -- <file>                       # its id, and whether Atmos trusts it
+npm run pack:extensions -- --key <file>          # the released extensions → dist/packages/<id>-<version>.atmos
+npm run pack:extensions -- --key <file> finance --out <dir>
+```
+
+`pack:extensions` copies what an installer would bundle (the filters in
+`package.json` "build.extraResources"), signs the copy, checks it against
+`core/trusted-keys.json` and zips it; `--from <folder>` packs another tree,
+such as an export for the public repo. The system services are part of
+Atmos and never packaged. The key file stays outside the repo (the scripts refuse
+one inside it) and the passphrase is asked for, or read from
+`ATMOS_SIGNING_PASSPHRASE`. To replace a key, add the new one, mark the old
+one revoked and ship an Atmos update; keep a backup of the key file.
+
+A bundled extension is checked against `integrity.json` when the build has
+one, and otherwise against its own `signature.json` if it has one.
+
+### Installing, updating and removing (Settings → Extensions)
+
+`core/js/core/extension-manager.cjs` installs official packages from
+**sources**: a folder or an `https://` address holding `index.json` and the
+`.atmos` files it lists — exactly what `pack:extensions` writes to its
+`--out` folder. The index names each package's kind, id, version, Core
+compatibility, dependencies, size and SHA-256, and is signed with an
+official key, so the host needn't be trusted. Sources are listed in
+`core/extension-sources.json` (built in; the official one is added when
+packages are published) and in `extension-sources.json` in user data
+(added on the Extensions page). Unpackaged, `--extension-source=<folder or
+url>` (or `ATMOS_EXTENSION_SOURCE`) adds one for the session.
+
+- **Checking** reads the indexes only, shortly after start and every 12
+  hours, or with Check for updates. Nothing downloads until Install or
+  Update is pressed. Packages this Core can't run are not offered. An index
+  older than one already seen from the same source (its signed
+  `generated` time, remembered in `extension-index-seen.json`) is refused
+  with the reason on the source's row. Someone who controls where a source
+  points can't bring back an old, genuinely signed index that hides
+  updates. Publishing therefore always means a newer index: re-run
+  `pack:extensions`, and don't mark an older release "latest" again.
+- **Install / Update** downloads the package and any missing or too-old
+  required dependency (never more bytes than the index gives as its size),
+  checks size and hash against the index, unpacks it
+  safely and checks every file against an official signature, then stages
+  it in user data (`extension-staging/`, recorded in
+  `extension-pending.json`). Nothing running changes.
+- **Remove** is for what's in the installed folder (one bundled with Atmos
+  is switched off instead; removing an update of one goes back to the
+  bundled version). It asks every time whether to keep the extension's
+  settings and data (the default) or delete them, and is refused while an
+  installed extension needs it.
+- **At the next start**, before anything is listed, pending changes are
+  applied: staged packages move into the installed folder, removed ones are
+  deleted. The version an update replaced is kept in
+  `extension-previous/` and loads instead if the new one can't; it is
+  deleted once the new one has loaded. Deleting data removes the
+  extension's state file, a `userData/<id>` folder, and the storage of its
+  own origin. Data an official extension without `"isolation"` keeps in the
+  shared origin stays, since Core can't tell whose it is.
+- The footer's **Extensions** button (left of Settings) opens this page and
+  turns the negative colour, with a tooltip saying why, when an update is
+  available, a change waits for a restart, or an extension failed to load.
+
+For development and the end-to-end checks, an unpackaged Atmos also trusts
+the keys in `--trusted-keys=<file>` (or `ATMOS_TRUSTED_KEYS`); a packaged
+one trusts only its own list.
+
+### What is audited, not enforced
+
+`npm run test:permissions` (`scripts/extension-permissions.test.cjs`) scans
+every bundled extension's source with `scripts/extension-audit.cjs` and fails
+when code uses a Node module, Electron API, IPC, capability, resource
+provider, browser permission, network host or other extension's IPC that its
+manifest doesn't declare — or declares one it no longer uses. It skips
+folders Atmos never runs (tests, tools, companion apps, `vendor/` for browser
+APIs) and any listed in the manifest's `"auditExclude"`. Run it directly to
+see what an extension uses:
+
+```bash
+node scripts/extension-audit.cjs plugins/audio-player
+```
+
+Direct `require()` in `main.cjs` can't be blocked in-process, so for
+main-process code these declarations are checked statically rather than
+enforced. In frames, `network`, `browser` and `invokes` are enforced.
+
+### Limits, and what comes next
+
+- Frames contain an extension's access, not its resource use: a frame can
+  still use a lot of CPU or memory, and whatever it shows inside its own
+  panel is up to it.
+- `main.cjs` (first-party only) runs with full Node.js access; the context
+  gating catches mistakes, not hostile code.
+- Nothing stops someone who can write to Atmos's own files (`core/`,
+  including `trusted-keys.json`) in an installed copy. That needs a signed,
+  asar-packed app with Electron's integrity fuses. Signed packages are only
+  as trustworthy as the copy of Atmos checking them.
+
+### Licensing your extension
+
+Atmos is licensed under the GPLv3 with the Atmos Extension Exception
+(`LICENSE-EXCEPTION.md`). An extension that is your own code and works with
+Atmos only through the extension interface — the SDK, `extension.json`,
+and the plugins and services it reaches through the SDK — can be licensed
+however you like, including closed and paid. The SDK itself
+(`core/js/sdk/`) is MIT, so bundling or copying it is fine. What stays
+under the GPLv3: Atmos and modified versions of it, code copied from Atmos
+(other than the SDK and documentation examples), and an extension that
+reaches into Atmos's internal modules instead of the SDK.
+
+## 8. Checklist
+
+Before shipping an extension:
+
+1. One stable lowercase, hyphenated id everywhere.
+2. An `extension.json` with `apiVersion`, `version`, `requires` (the
+   `extensions.frames` level it needs), `permissions` and, for anything it
+   offers other extensions, `exports`.
+3. Entry files at the extension root (or listed in `contributes`), each
+   importing `atmos-sdk`; nothing imports Atmos's own modules.
+4. State in `atmos.state` (small, JSON, shared by the extension's frames);
+   larger data in the frame origin's IndexedDB.
+5. Long-lived work (a socket, a player, a poller) in `boot.js`; panels and
+   widgets as views that can be recreated at any time.
+6. Every listener and timer a view adds to something that outlives it
+   removed on `pagehide`.
+7. Branding, headers, controls and layout inside the extension's own
+   surfaces; the shell is Core's.
+8. Privileged work (official extensions) behind narrow `main.cjs` handlers
+   that validate their arguments, shared with other extensions only when
+   they must be.
+9. Every permission it uses declared, and nothing it doesn't:
+   `npm run test:permissions` checks a bundled extension.
+10. Tested in every layout (full, tile, window), after a restart, and with
+    its dependencies switched off.
+
+## 9. Compatibility
+
+**Atmos 0.12 removed the page runtime.** Until then an extension could run
+inside the Atmos page, import Core's modules (`atmos-core/…`) and register
+with its registries (`registerPanelPlugin`, `registerSection`,
+`registerStateNamespace`…), from `panel.js`, `sidebar.js`, `settings.js`,
+`persist.js` and `boot.js`. Official extensions without `"runtime":
+"frame"` ran that way, and every plugin moved to frames before 0.12. Now:
+
+- every extension runs in frames, whatever `runtime` says. An extension
+  written for the page API fails in its frame: rewrite it on the SDK;
+- `atmos-plugin://` and `atmos-service://`, which served page-runtime
+  files, are gone;
+- the system services, the only code left in the page, are part of Core
+  (`core/system`), and `atmos-core/…` is Core's internal alias;
+- Core keeps advertising the old capabilities (section 3), so manifests
+  that name them still load.
+
+Keep `"runtime": "frame"` in a manifest while Atmos 0.11 or older might
+install the extension: those versions ran first-party extensions without it
+in the page.
+
+**Data from the page.** Extensions that moved from the page into frames
+copied their old data once with `atmos.legacy.*` (their `"legacyStorage"`
+lists what). Those calls remain for now and will be removed in a later
+version; new extensions have no use for them.
+
+**Sharing.** An official extension with no `"exports"` block (packages from
+before Atmos 0.12) still shares everything with official extensions, and
+nothing with community ones (section 7).
+
+**Storage.**
+- `atmos.state` lived in the Atmos page's one saved blob until 0.12. The
+  first time an extension's state is used under 0.12 it is copied into the
+  extension's own file, and the blob's copy is forgotten at a later start.
+- An official package from before 0.12 has no `"isolation"`, so it keeps
+  running in the shared origin, with its data, until it is updated to a
+  version that moves out (section 4, "Leaving the shared origin").

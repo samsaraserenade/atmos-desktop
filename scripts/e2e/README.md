@@ -7,8 +7,8 @@ frames.
 
 | Script | Checks |
 |---|---|
-| `frames.cjs` | Installs `fixtures/` as third-party extensions and approves them, then: panel, sidebar and settings frames; isolation from the Atmos page; CSP refusing undeclared hosts and Atmos's own schemes; blocked navigation and pop-ups; SDK state, events, service calls and a library service (Media Metadata's client); Core context menus; split layouts; theme sync; state surviving a restart; memory per process. |
-| `libraries.cjs` | Currency and Media Metadata imported into a sandboxed frame as library services (Media Metadata reading a tag only once the frame passes its `invoke`), Audio Player reading the same tag from its background frame, and the libraries still listed under Settings → Services. |
+| `frames.cjs` | Installs `fixtures/` as third-party extensions and approves them, then: panel, sidebar and settings frames; isolation from the Atmos page; CSP refusing undeclared hosts and Atmos's own schemes; blocked navigation and pop-ups; SDK state, events, service calls and a library service (Media Metadata's client); handlers and events another extension doesn't share with community extensions refused, by Core's bridge and again by the main process; Core context menus; split layouts; theme sync; state surviving a restart; memory per process. |
+| `libraries.cjs` | Currency and Media Metadata imported into a sandboxed community frame as library services (Media Metadata's file handlers refused to it, since they are shared with official extensions only), Audio Player reading a tag from its background frame, and the libraries still listed under Settings → Services. |
 | `audio-player.cjs` | The background layer and Audio Player in frames: Wallpaper carrying over Background's settings and image; Audio Player carrying over its settings, folders, library and waveforms from the page; the Music panel in Atmos's drawer; double-clicking an album playing it from the Audio service; the Queue, Now Playing and Library widgets; playback carrying on under another panel and into the next track; Space; album and waveform menus with icons, ranges and toggles; docking the bar; Escape twice from inside the frame; wheel on the workspace; a library rescan; everything after a restart. |
 | `finance.cjs` | Finance in frames against a synthetic VPS (`fake-vps.cjs`): settings, hidden chart ranges and Charting's settings carried over from what the in-page Finance saved (the display currency from the Currency service's old namespace); the panel and six widgets fed by one engine frame (the VPS read once); a widget header menu, whose Currency dropdown changes the totals in every widget; private mode (Hide balances) masking amounts, positions, the server address and the chart's value labels in every widget, and back; the chart menu's ticks and dropdowns; a font imported in Appearance inside a widget; a watchlist symbol opening its chart in the panel; the `]` toggle; settings after a restart; the old `portfolio-vps.json` moved into the sealed connection file, Disconnect showing the pairing form, and pairing again with a code. |
 | `matrix-chat.cjs` | Matrix Chat in frames against a fake homeserver (`fake-homeserver.cjs`): the one-time fresh start (the old device signed out, the page's old key store deleted, display preferences kept); the Rooms widget beside Chat only; signing in from the panel; opening a room from the widget; Atmos drawing the panel and composer glass; sending; an incoming message shown and pinging on the Audio service; the message menu's quick-reaction row reacting; Delete asking first; signed in again after a restart with no second fresh start. |
@@ -34,14 +34,26 @@ node scripts/e2e/matrix-chat.cjs  # screenshots in .tmp/e2e/matrix-chat
 ```
 
 They use the Electron from `devDependencies`; set `ELECTRON_PATH` to use
-another. Without a display, prefix with `xvfb-run -a`.
+another. They find the Atmos window with `atmosWindow()` (`isolate.cjs`),
+not Playwright's `firstWindow()`: Atmos opens hidden pages of its own at
+startup (moving and cleaning up storage), which Playwright lists as windows
+too; picking one of those was what made a run fail now and then with "page
+closed" during boot. Without a display, prefix with `xvfb-run -a`.
 
 The output is a JSON report, not pass/fail. What to expect:
 
 - `frames.cjs`:
-  - `panel.parent`, `fetchUndeclared`, `fetchResource`, `fetchAppShell`, `fetchPluginScheme` and `fetchFirstPartyFrame` are `"blocked"`;
+  - `panel.parent`, `fetchUndeclared`, `fetchResource`, `fetchAppShell`, `fetchPluginScheme` (a scheme that no longer exists) and `fetchFirstPartyFrame` are `"blocked"`;
   - `windowAtmos` and `windowAtmosCore` are `"undefined"`;
   - `invokeUndeclared` and `notifyUndeclared` are an `AtmosPermissionError`;
+  - `invokeUnshared` and `invokeMatrixFetch` are an `AtmosPermissionError`
+    saying Media Metadata and Matrix Chat don't share those handlers with
+    community extensions, and `listenUnshared` says the same of events;
+    `mainRefusesUnshared` is the same refusal from the main process, and
+    `mainRefusesImpostor` says `plugin:nobody` is not running;
+    `sharingSummary` is `["Matrix Chat shares nothing with community extensions", "Hello Service: greet"]`
+    (Media Metadata's line, "Media Metadata shares nothing with community
+    extensions", comes first once it is listed);
   - `collapsedWidget` is `{ open: false, grewBy: 150, restored: true }`;
   - `panel.greet` is a greeting and `panel.library` is `"ok"`;
   - `menuResult.choice` is `"say"`;
@@ -50,9 +62,11 @@ The output is a JSON report, not pass/fail. What to expect:
   - `tile.presentation` is `"tile"`;
   - `visitsAfterRestart` is one more than `tile.visits` (each panel mount counts as a visit).
 - `libraries.cjs`:
-  - `probe.title` and `audioPlayerTags` are `"Library Probe Song"`,
-    `probe.titleWithoutInvoke` is `null`, `probe.symbol` is `"€"`, and
-    `probe.coverWithoutInvoke` says there is no route to the main process;
+  - `audioPlayerTags` is `"Library Probe Song"`; `probe.title` and
+    `probe.titleWithoutInvoke` are `null`, and `probe.readRefused` says
+    Media Metadata doesn't share `read-file-bytes` with community
+    extensions; `probe.symbol` is `"€"`, and `probe.coverWithoutInvoke`
+    says there is no route to the main process;
   - every entry in `servicesPage` is `true`;
   - `errors` is empty (Electron's development CSP warning and Finance's
     missing VPS are filtered out).
@@ -87,7 +101,9 @@ The output is a JSON report, not pass/fail. What to expect:
   - `afterRestart` keeps the track (not playing), `volume: 0.4`, `bar: "bottom"`, `wallpaperMode: "wallpaper"`, `coverSize: "140px"`;
   - `errors` and `errorsAfterRestart` are empty.
 - `security.cjs`:
-  - `run1` shows `pending` and `blocked` and `sneakyMainRan` is `false`;
+  - `run1` shows `pending` and `blocked`, `sneakyMainRan` is `false`, and
+    `pendingFiles` is `404` (nothing of an extension waiting for approval
+    is served);
   - `run2` is `approved/active` with a boot frame; `notify` is `"shown true"`
     (`"shown false"` where the system has no notifications, as in a bare
     Linux container), `notifyClicks` is `[{ tag: "t1" }]` and
@@ -102,8 +118,8 @@ The output is a JSON report, not pass/fail. What to expect:
   - `2-after` has all four `first-party/verified/active installed`; `2-charts` is `{ switcher: true, marketDataClass: false, rowTitle: "Click to open chart · hold to remove", afterClick: "markets" }`;
     `2-connections` shows `Server: 100.100.1.1:8080`, `2-sealed` is `true`, `2-state` `"kept"`;
   - `3-withoutMarketData` has Finance active and `market-data` `null`; `3-chartsWithout` is `{ switcher: false, marketDataClass: true, rowTitle: "Hold to remove", afterClick: "portfolio" }`;
-    `3-installedOffer` names Market Data, `3-pending` is `["install market-data 0.4.0"]` and `3-charts` is like `2-charts` again;
-  - `4-updates` is `["finance 1.0.0 → 1.0.1"]`, `4-pending` only Finance, `4-after` Finance 1.0.1 and the rest unchanged, `4-previousKept` `false`, `4-connections` connected, `4-state` `"kept"`;
+    `3-installedOffer` names Market Data, `3-pending` is `["install market-data <its repo version>"]` and `3-charts` is like `2-charts` again;
+  - `4-updates` is `["finance <repo version> → <patch + 1>"]` (1.0.1 → 1.0.2 today), `4-pending` only Finance, `4-after` the newer Finance and the rest unchanged, `4-previousKept` `false`, `4-connections` connected, `4-state` `"kept"`;
   - `5-alsoOffered` is Charting, Currency and Market Data, all ticked (the script unticks them); `5-defaultChoice` is `"keep"`, `5-afterRemove` has Finance `null` and the three services still installed, `5-connectionFileKept` `true`,
     `5-pendingReinstall` only Finance, and after reinstalling `5-connections` is connected and `5-state` `"kept"`;
   - `6-bootMs` a little over 10 000, `6-list` has `early-stall` off with "Didn't start: it took longer than 10 s", `needs-stall` off with
@@ -112,7 +128,7 @@ The output is a JSON report, not pass/fail. What to expect:
   - `7-pending` removes finance, charting, currency and market-data; `7-afterRemove` is all `null` and `7-connectionFileGone` is `true`;
   - every `*-errors` is empty.
 - `first-run.cjs`:
-  - `packed` is the released non-system extensions and `builtIn` only `services/audio`, `services/location`, `services/wallpaper`;
+  - `packed` is the released extensions and `builtIn` is empty (the system services are part of Core, not bundled);
   - `1-picker` lists Audio Player, Finance and Matrix Chat with descriptions, `1-installBeforeTicking` is `true`,
     `1-pending` is `audio-player, charting, currency, finance, market-data, media-metadata` and `1-setup` `"chosen"`;
   - `2-list` has those six `first-party/active installed`, `2-picker` is `null`, and `2-extensionsPage` lists Fullscreen Viewer and

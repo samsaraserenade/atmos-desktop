@@ -1,9 +1,10 @@
 {
   "apiVersion": 3,
   "tier": "first-party",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "atmos",
   "runtime": "frame",
+  "isolation": "origin",
   "displayName": "Audio Player",
   "description": "A music player for your own library, in a drawer at the bottom of the screen.",
   "requires": {
@@ -60,7 +61,12 @@
           "playlist"
         ]
       }
-    ]
+    ],
+    "sharedOrigin": {
+      "indexedDB": [
+        "audio-player"
+      ]
+    }
   },
   "dependencies": {
     "audio": "^1.0.0",

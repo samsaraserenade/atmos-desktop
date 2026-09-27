@@ -7,11 +7,13 @@ const frames = require('./extension-frames.cjs');
 
 const entry = (tier, extra = {}) => ({ id: 'hello', kind: 'plugin', tier, manifest: {}, ...extra });
 
-test('runtime: system in the page, third-party in frames, first-party opts in', () => {
+test('runtime: system services in the page, first-party libraries in their consumers, everything else in frames', () => {
   assert.equal(frames.resolveRuntime(entry('system', { manifest: { runtime: 'frame' } })), 'page');
   assert.equal(frames.resolveRuntime(entry('third-party', { manifest: { runtime: 'page' } })), 'frame');
-  assert.equal(frames.resolveRuntime(entry('first-party')), 'page');
-  assert.equal(frames.resolveRuntime(entry('first-party', { manifest: { runtime: 'frame' } })), 'frame');
+  assert.equal(frames.resolveRuntime(entry('first-party')), 'frame', 'no page runtime for extensions any more');
+  assert.equal(frames.resolveRuntime(entry('first-party', { manifest: { runtime: 'page' } })), 'frame');
+  assert.equal(frames.resolveRuntime(entry('first-party', { kind: 'service', manifest: { library: true } })), 'library');
+  assert.equal(frames.resolveRuntime(entry('third-party', { kind: 'service', manifest: { library: true } })), 'frame');
 });
 
 test('origins: one per third-party extension, one shared by first-party', () => {
@@ -36,15 +38,11 @@ test('isolation: only declared, isolated extensions clean up the shared origin',
   assert.deepEqual(frames.sharedOriginCleanupPatterns(entry('third-party', { manifest: { isolation: 'origin', legacyStorage } })), []);
 });
 
-test('isolation: the cleanup script deletes only matching databases', async () => {
-  const deleted = [];
-  const fakeIndexedDB = {
-    databases: async () => [{ name: 'matrix-js-sdk::matrix-sdk-crypto' }, { name: 'another-extension' }, { name: 'exact-name' }, { name: 'exact-name-2' }],
-    deleteDatabase(name) { deleted.push(name); const request = {}; setImmediate(() => request.onsuccess()); return request; },
-  };
-  const run = new Function('indexedDB', `return ${frames.sharedOriginCleanupScript(['matrix-js-sdk*', 'exact-name'])};`);
-  assert.deepEqual(await run(fakeIndexedDB), ['matrix-js-sdk::matrix-sdk-crypto', 'exact-name']);
-  assert.deepEqual(deleted, ['matrix-js-sdk::matrix-sdk-crypto', 'exact-name']);
+test('isolation: deleting shared copies runs as a remove request to the shared origin\'s frame', () => {
+  const script = frames.storageHostScript({ from: 'atmos-ext://first-party', remove: { indexedDB: ['matrix-js-sdk*'], localStorage: [] } });
+  assert.match(script, /"matrix-js-sdk\*"/);
+  assert.match(script, /atmosMove: 'remove'/);
+  assert.doesNotThrow(() => new Function(`return ${script}`));
 });
 
 test('CSP allows only declared hosts and never other Atmos schemes', () => {
@@ -185,7 +183,7 @@ function harness(extension, surface = { type: 'panel' }) {
       on: (name, fn) => { listeners.set(name, [...(listeners.get(name) || []), fn]); return () => {}; },
     },
     appearance: () => ({ vars: {} }),
-    invokeMain: async (kind, id, channel, ...args) => ({ kind, id, channel, args }),
+    invokeMain: async (caller, kind, id, channel, ...args) => ({ caller, kind, id, channel, args }),
     services,
     libraryBase: id => (id === 'plotting' ? 'atmos-ext://first-party/services/plotting/' : null),
     openMenu: async () => 'x',
@@ -203,7 +201,11 @@ async function request(bridge, posted, method, ...args) {
 
 test('bridge: state, events and permission checks', async () => {
   const { createExtensionBridge } = await bridgeModule();
-  const h = harness({ id: 'hello', kind: 'plugin', tier: 'third-party', permissions: { invokes: ['service:plotting', 'service:helper'] } });
+  const h = harness({
+    id: 'hello', kind: 'plugin', tier: 'third-party', permissions: { invokes: ['service:plotting', 'service:helper'] },
+    // What the others share with it (worked out in the main process).
+    frame: { reach: { 'service:helper': { ipc: ['lookup'], events: ['ready'], methods: [], resources: [] } } },
+  });
   const bridge = createExtensionBridge({ extension: h.extension, surface: h.surface, post: m => h.posted.push(m), deps: h.deps });
   const call = (method, ...args) => request(bridge, h.posted, method, ...args);
 
@@ -214,8 +216,12 @@ test('bridge: state, events and permission checks', async () => {
   await assert.rejects(call('state.set', { big: 'x'.repeat(1024 * 1024) }), /larger than 1 MB/);
 
   await assert.rejects(call('invoke', 'plugin:notes', 'x'), /not permitted to invoke plugin:notes/);
-  assert.deepEqual(await call('invoke', 'plugin:hello', 'own', 1), { kind: 'plugin', id: 'hello', channel: 'own', args: [1] });
+  assert.deepEqual(await call('invoke', 'plugin:hello', 'own', 1), { caller: 'plugin:hello', kind: 'plugin', id: 'hello', channel: 'own', args: [1] });
   await assert.rejects(call('invoke', 'notes', 'x'), /is not an extension/);
+  // Another extension's handlers: only those it shares, and the call says who's asking.
+  assert.deepEqual(await call('invoke', 'service:helper', 'lookup', 2), { caller: 'plugin:hello', kind: 'service', id: 'helper', channel: 'lookup', args: [2] });
+  await assert.rejects(call('invoke', 'service:helper', 'read-any-file', '/etc/passwd'), /doesn't share its 'read-any-file' handler with community extensions/);
+  await assert.rejects(call('invoke', 'service:plotting', 'x'), /doesn't share/);
 
   assert.equal(await call('library.url', 'service:plotting', 'api.js'), 'atmos-ext://first-party/services/plotting/api.js');
   await assert.rejects(call('library.url', 'service:plotting', '../../x.js'), /relative path/);
@@ -227,6 +233,8 @@ test('bridge: state, events and permission checks', async () => {
   await assert.rejects(call('events.emit', 'notes:changed', 1), /own events/);
   await assert.rejects(call('events.subscribe', 'notes:changed'), /not permitted to listen/);
   await call('events.subscribe', 'helper:ready');
+  await assert.rejects(call('events.subscribe', 'helper:secrets'), /doesn't share its 'secrets' events/);
+  await assert.rejects(call('main.subscribe', 'service:helper', 'secrets'), /doesn't share its 'secrets' events/);
 
   await assert.rejects(call('services.expose', ['x']), /only boot\.js can expose/);
   await assert.rejects(call('legacy.readIndexedDB', 'anything'), /legacy databases/);
@@ -242,7 +250,7 @@ test('bridge: services expose methods from boot frames and callers need permissi
   assert.deepEqual(registered.methods, ['greet']);
 
   // A caller that declared the service reaches it; the frame answers.
-  const caller = harness({ id: 'hello', kind: 'plugin', tier: 'third-party', permissions: { invokes: ['service:helper'] } });
+  const caller = harness({ id: 'hello', kind: 'plugin', tier: 'third-party', permissions: { invokes: ['service:helper'] }, frame: { reach: { 'service:helper': { ipc: [], events: [], methods: ['greet', 'secret'], resources: [] } } } });
   caller.deps.services = serviceHarness.services;
   const callerBridge = createExtensionBridge({ extension: caller.extension, surface: caller.surface, post: m => caller.posted.push(m), deps: caller.deps });
   const pending = request(callerBridge, caller.posted, 'call', 'service:helper', 'greet', 'Sam');
@@ -258,6 +266,39 @@ test('bridge: services expose methods from boot frames and callers need permissi
   const strangerBridge = createExtensionBridge({ extension: stranger.extension, surface: stranger.surface, post: m => stranger.posted.push(m), deps: stranger.deps });
   await assert.rejects(request(strangerBridge, stranger.posted, 'call', 'service:helper', 'greet'), /not permitted to call/);
 
+  // Declared, but the service doesn't share that method with it.
+  const unshared = harness({ id: 'nosy', kind: 'plugin', tier: 'third-party', permissions: { invokes: ['service:helper'] }, frame: { reach: { 'service:helper': { ipc: [], events: [], methods: [], resources: [] } } } });
+  unshared.deps.services = serviceHarness.services;
+  const unsharedBridge = createExtensionBridge({ extension: unshared.extension, surface: unshared.surface, post: m => unshared.posted.push(m), deps: unshared.deps });
+  await assert.rejects(request(unsharedBridge, unshared.posted, 'call', 'service:helper', 'greet'), /doesn't share its 'greet' method/);
+
   service.dispose();
   assert.equal(serviceHarness.services.has('service:helper'), false);
+});
+
+test('storage moves: only isolated extensions that declare what they take, as names or long-enough prefixes', () => {
+  const isolated = legacyStorage => entry('first-party', { manifest: { isolation: 'origin', legacyStorage } });
+  assert.deepEqual(frames.sharedOriginMove(isolated({ sharedOrigin: { indexedDB: ['finance-assets', 'x*', '*'], localStorage: ['finance:state:*', 'finance:state:*'] } })),
+    { indexedDB: ['finance-assets'], localStorage: ['finance:state:*'] });
+  assert.equal(frames.sharedOriginMove(isolated({})), null, 'nothing declared: nothing to move');
+  assert.equal(frames.sharedOriginMove(isolated({ sharedOrigin: { indexedDB: [] } })), null);
+  assert.equal(frames.sharedOriginMove(entry('first-party', { manifest: { legacyStorage: { sharedOrigin: { indexedDB: ['a-db'] } } } })), null, 'not isolated: it stays');
+  assert.equal(frames.sharedOriginMove(entry('third-party', { manifest: { isolation: 'origin', legacyStorage: { sharedOrigin: { indexedDB: ['a-db'] } } } })), null);
+});
+
+test('storage moves: an extension whose move failed runs from the shared origin that session', () => {
+  const finance = entry('first-party', { manifest: { isolation: 'origin' } });
+  assert.equal(frames.frameOrigin(finance), 'atmos-ext://first-party-plugin-hello');
+  assert.equal(frames.frameOrigin({ ...finance, originFallback: true }), 'atmos-ext://first-party');
+  assert.equal(frames.frameOrigin(entry('third-party', { originFallback: true })), 'atmos-ext://plugin-hello', 'third-party origins never change');
+});
+
+test('storage moves: Core serves its move pages with a policy that allows only its own script', () => {
+  assert.match(frames.moveDocument('import'), /src="\/__atmos\/move\.js" data-role="import"/);
+  assert.match(frames.moveDocument('anything'), /data-role="export"/);
+  assert.equal(frames.moveCsp('import'), "default-src 'none'; script-src 'self'");
+  assert.match(frames.moveCsp('export'), /frame-src atmos-ext:/);
+  const script = frames.storageHostScript({ from: 'atmos-ext://first-party', to: 'atmos-ext://first-party-plugin-x', spec: { indexedDB: ['a'], localStorage: [] } });
+  assert.match(script, /"atmos-ext:\/\/first-party-plugin-x"/);
+  assert.doesNotThrow(() => new Function(`return ${script}`), 'the host script parses');
 });

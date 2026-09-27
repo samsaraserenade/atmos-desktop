@@ -9,7 +9,8 @@ const { createExtensionTrust } = require('./js/core/extension-trust.cjs');
 const { loadTrustedKeys } = require('./js/core/extension-signing.cjs');
 const { resolveDependencies, dependentsOf, normalizeDependencies, refOf } = require('./js/core/extension-dependencies.cjs');
 const { createExtensionManager } = require('./js/core/extension-manager.cjs');
-const { BASELINE_BROWSER } = require('./js/core/extension-permissions.cjs');
+const { createExtensionStateStore } = require('./js/core/extension-state.cjs');
+const { BASELINE_BROWSER, reachOf, reaches } = require('./js/core/extension-permissions.cjs');
 const { createLocationGate } = require('./js/core/location-gate.cjs');
 const frames = require('./js/core/extension-frames.cjs');
 const { resolveContainedPath } = require('./js/core/path-security.cjs');
@@ -30,22 +31,6 @@ protocol.registerSchemesAsPrivileged([
   {
     scheme: 'atmos-resource',
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
-  },
-  {
-    // atmos-plugin:// lets plugin-loader.js import() plugin files that live
-    // outside the app's own file:// origin (AppData, not the app bundle).
-    // Chromium's ES module loader blocks cross-directory file:// imports
-    // outright — this sidesteps that by making plugin files look like
-    // same-origin resources. `standard` + `supportFetchAPI` are required
-    // for import() to treat responses as loadable modules.
-    scheme: 'atmos-plugin',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
-  },
-  {
-    // Renderer-facing shared services live outside the application bundle,
-    // just like plugins, and therefore need their own module/resource bridge.
-    scheme: 'atmos-service',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
   },
   {
     // atmos-app:// serves the app shell itself (index.html + js/ + css/ +
@@ -138,6 +123,13 @@ function _registerAtmosAppProtocol() {
       const url = new URL(request.url); // atmos-app://local/<path>
       let rel = decodeURIComponent(url.pathname || '/');
       if (rel === '' || rel === '/') rel = '/index.html';
+      // Core's hidden storage page (see _withStoragePage): empty; its frames
+      // see the storage extensions' frames use in the Atmos window.
+      if (rel === '/__atmos/storage.html') {
+        return new Response('<!doctype html><title></title><body></body>', {
+          headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+      }
 
       const filePath = resolveContainedPath(__dirname, rel);
 
@@ -438,15 +430,15 @@ ipcMain.on('window-resize:end', event => {
 // Bundled extensions ship with Atmos: resources/extensions/{plugins,services}
 // in a build, or the repo's plugins/ and services/ when running from source.
 // Launching with --extensions-root=<dir> (or ATMOS_EXTENSIONS_ROOT=<dir>)
-// bundles <dir>/plugins and <dir>/services instead. Only bundled extensions
-// can be `system` (always on).
+// bundles <dir>/plugins and <dir>/services instead. The system services are
+// not bundled extensions: they are part of Core (core/system).
 //
 // Installed extensions live in %APPDATA%/atmos/{plugins,services}. One
 // signed with an official key (core/trusted-keys.json) is first-party
 // ("official") there too, and the highest official version of an id wins;
 // anything else installed is third-party ("community"). See
-// extension-catalog.cjs and extension-signing.cjs. The handlers below only list what is present;
-// plugin-loader.js and service-loader.js do their own dynamic import().
+// extension-catalog.cjs and extension-signing.cjs. The handlers below only
+// list what is present; frames load extensions' files over atmos-ext://.
 const _installedRoots = {};
 
 function _bundledRoot(kind) {
@@ -611,7 +603,12 @@ const _manager = createExtensionManager({
   })),
 });
 
+// The system services (Wallpaper, Audio, Location) are part of Atmos itself:
+// core/system/<id>, loaded by Core like the rest of its code.
+const _SYSTEM_ROOT = path.join(__dirname, 'system');
+
 const _catalog = createExtensionCatalog({
+  coreRoot: kind => (kind === 'services' ? _SYSTEM_ROOT : null),
   bundledRoot: _bundledRoot, installedRoot: _installedRoot, previousRoot: _manager.previousRoot, trustedKeys: _trustedKeys,
 });
 
@@ -702,6 +699,7 @@ function _managerSummary(status = _manager.status()) {
     else if (_activationFailures.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _activationFailures.get(refOf(entry)) });
     else if (trust?.fellBackFrom) problems.push({ kind: entry.kind, id: entry.id, name, reason: `version ${trust.fellBackFrom.version} couldn't load` });
     else if (deps && !deps.ok && trust?.loadable) problems.push({ kind: entry.kind, id: entry.id, name, reason: deps.problems[0] });
+    else if (_moveProblems.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _moveProblems.get(refOf(entry)) });
   }
   return { updates: status.updates, pending: status.pending.length, problems, checkedAt: status.checkedAt };
 }
@@ -796,6 +794,41 @@ _managerHandler('finish-setup', async chosen => {
   return { changes, ..._broadcastManager() };
 });
 
+// ── Each extension's atmos.state, in a file of its own (extension-state.cjs) ─
+const _stateStore = createExtensionStateStore({ dir: path.join(app.getPath('userData'), 'extension-state') });
+
+/** kind:id of a listed extension, or an error. */
+function _checkedExtension(kind, id) {
+  if (!['plugin', 'service'].includes(kind) || typeof id !== 'string' || !_catalog.find(`${kind}s`, id)) {
+    throw new Error(`not an extension: ${kind}:${id}`);
+  }
+  return { kind, id };
+}
+
+ipcMain.handle('extension-state:load-all', event => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+  return _stateStore.loadAll();
+});
+ipcMain.handle('extension-state:save', (event, kind, id, data) => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+  _checkedExtension(kind, id);
+  _stateStore.save(kind, id, data);
+  return true;
+});
+// The same, synchronously: the page's last writes as it unloads (quitting,
+// restarting), when an asynchronous reply would never arrive.
+ipcMain.on('extension-state:save-sync', (event, kind, id, data) => {
+  try {
+    if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+    _checkedExtension(kind, id);
+    _stateStore.save(kind, id, data);
+    event.returnValue = true;
+  } catch (error) {
+    console.warn(`[extensions] could not save ${kind}:${id}'s state:`, error.message);
+    event.returnValue = false;
+  }
+});
+
 // Extensions removed with their data at this start: the page forgets their
 // state namespaces (it asks once, at boot), and origins of their own lose
 // their storage.
@@ -803,10 +836,84 @@ const _dataCleanup = [];
 function _cleanUpRemovedData() {
   for (const { kind, id } of _manager.takeDataCleanup()) {
     _dataCleanup.push({ kind, id });
+    try { _stateStore.remove(kind, id); } catch (error) { console.warn(`[extensions] could not delete ${kind}:${id}'s state:`, error.message); }
     for (const host of [`${kind}-${id}`, `first-party-${kind}-${id}`]) {
       session.defaultSession.clearStorageData({ origin: `atmos-ext://${host}` }).catch(() => {});
     }
   }
+}
+
+// ── What extensions share with each other ("exports") ───────────────────
+// An extension reaches another's IPC handlers, events, exposed methods and
+// resource providers only when it declares it in "permissions.invokes" and
+// the other lists them in "exports" for its tier (extension-permissions.cjs).
+
+function _entryOf(targetRef) {
+  const [kind, id] = String(targetRef).split(':');
+  return kind === 'plugin' || kind === 'service' ? _catalog.find(`${kind}s`, id) : null;
+}
+
+/** What `entry` may use of the extension `targetRef`: { ipc, events, methods, resources }, or null for itself. */
+function _reachOf(entry, targetRef) {
+  const target = _entryOf(targetRef);
+  const empty = { ipc: [], events: [], methods: [], resources: [] };
+  if (!target) return empty;
+  return reachOf(
+    { kind: entry.kind, id: entry.id, tier: entry.tier, invokes: _trust?.get(entry)?.permissions.invokes || [] },
+    { kind: target.kind, id: target.id, exports: _trust?.get(target)?.exports },
+  ) || null;
+}
+
+/** For each extension a framed one declares: what it may use of it. */
+function _reachFor(entry) {
+  const out = {};
+  for (const target of _trust?.get(entry)?.permissions.invokes || []) {
+    if (target === `${entry.kind}:${entry.id}`) continue;
+    const reach = _reachOf(entry, target);
+    if (reach) out[target] = reach;
+  }
+  return out;
+}
+
+/** Plain-language lines for Settings: what it can use of each extension it declares. */
+function _describeSharing(entry) {
+  const lines = [];
+  for (const target of _trust?.get(entry)?.permissions.invokes || []) {
+    if (target === `${entry.kind}:${entry.id}`) continue;
+    const owner = _entryOf(target);
+    const name = owner?.manifest?.displayName || target.split(':')[1];
+    if (!owner) { lines.push(`${name}: not installed`); continue; }
+    // The Wallpaper and Audio system services are Atmos's own SDK calls, and
+    // a library without a main.cjs is only code the extension imports:
+    // nothing to share.
+    if (owner.tier === 'system' || (owner.manifest?.library === true && !_trust?.get(owner)?.hasMain)) continue;
+    const reach = _reachOf(entry, target);
+    if (reach.ipc.includes('*')) { lines.push(`${name}: everything (it doesn't list what it shares yet)`); continue; }
+    const parts = [...reach.ipc, ...reach.methods, ...reach.events.map(event => `${event} events`), ...reach.resources.map(provider => `${provider} files`)];
+    lines.push(parts.length
+      ? `${name}: ${parts.join(', ')}`
+      : `${name} shares nothing with ${entry.tier === 'third-party' ? 'community' : 'other'} extensions`);
+  }
+  return lines;
+}
+
+/**
+ * Checked by extension-host.cjs before every main.cjs IPC handler runs. Only
+ * the Atmos page (never a frame) can call; `caller` is null for the page's
+ * own code (Core and the system services), or the framed extension Core's
+ * bridge made the call for. Returns a refusal, or null.
+ */
+function _authorizeInvoke(event, caller, { kind, id, name }) {
+  if (!_fromAtmosPage(event)) return 'Not allowed';
+  if (caller === null) return null;
+  const target = `${kind}:${id}`;
+  if (caller === target) return null;
+  const entry = _entryOf(caller);
+  if (!entry || !_isActive(entry)) return `${caller} is not running`;
+  if (!(_trust?.get(entry)?.permissions.invokes || []).includes(target)) return `${caller} is not permitted to invoke ${target}`;
+  const reach = _reachOf(entry, target);
+  if (!reaches(reach.ipc, name)) return `${target} doesn't share its '${name}' handler with ${entry.tier === 'third-party' ? 'community' : 'other'} extensions`;
+  return null;
 }
 
 function _describeTrust(entry) {
@@ -817,6 +924,7 @@ function _describeTrust(entry) {
     statusReason: trust.reason,
     permissions: trust.permissions,
     permissionSummary: trust.permissionSummary,
+    sharing: _describeSharing(entry),
     newPermissions: trust.newPermissions || [],
     hasMain: trust.hasMain,
     fingerprint: trust.fingerprint || null,
@@ -840,6 +948,8 @@ function _describeRuntime(entry) {
     contributions: frames.describeContributions(entry, _walkRelativeFiles(entry.path)),
     // atmos-resource:// providers it may load (its audio channel checks these).
     resourceProviders: _resourceProvidersFor(entry),
+    // What the extensions it declares share with it (the bridge checks these).
+    reach: _reachFor(entry),
   };
   return out;
 }
@@ -966,14 +1076,6 @@ ipcMain.handle('extensions:open-root', async (_, kind) => {
   return 'Unsupported extension kind';
 });
 
-/** The folder of an active (discovered, trusted and not disabled) extension
- *  that runs in the Atmos page. Framed extensions are never served to the
- *  page: their code must only ever run inside their own frames. */
-function _activeExtensionFolder(kind, id) {
-  const entry = id ? _catalog.find(kind, id) : null;
-  return entry && _isActive(entry) && frames.resolveRuntime(entry) === 'page' ? entry.path : null;
-}
-
 // ── Framed extensions (atmos-ext://) ─────────────────────────────────────────
 const _SDK_DIR = path.join(__dirname, 'js', 'sdk');
 const _SDK_FILES = { '/__atmos/sdk.js': 'atmos-sdk.js', '/__atmos/frame.js': 'frame.js', '/__atmos/frame.css': 'frame.css' };
@@ -1021,9 +1123,11 @@ function _libraryOriginsFor(entry) {
 function _resourceProvidersFor(entry) {
   const providers = new Set(_trust.get(entry)?.permissions.resources || []);
   for (const target of _trust.get(entry)?.permissions.invokes || []) {
-    const [kind, id] = target.split(':');
-    const owner = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
-    if (owner && _isActive(owner)) for (const name of _trust.get(owner)?.permissions.resources || []) providers.add(name);
+    const owner = _entryOf(target);
+    if (!owner || !_isActive(owner)) continue;
+    // Another extension's providers: only those it shares ("exports.resources").
+    const shared = _reachOf(entry, target)?.resources || [];
+    for (const name of _trust.get(owner)?.permissions.resources || []) if (reaches(shared, name)) providers.add(name);
   }
   return [...providers];
 }
@@ -1061,6 +1165,21 @@ function _registerAtmosExtProtocol() {
         return new Response(frames.frameDocument(), {
           headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': csp },
         });
+      }
+      // Core's pages that copy an extension's storage into its own origin,
+      // served only to the move running now (see _moveToOwnOrigins).
+      if (_moveInProgress && (rel === '/__atmos/move.html' || rel === '/__atmos/move.js')) {
+        const role = host === frames.FIRST_PARTY_HOST ? 'export' : _moveInProgress.host && host === _moveInProgress.host ? 'import' : null;
+        if (role && rel === '/__atmos/move.html') {
+          return new Response(frames.moveDocument(role), {
+            headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': frames.moveCsp(role) },
+          });
+        }
+        if (role) {
+          return new Response(await fs.promises.readFile(path.join(__dirname, 'js', 'core', 'extension-origin-move.js')), {
+            headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.js'] },
+          });
+        }
       }
       // An empty document in the shared first-party origin, for Core's own
       // one-time storage cleanup (see _cleanUpSharedOriginStorage).
@@ -1102,56 +1221,6 @@ function _registerAtmosExtProtocol() {
       return new Response(buf, { headers: { ...headers, 'Content-Type': _mimeFor(filePath) } });
     } catch (e) {
       console.error('[main] atmos-ext protocol error:', e.message);
-      return new Response('Error', { status: 500 });
-    }
-  });
-}
-
-function _registerAtmosPluginProtocol() {
-  protocol.handle('atmos-plugin', async (request) => {
-    try {
-      const url = new URL(request.url); // atmos-plugin://<pluginId>/<file>
-      const pluginId = url.hostname;
-      const filename = decodeURIComponent(url.pathname.replace(/^\//, ''));
-
-
-      // Contain both the plugin id and the file path: neither a crafted
-      // host nor a "../" filename may reach outside this plugin's folder.
-      const pluginPath = _activeExtensionFolder('plugins', pluginId);
-      const filePath = pluginPath && filename ? resolveContainedPath(pluginPath, filename) : null;
-      if (!filePath || filePath === pluginPath) {
-        console.warn('[main] atmos-plugin protocol — rejected path:', request.url);
-        return new Response('Forbidden', { status: 403 });
-      }
-
-      const buf = await _readServableFile(filePath);
-      if (!buf) {
-        console.warn('[main] atmos-plugin protocol — not found:', filePath);
-        return new Response('Not found', { status: 404 });
-      }
-      return new Response(buf, { status: 200, headers: { 'Content-Type': _mimeFor(filePath) } });
-    } catch (e) {
-      console.error('[main] atmos-plugin protocol error:', e.message);
-      return new Response('Error', { status: 500 });
-    }
-  });
-}
-
-/** Serves renderer-side service modules and assets from
- *  %AppData%/atmos/services/<serviceId>. */
-function _registerAtmosServiceProtocol() {
-  protocol.handle('atmos-service', async (request) => {
-    try {
-      const url = new URL(request.url);
-      const serviceId = url.hostname;
-      const filename = decodeURIComponent(url.pathname.replace(/^\//, ''));
-      const servicePath = _activeExtensionFolder('services', serviceId);
-      const filePath = servicePath && filename ? resolveContainedPath(servicePath, filename) : null;
-      const buf = filePath && filePath !== servicePath ? await _readServableFile(filePath) : null;
-      if (!buf) return new Response('Not found', { status: 404 });
-      return new Response(buf, { status: 200, headers: { 'Content-Type': _mimeFor(filePath) } });
-    } catch (e) {
-      console.error('[main] atmos-service protocol error:', e.message);
       return new Response('Error', { status: 500 });
     }
   });
@@ -1249,33 +1318,130 @@ function _installBrowserPermissions(activeEntries) {
  * in that origin; nothing else there is touched. Done jobs are recorded, so
  * this runs again only if an extension's list changes.
  */
+// ── Moving an extension's storage into an origin of its own ─────────────────
+// An official extension with "isolation": "origin" runs in an origin of its
+// own. What it kept in the shared first-party origin before (its manifest's
+// "legacyStorage.sharedOrigin") is copied across once, before its frames
+// start (extension-origin-move.js), and the shared copies are deleted at a
+// later start, once it has run from its own. If the copy fails, it runs
+// from the shared origin this session, where its data still is, and the
+// move is tried again at the next start. Records: extension-origin-moves.json.
+const _MOVES_FILE = path.join(app.getPath('userData'), 'extension-origin-moves.json');
+const _SESSION = new Date().toISOString();
+// Unpackaged, --origin-move-timeout=<ms> changes it (the end-to-end check
+// makes one move fail this way).
+const _MOVE_TIMEOUT_MS = (() => {
+  const flag = app.isPackaged ? null : process.argv.find(arg => arg.startsWith('--origin-move-timeout='));
+  const value = flag ? Number(flag.slice('--origin-move-timeout='.length)) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : 180_000;
+})();
+let _moveInProgress = null; // { host }: the move whose pages are served
+const _moveProblems = new Map(); // ref → reason, for Settings
+
+function _readMoves() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(_MOVES_FILE, 'utf8'));
+    return saved?.format === 1 && saved.moves && typeof saved.moves === 'object' ? saved.moves : {};
+  } catch { return {}; }
+}
+
+function _writeMoves(moves) {
+  const temporary = `${_MOVES_FILE}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ format: 1, moves }, null, 2));
+  fs.renameSync(temporary, _MOVES_FILE);
+}
+
+/**
+ * Run `script` (frames.storageHostScript) in Core's hidden storage page: an
+ * atmos-app page, so its frames see the same storage as extension frames in
+ * the Atmos window (Chromium keys a frame's storage by the page it is in).
+ */
+async function _withStoragePage(allowImportHost, script, timeoutMs) {
+  const { WebContentsView } = require('electron');
+  const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  _moveInProgress = { host: allowImportHost };
+  let timer;
+  try {
+    await view.webContents.loadURL(`${_APP_ORIGIN}/__atmos/storage.html`);
+    const run = view.webContents.executeJavaScript(script);
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`it took longer than ${Math.max(1, Math.round(timeoutMs / 1000))} s`)), timeoutMs); });
+    return await Promise.race([run, timeout]);
+  } finally {
+    clearTimeout(timer);
+    _moveInProgress = null;
+    view.webContents.close();
+  }
+}
+
+function _moveOne(entry, spec) {
+  const from = `${frames.SCHEME}://${frames.FIRST_PARTY_HOST}`;
+  return _withStoragePage(frames.frameHost(entry), frames.storageHostScript({ from, to: frames.frameOrigin(entry), spec }), _MOVE_TIMEOUT_MS);
+}
+
+async function _moveToOwnOrigins() {
+  const moves = _readMoves();
+  let changed = false;
+  for (const entry of _framedEntries()) {
+    const spec = frames.sharedOriginMove(entry);
+    const ref = `${entry.kind}:${entry.id}`;
+    if (!spec || moves[ref]?.status === 'copied') continue;
+    const started = Date.now();
+    try {
+      const copied = await _moveOne(entry, spec);
+      moves[ref] = { status: 'copied', session: _SESSION, at: new Date().toISOString(), spec, copied };
+      console.log(`[extensions] moved ${ref}'s storage into ${frames.frameOrigin(entry)} in ${Date.now() - started}ms:`, JSON.stringify(copied));
+    } catch (error) {
+      // Run from the shared origin this session, where its data still is.
+      entry.originFallback = true;
+      const reason = error?.message || String(error);
+      moves[ref] = { status: 'failed', at: new Date().toISOString(), error: reason, attempts: (moves[ref]?.attempts || 0) + 1 };
+      _moveProblems.set(ref, `Its data couldn't be moved to storage of its own (${reason}); it uses the shared storage this session, and Atmos tries again at the next start`);
+      console.error(`[extensions] could not move ${ref}'s storage; using the shared origin this session:`, reason);
+    }
+    changed = true;
+  }
+  if (changed) {
+    try { _writeMoves(moves); } catch (error) { console.error('[extensions] could not record storage moves:', error.message); }
+  }
+}
+
 async function _cleanUpSharedOriginStorage() {
-  const markerPath = path.join(app.getPath('userData'), 'shared-origin-cleanup.json');
+  // (Before Atmos 0.12 this ran in a top-level page of the shared origin,
+  // which Chromium gives other storage than frames inside the Atmos window,
+  // so it deleted nothing; the v2 record makes it run again, as frames.)
+  const markerPath = path.join(app.getPath('userData'), 'shared-origin-cleanup-v2.json');
   let done = {};
   try { done = JSON.parse(fs.readFileSync(markerPath, 'utf8')) || {}; } catch { /* first run */ }
   const jobs = _framedEntries()
-    .map(entry => ({ key: `${entry.kind}:${entry.id}`, patterns: frames.sharedOriginCleanupPatterns(entry) }))
+    .map(entry => ({ key: `${entry.kind}:${entry.id}`, patterns: frames.sharedOriginCleanupPatterns(entry), keys: [] }))
     .filter(job => job.patterns.length && JSON.stringify(done[job.key]) !== JSON.stringify(job.patterns));
+  // Storage moved into an extension's own origin at an earlier start (so it
+  // has run from there since): its shared copies go.
+  const moves = _readMoves();
+  for (const [ref, move] of Object.entries(moves)) {
+    if (move.status !== 'copied' || move.cleaned || move.session === _SESSION) continue;
+    jobs.push({ key: ref, patterns: move.spec?.indexedDB || [], keys: move.spec?.localStorage || [], move: true });
+  }
   if (!jobs.length) return;
 
-  const { WebContentsView } = require('electron');
-  const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  const from = `${frames.SCHEME}://${frames.FIRST_PARTY_HOST}`;
   try {
-    await view.webContents.loadURL(`${frames.SCHEME}://${frames.FIRST_PARTY_HOST}/__atmos/blank.html`);
     for (const job of jobs) {
-      // An isolated world shares the page's origin (so its storage) but not
-      // its script restrictions; the page itself runs no script.
-      const deleted = await view.webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: frames.sharedOriginCleanupScript(job.patterns) }]);
+      const deleted = await _withStoragePage(null, frames.storageHostScript({ from, remove: { indexedDB: job.patterns, localStorage: job.keys } }), 60_000);
       console.log(`[main] removed ${job.key}'s old shared-origin storage:`, (deleted || []).join(', ') || 'none');
-      done[job.key] = job.patterns;
+      if (job.move) moves[job.key] = { ...moves[job.key], cleaned: new Date().toISOString() };
+      else done[job.key] = job.patterns;
     }
+  } catch (error) {
+    console.error('[main] shared-origin storage cleanup failed (will retry next launch):', error);
+  }
+  try {
     const temporary = `${markerPath}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(done, null, 2));
     fs.renameSync(temporary, markerPath);
+    if (jobs.some(job => job.move)) _writeMoves(moves);
   } catch (error) {
-    console.error('[main] shared-origin storage cleanup failed (will retry next launch):', error);
-  } finally {
-    view.webContents.close();
+    console.error('[main] could not record the shared-origin cleanup:', error.message);
   }
 }
 
@@ -1336,12 +1502,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   _cleanUpRemovedData();
   console.log(`[main] checked extension integrity in ${Date.now() - trustStart}ms`);
-  const extensions = createExtensionHost({ app, BrowserWindow, ipcMain, dialog, shell, protocol });
+  const extensions = createExtensionHost({ app, BrowserWindow, ipcMain, dialog, shell, protocol, authorizeInvoke: _authorizeInvoke });
   const activePlugins = _catalog.list('plugins').filter(_isActive);
   const supersededServices = extensions.supersededServices(activePlugins);
   const activeServices = _catalog.list('services')
     .filter(entry => _isActive(entry) && !supersededServices.has(entry.id));
-  _installBrowserPermissions([...activePlugins, ...activeServices]);
   // A main.cjs that throws or takes longer than 10 s is failed and startup
   // carries on; whatever needs it is skipped (and not listed as active).
   const activation = {
@@ -1360,10 +1525,12 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   await extensions.activateEntries('service', activeServices, activation);
   await extensions.activateEntries('plugin', activePlugins.filter(_isActive), activation);
   extensions.registerResourceProtocol(protocol, { allowOrigin: _originMayUseResource });
-  _registerAtmosPluginProtocol();
-  _registerAtmosServiceProtocol();
   _registerAtmosAppProtocol();
   _registerAtmosExtProtocol();
+  // Storage moves decide which origin an extension runs from, so they come
+  // before browser permissions (granted per origin) and the window.
+  await _moveToOwnOrigins();
+  _installBrowserPermissions([...activePlugins, ...activeServices]);
   createWindow();
   void _cleanUpSharedOriginStorage();
   // Check the sources soon after start and twice a day; this only reads

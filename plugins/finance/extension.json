@@ -1,9 +1,10 @@
 {
   "apiVersion": 3,
   "tier": "first-party",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "atmos",
   "runtime": "frame",
+  "isolation": "origin",
   "displayName": "Finance",
   "description": "Your portfolio from your own portfolio server, with a watchlist and market charts.",
   "requires": {
@@ -98,7 +99,16 @@
     ],
     "localStorage": [
       "atmos:charting-*"
-    ]
+    ],
+    "sharedOrigin": {
+      "indexedDB": [
+        "finance-assets"
+      ],
+      "localStorage": [
+        "finance:state:*",
+        "atmos:charting-*"
+      ]
+    }
   },
   "dependencies": {
     "charting": "^1.2.0",

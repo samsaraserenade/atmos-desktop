@@ -8,7 +8,7 @@
 // Usage: node scripts/e2e/finance.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), path = require('path');
-const { isolatedEnv } = require('./isolate.cjs');
+const { isolatedEnv, forgetFrameState, atmosWindow } = require('./isolate.cjs');
 
 const repo = path.resolve(__dirname, '../..');
 const out = path.resolve(process.argv[2] || path.join(repo, '.tmp', 'e2e', 'finance'));
@@ -19,7 +19,7 @@ const FAKE_VPS = path.join(__dirname, 'fake-vps.cjs');
 
 async function launch({ vps = true } = {}) {
   const app = await electron.launch({ executablePath: ELECTRON, args: [repo, `--extensions-root=${repo}`, '--no-sandbox', '--disable-gpu'], cwd: repo, env });
-  const page = await app.firstWindow();
+  const page = await atmosWindow(app);
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('response', res => { if (res.status() >= 400) errors.push(`HTTP ${res.status()} ${res.url()}`); });
@@ -107,6 +107,8 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   }
   step('await s.app.close();');
   await s.app.close();
+  // Its state file from this setup run goes too (Atmos 0.12 keeps it apart from the page).
+  forgetFrameState(installRoot, 'plugin', 'finance');
 
   // 2. Framed Finance against the synthetic VPS.
   step('s = await launch();');

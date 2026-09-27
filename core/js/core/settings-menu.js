@@ -765,7 +765,8 @@ function _extensionStatusText(extension) {
 }
 
 const _SANDBOX_WARNING = 'Community extensions run in their own sandboxed frame: they cannot see the rest of Atmos, '
-  + 'your other extensions or your files, and can only connect to the sites listed above. They can still show you anything '
+  + 'your other extensions or your files, can use only what other extensions share with community extensions, '
+  + 'and can only connect to the sites listed above. They can still show you anything '
   + 'inside their own panel, so only approve extensions from people you trust.';
 
 function _permissionList(lines, highlight = []) {
@@ -773,6 +774,13 @@ function _permissionList(lines, highlight = []) {
   return `<ul class="sm-permission-list">${(lines || []).map(line => (
     `<li${added.has(line) ? ' class="sm-permission-new"' : ''}>${_escape(line)}${added.has(line) ? ' <span>new</span>' : ''}</li>`
   )).join('')}</ul>`;
+}
+
+/** What it can use of the other extensions it declares (their "exports"). */
+function _sharingHtml(extension) {
+  const lines = extension.sharing || [];
+  if (!lines.length) return '';
+  return `<div class="sm-sharing-heading">From other extensions</div>${_permissionList(lines)}`;
 }
 
 /** Version, signer and dependencies, shown in the row's details. */
@@ -817,6 +825,7 @@ function _extensionTrustHtml(extension) {
       <div class="sm-trust-note sm-trust-review">
         <div>${title}</div>
         ${_permissionList(summary, status === 'changed' ? extension.newPermissions : [])}
+        ${_sharingHtml(extension)}
         <p class="sm-trust-warning">${_SANDBOX_WARNING}</p>
         <div class="sm-trust-actions">
           <button type="button" class="sm-restart-button" data-trust-action="approve">Approve</button>
@@ -833,6 +842,7 @@ function _extensionTrustHtml(extension) {
       <summary>Details</summary>
       ${_packageDetailsHtml(extension)}
       ${_permissionList(summary)}
+      ${_sharingHtml(extension)}
       ${extension.tier === 'third-party' && status === 'approved'
         ? '<button type="button" class="sm-trust-secondary" data-trust-action="revoke">Remove approval</button>'
         : ''}

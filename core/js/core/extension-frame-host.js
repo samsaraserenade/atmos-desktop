@@ -1,6 +1,6 @@
 /**
- * Runs framed extensions (third-party, and first-party with
- * "runtime": "frame") inside sandboxed iframes and plugs their surfaces
+ * Runs every extension (the system services aside, which are part of Core)
+ * inside sandboxed iframes and plugs their surfaces
  * into Core's ordinary registries, so layouts, tiles, windows, the sidebar
  * and Settings treat them like any other extension.
  *
@@ -14,7 +14,7 @@
  * process); see core/js/core/extension-frames.cjs for origins and CSP.
  */
 
-import { readSavedNamespace, registerStateNamespace, scheduleSave } from '../persist.js';
+import { readSavedNamespace, forgetStateNamespaces, scheduleSave } from '../persist.js';
 import { emit, on } from './events.js';
 import { openMenu, closeOpenMenu, openMenuOwner } from './context-menu.js';
 import {
@@ -44,7 +44,7 @@ const APPEARANCE_VARS = [
 ];
 const BOOT_TIMEOUT_MS = 10000;
 
-const _states = new Map();   // "kind:id" -> state namespace object
+const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>
 const SERVICE_WAIT_MS = 15000;
 const _exposed = new Map();        // "kind:id" -> { methods, call, owner }
@@ -226,29 +226,88 @@ window.addEventListener('blur', () => {
   if (focused?.tagName === 'IFRAME' && openMenuOwner() !== focused) closeOpenMenu();
 });
 
+// ── atmos.state: one file per extension (core/js/core/extension-state.cjs) ──
+// The page keeps the working copy of each extension's state; changes are
+// written to its own file shortly after they happen, and at once as the page
+// unloads. Nothing is shared between extensions, so one can't overwrite
+// another's settings.
+const STATE_WRITE_DELAY_MS = 250;
+const _stateApi = window.atmosCore?.extensionState ?? null;
+let _savedStates = {};
+const _stateReady = (async () => {
+  try { _savedStates = (await _stateApi?.loadAll?.()) || {}; }
+  catch (error) { console.warn('[extensions] saved extension state could not be read:', error.message); }
+})();
+const _stateTimers = new Map(); // "kind:id" -> timer
+
 function _stateFor(extension) {
   const k = key(extension);
   if (!_states.has(k)) {
-    // Same namespace id an in-page extension would use, so state survives a
-    // move between runtimes; a clash between a plugin and a service with
-    // the same id falls back to a kind-qualified name.
-    let namespace;
-    try { namespace = registerStateNamespace(extension.id, { defaults: {} }); }
-    catch { namespace = registerStateNamespace(`${extension.kind}-${extension.id}`, { defaults: {} }); }
-    _states.set(k, namespace);
+    let value;
+    if (Object.hasOwn(_savedStates, k)) {
+      value = _savedStates[k];
+      // Its own file is in use, so the copy the Atmos page's saved blob had
+      // (before Atmos 0.12) can go.
+      forgetStateNamespaces([extension.id, `${extension.kind}-${extension.id}`]);
+    } else {
+      // First use since 0.12: take what the Atmos page saved for it (the
+      // same namespace id, or kind-qualified after a clash), and write its
+      // file. The blob's copy stays until a later start.
+      value = readSavedNamespace(extension.id) ?? readSavedNamespace(`${extension.kind}-${extension.id}`) ?? {};
+      if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
+      _states.set(k, { extension, value });
+      _writeState(k, 0);
+      return _states.get(k);
+    }
+    _states.set(k, { extension, value });
   }
   return _states.get(k);
 }
 
+function _writeState(k, delay = STATE_WRITE_DELAY_MS) {
+  clearTimeout(_stateTimers.get(k));
+  _stateTimers.set(k, setTimeout(() => {
+    _stateTimers.delete(k);
+    const record = _states.get(k);
+    if (!record || !_stateApi) return;
+    _stateApi.save(record.extension.kind, record.extension.id, record.value)
+      .catch(error => console.warn(`[extensions] ${k}'s state could not be saved:`, error.message));
+  }, delay));
+}
+
+/** Write what is still waiting, synchronously (the page is going away). */
+function _flushStates() {
+  for (const [k, timer] of _stateTimers) {
+    clearTimeout(timer);
+    const record = _states.get(k);
+    if (record && _stateApi) _stateApi.saveSync(record.extension.kind, record.extension.id, record.value);
+  }
+  _stateTimers.clear();
+}
+window.addEventListener('pagehide', _flushStates);
+window.addEventListener('beforeunload', _flushStates);
+
+function _replaceState(extension, value, from) {
+  const record = _stateFor(extension);
+  record.value = structuredClone(value);
+  _writeState(key(extension));
+  _broadcast(key(extension), 'state', structuredClone(record.value), from);
+}
+
 const _deps = {
   state: {
-    get: extension => structuredClone({ ..._stateFor(extension) }),
-    set(extension, value, from) {
-      const namespace = _stateFor(extension);
-      for (const name of Object.keys(namespace)) delete namespace[name];
-      Object.assign(namespace, value);
-      scheduleSave();
-      _broadcast(key(extension), 'state', structuredClone(value), from);
+    async get(extension) {
+      await _stateReady;
+      return structuredClone(_stateFor(extension).value);
+    },
+    async set(extension, value, from) {
+      await _stateReady;
+      _replaceState(extension, value, from);
+    },
+    // Merged here, in one step, so two frames' updates can't undo each other.
+    async update(extension, patch, from, check = value => value) {
+      await _stateReady;
+      _replaceState(extension, check({ ..._stateFor(extension).value, ...patch }), from);
     },
   },
   events: { emit, on },
@@ -277,7 +336,8 @@ const _deps = {
       return () => { alive = false; off?.(); };
     },
   },
-  invokeMain: (kind, id, channel, ...args) => window.atmos.extensionInvoke(kind, id, channel, ...args),
+  // Stamped with the calling extension; the main process checks it again.
+  invokeMain: (caller, kind, id, channel, ...args) => window.atmosCore.invokeExtensionAs(caller, kind, id, channel, ...args),
   onMain: (kind, id, channel, fn) => window.atmos.extensionOn(kind, id, channel, fn),
   services: _services,
   awaitService: _awaitService,

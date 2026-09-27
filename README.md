@@ -102,15 +102,22 @@ designed so that you can safely install things you did not write.
 
 - **Sandboxed.** Every plugin runs in its own isolated frame and reaches
   Atmos only through the Atmos SDK. It can't see Atmos, other extensions
-  or your files. Built-in extensions that keep secrets, such as the chat
-  client's encryption keys, get a storage origin of their own too.
+  or your files.
+- **Storage of its own.** Each extension's data (its settings and whatever
+  it stores in the browser) is kept apart from every other extension's, so
+  none can read or overwrite another's.
 - **Declared permissions.** Each extension lists what it needs (network
   hosts, browser permissions, other extensions it talks to) and Atmos
   enforces that list. Settings shows it in plain language.
 - **Approval.** An extension you add yourself doesn't run until you approve
   it, and if its files change afterwards, Atmos asks again.
-- **Integrity.** An installed Atmos checks its bundled extensions at startup
-  and refuses to load any whose files have been changed.
+- **Shared on purpose.** An extension reaches another's features only where
+  that extension has chosen to share them, and Atmos checks every such call
+  in its main process too. The built-in ones share their file and network
+  access with official extensions only.
+- **Signed packages.** Official extensions are signed packages. Atmos
+  checks every file against the signature when it starts and refuses to
+  load one that has been changed.
 - **Built-in services.** Extensions share capabilities from Atmos (audio,
   wallpaper, location, media tags) rather than each reimplementing them.
 
@@ -203,9 +210,13 @@ widgets, background processes and custom functionality.
 
 ### Services
 
-Reusable capabilities shared between extensions, including audio, wallpaper,
-location, media metadata, full-screen viewing, charting, currency conversion
-and live market data.
+Reusable capabilities shared between extensions. Audio, wallpaper and
+location are part of Core itself; the others are extensions like any plugin:
+media metadata, full-screen viewing, charting, currency conversion and live
+market data.
+
+Every plugin and service runs in its own sandboxed frames and talks to Core
+through the Atmos SDK.
 
 ---
 
@@ -237,8 +248,8 @@ Build the Windows installer:
 npm run build
 ```
 
-An installer carries Core and the system services (Audio, Location,
-Wallpaper) built in, nothing else. Every other extension is downloaded
+An installer carries Core, which includes the system services (Audio,
+Location, Wallpaper), and nothing else. Every other extension is downloaded
 from the official source, the latest release of
 [atmos-desktop](https://github.com/samsaraserenade/atmos-desktop)
 (`core/extension-sources.json`): Atmos offers them on its first start
@@ -266,17 +277,18 @@ an `extension.json` declaring its permissions, write its panel, widgets or
 background work against the Atmos SDK, and restart Atmos. It appears in
 Settings waiting for your approval. The smallest working example is
 `scripts/e2e/fixtures/plugins/hello-frame`; the full API is in
-[ATMOS_CORE_INTEGRATION.md](ATMOS_CORE_INTEGRATION.md) (§ 18 security,
-§ 19 the Atmos SDK).
+[ATMOS_CORE_INTEGRATION.md](ATMOS_CORE_INTEGRATION.md) (§ 4 the Atmos SDK,
+§ 7 security).
 
 ### Repository layout
 
 ```text
 Atmos/
-├── core/        # The runtime: window, panels, sidebar, settings, the extension host and SDK
+├── core/        # The runtime: window, panels, sidebar, settings, the extension host and SDK,
+│                #   and the system services (core/system: audio, location, wallpaper)
 ├── plugins/     # User-facing extensions (audio-player, finance, matrix-chat)
-├── services/    # Capabilities extensions call into (audio, charting, currency, fullscreen-viewer,
-│                #   location, market-data, media-metadata, wallpaper)
+├── services/    # Capabilities extensions call into (charting, currency, fullscreen-viewer,
+│                #   market-data, media-metadata)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
 ├── release.json # What an installer bundles
 └── ATMOS_CORE_INTEGRATION.md   # The extension API
@@ -286,6 +298,7 @@ Atmos/
 
 | Command | What it does |
 |---|---|
+| `npm run test:all` | Every test below except the end-to-end checks (Matrix Chat's after `npm ci` in its folder) |
 | `npm run test:core` | Core tests |
 | `npm run test:services` | Service contract tests |
 | `npm run test:permissions` | Checks each bundled extension's code against its declared permissions |

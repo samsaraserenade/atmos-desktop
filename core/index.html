@@ -3,20 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<!-- ── Import map — plugins live outside the app bundle now (see
-     %AppData%/Atmos/plugins, discovered via main.js's plugins:list and
-     dynamically imported by js/core/plugin-loader.js). A plugin file's own
-     relative imports (e.g. total-chart.js's old '../../persist.js') broke
-     the moment it stopped living a fixed number of folders under js/ — no
-     amount of '../' can reach back into a different filesystem root. This
-     maps a stable bare specifier prefix to the bundle's real js/ folder
-     (relative to this document, which is where the bundle actually lives),
-     so any plugin file — regardless of how deep %AppData%/Atmos/plugins
-     nests it, or which machine/drive it's installed on — can import a
-     stable `atmos-core/` API path. MUST be the first thing in <head>, before any
-     <script type="module"> or dynamic import() anywhere in this file —
-     import maps only apply to specifiers resolved after they're
-     registered. -->
+<!-- ── Import map: `atmos-core/` is Core's own modules (js/), for the system
+     services in system/ and for tests driving the page. Extensions never
+     import Core: they run in frames and use the Atmos SDK. MUST be the
+     first thing in <head>, before any module script or import(): import
+     maps only apply to specifiers resolved after they're registered. -->
 <script type="importmap">
 {
   "imports": {
@@ -732,6 +723,7 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-manager-add-source input:focus { border-color: rgba(129,140,248,.38); }
 .sm-manager-add-source + .sm-trust-error { margin: 0 8px 8px; font-size: .64rem; }
 .sm-permission-list { margin: 6px 0 8px; padding-left: 16px; line-height: 1.55; }
+.sm-sharing-heading { margin: 8px 0 0; font-size: .6rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: rgba(var(--ink-rgb),.34); }
 .sm-permission-new { color: rgba(var(--ink-rgb),.82); }
 .sm-permission-new span { margin-left: 4px; padding: 0 5px; border-radius: 6px; font-size: .55rem; background: rgba(251,191,36,.18); color: rgb(251,191,36); }
 .sm-trust-note { margin: -6px 0 10px; font-size: .64rem; line-height: 1.45; color: rgba(var(--ink-rgb),.5); }

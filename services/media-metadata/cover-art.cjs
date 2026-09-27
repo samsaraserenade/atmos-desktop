@@ -9,7 +9,8 @@
  *   • Everything else — sidecar cover.jpg / cover.png alongside the audio file
  *
  * All three paths leave the audio data itself completely untouched. This
- * module is filesystem-facing (readFileSync/writeFileSync) but otherwise
+ * module is filesystem-facing (it replaces the audio file whole, through a
+ * temporary copy, so a crash can't leave it half written) but otherwise
  * knows nothing about panels, plugins, or the renderer — any plugin that
  * needs to write cover art calls this indirectly, via the IPC handler this
  * service registers.
@@ -21,6 +22,38 @@ const path = require('path');
 
 const { buildId3WithCover }  = require('./formats/id3.cjs');
 const { buildFlacWithCover } = require('./formats/flac.cjs');
+
+/**
+ * Replace `filePath`'s contents with `data` without ever leaving it half
+ * written: the new bytes go to a temporary file beside it, which then
+ * replaces the original in one step. If the file is open elsewhere (Windows
+ * refuses to replace it then), the complete temporary copy is copied over
+ * it instead.
+ */
+function replaceFile(filePath, data) {
+  const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.atmos-${process.pid}-${Date.now()}.tmp`);
+  const { mode } = fs.statSync(filePath);
+  const handle = fs.openSync(temporary, 'wx', mode);
+  try {
+    fs.writeFileSync(handle, data);
+    fs.fsyncSync(handle);
+  } catch (error) {
+    fs.closeSync(handle);
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+  fs.closeSync(handle);
+  try {
+    fs.renameSync(temporary, filePath);
+  } catch (error) {
+    try {
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error;
+      fs.copyFileSync(temporary, filePath);
+    } finally {
+      fs.rmSync(temporary, { force: true });
+    }
+  }
+}
 
 /**
  * Write cover art into the given audio file.
@@ -39,14 +72,14 @@ function writeCoverArt(filePath, imgBuffer, mimeType) {
     if (['mp3', 'mp2', 'mp1'].includes(ext)) {
       const data    = fs.readFileSync(filePath);
       const rebuilt = buildId3WithCover(data, imgBuffer, mimeType);
-      fs.writeFileSync(filePath, rebuilt);
+      replaceFile(filePath, rebuilt);
       return { ok: true };
     }
 
     if (ext === 'flac') {
       const data    = fs.readFileSync(filePath);
       const rebuilt = buildFlacWithCover(data, imgBuffer, mimeType);
-      fs.writeFileSync(filePath, rebuilt);
+      replaceFile(filePath, rebuilt);
       return { ok: true };
     }
 
@@ -64,4 +97,5 @@ function writeCoverArt(filePath, imgBuffer, mimeType) {
 
 module.exports = {
   writeCoverArt,
+  replaceFile,
 };

@@ -40,8 +40,9 @@ function readRelease() {
 }
 
 /**
- * Every extension except the system services leaves the built-in folders:
- * each is signed with the package key and packed into
+ * Every bundled extension leaves the built-in folders (the system services
+ * are part of Core, in core/system, not extensions a build bundles): each
+ * is signed with the package key and packed into
  * resources/extensions/packages/<id>-<version>.atmos, with a signed
  * index.json. Atmos offers them in its first-run picker and installs them
  * like any other package (removable, updatable). Needs the signing key:
@@ -61,7 +62,8 @@ async function packOptionalExtensions(extensionsRoot, { privateKey = null, trust
       const file = path.join(dir, id, 'extension.json');
       if (!fs.existsSync(file)) continue;
       const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (manifest.tier !== 'system') chosen.push({ kind, id, manifest });
+      if (manifest.tier === 'system') throw new Error(`after-pack: ${kind}/${id} says "tier": "system", but system services live in core/system`);
+      chosen.push({ kind, id, manifest });
     }
   }
   if (!chosen.length) return [];
@@ -90,15 +92,12 @@ async function packOptionalExtensions(extensionsRoot, { privateKey = null, trust
   return packed;
 }
 
-/** Remove every non-system extension from a build. Returns their ids. */
+/** Remove every bundled extension from a build (a release installer downloads them). Returns their ids. */
 function dropOptionalExtensions(extensionsRoot) {
   const dropped = [];
   for (const kind of ['plugins', 'services']) {
     const dir = path.join(extensionsRoot, kind);
     for (const id of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
-      const file = path.join(dir, id, 'extension.json');
-      const manifest = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
-      if (manifest?.tier === 'system') continue;
       fs.rmSync(path.join(dir, id), { recursive: true, force: true });
       dropped.push(id);
     }

@@ -3,8 +3,10 @@
 /**
  * Extension discovery for the main process.
  *
- * Extensions come from two places:
+ * Extensions come from three places:
  *
+ *   core      — the system services, part of Atmos itself (core/system/<id>:
+ *               Wallpaper, Audio, Location). Core loads their code directly.
  *   bundled   — shipped with Atmos (resources/extensions in a build, or the
  *               repo's plugins/ and services/ when running from source).
  *   installed — %APPDATA%/atmos/{plugins,services}: anything added later.
@@ -12,7 +14,7 @@
  * Where an extension sits no longer decides who vouches for it; its
  * signature does (extension-signing.cjs). Each gets a tier:
  *
- *   system       bundled with "tier": "system": part of Core, always on.
+ *   system       in core/system: part of Core, always on.
  *   first-party  "Official": bundled, or installed with a valid signature
  *                from an official key in core/trusted-keys.json.
  *   third-party  "Community": installed and not signed by an official key.
@@ -48,8 +50,11 @@ const VALID_ID = /^[a-z0-9][a-z0-9-]*$/;
  * catalog decides that with the signature (see candidateFor below).
  */
 function resolveTier(manifest, source) {
+  if (source === 'core') return 'system';
   if (source !== 'bundled') return 'third-party';
-  return manifest?.tier === 'system' ? 'system' : 'first-party';
+  // "system" is where an extension lives (core/system), not a claim a
+  // bundled manifest can make.
+  return 'first-party';
 }
 
 function readManifest(extensionPath) {
@@ -78,7 +83,7 @@ function versionOf(manifest) {
   return manifest && !manifest.invalid && isValidVersion(manifest.version) ? manifest.version : null;
 }
 
-const SOURCE_RANK = { bundled: 0, installed: 1, previous: 2 };
+const SOURCE_RANK = { core: -1, bundled: 0, installed: 1, previous: 2 };
 
 /** Higher version first; a missing version sorts lowest; bundled, then installed, wins ties. */
 function compareCandidates(a, b) {
@@ -95,20 +100,21 @@ function compareCandidates(a, b) {
 
 /**
  * @param {object} options
+ * @param {(kind: 'plugins'|'services') => string|null} [options.coreRoot]  the system services (core/system)
  * @param {(kind: 'plugins'|'services') => string|null} options.bundledRoot
  * @param {(kind: 'plugins'|'services') => string|null} options.installedRoot
  * @param {(kind: 'plugins'|'services') => string|null} [options.previousRoot]
  * @param {Map} [options.trustedKeys]  from loadTrustedKeys()
  * @param {(message: string) => void} [options.warn]
  */
-function createExtensionCatalog({ bundledRoot, installedRoot, previousRoot = () => null, trustedKeys = new Map(), warn = message => console.warn(message) }) {
+function createExtensionCatalog({ coreRoot = () => null, bundledRoot, installedRoot, previousRoot = () => null, trustedKeys = new Map(), warn = message => console.warn(message) }) {
   const cache = new Map();
 
   function candidateFor(kind, id, source, extensionPath) {
     const manifest = readManifest(extensionPath);
     if (manifest?.invalid) warn(`[extensions] ${KINDS[kind]} '${id}' has invalid extension.json: ${manifest.error}`);
     const base = { id, kind: KINDS[kind], path: extensionPath, source, manifest, version: versionOf(manifest), signature: null };
-    if (source === 'bundled') return { ...base, tier: resolveTier(manifest, source) };
+    if (source === 'core' || source === 'bundled') return { ...base, tier: resolveTier(manifest, source) };
     const check = checkSignature(extensionPath, {
       kind: KINDS[kind], id, manifest: manifest && !manifest.invalid ? manifest : null, trustedKeys,
     });
@@ -137,7 +143,8 @@ function createExtensionCatalog({ bundledRoot, installedRoot, previousRoot = () 
       if (item === chosen || item === fallback || item.source === 'previous') continue;
       const why = item.signature?.status === 'invalid' ? `its signature is broken (${item.signature.reason})`
         : item.tier === 'third-party' && chosen.tier !== 'third-party' ? 'it is not signed, and an official copy is present'
-          : `version ${chosen.version || '(none)'} from ${chosen.source === 'bundled' ? 'Atmos' : chosen.path} is loaded instead`;
+          : chosen.tier === 'system' ? 'it is part of Atmos'
+            : `version ${chosen.version || '(none)'} from ${chosen.source === 'bundled' ? 'Atmos' : chosen.path} is loaded instead`;
       warn(`[extensions] ignoring ${item.source} ${label} (${item.path}): ${why}`);
     }
     if (fallback) chosen = { ...chosen, fallback };
@@ -147,7 +154,7 @@ function createExtensionCatalog({ bundledRoot, installedRoot, previousRoot = () 
   function discover(kind) {
     if (!KINDS[kind]) throw new TypeError(`Unknown extension kind: ${kind}`);
     const byId = new Map();
-    for (const [source, root] of [['bundled', bundledRoot(kind)], ['installed', installedRoot(kind)], ['previous', previousRoot(kind)]]) {
+    for (const [source, root] of [['core', coreRoot(kind)], ['bundled', bundledRoot(kind)], ['installed', installedRoot(kind)], ['previous', previousRoot(kind)]]) {
       for (const id of listFolders(root)) {
         const extensionPath = path.join(root, id);
         if (!VALID_ID.test(id)) {

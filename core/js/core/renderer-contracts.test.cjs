@@ -247,17 +247,17 @@ test('standard context menus render interactive controls with typed values', () 
   assert.match(html, /\.ctx-control-value/);
 });
 
-test('wallpaper behavior belongs to the optional background plugin, not Core', () => {
+test('wallpaper behaviour lives in the Wallpaper system service, not the rest of Core', () => {
   const readSource = relativePath => fs.readFileSync(path.resolve(appDir, relativePath), 'utf8');
   const persistSource = readSource('persist.js');
   const contextMenuSource = readSource('core/context-menu.js');
   const appSource = readSource('../app.js');
   const html = readSource('../index.html');
 
-  const pluginState = readSource('../../services/wallpaper/persist.js');
-  const pluginEngine = readSource('../../services/wallpaper/engine.js');
-  const pluginBoot = readSource('../../services/wallpaper/boot.js');
-  const pluginSettings = readSource('../../services/wallpaper/settings.js');
+  const pluginState = readSource('../system/wallpaper/persist.js');
+  const pluginEngine = readSource('../system/wallpaper/engine.js');
+  const pluginBoot = readSource('../system/wallpaper/boot.js');
+  const pluginSettings = readSource('../system/wallpaper/settings.js');
 
   for (const coreSource of [persistSource, contextMenuSource, appSource, html]) {
     assert.doesNotMatch(coreSource, /bgHue|bgContrast|parallax-bg|setBgFrom|saveBg|loadBg/);
@@ -269,8 +269,8 @@ test('wallpaper behavior belongs to the optional background plugin, not Core', (
   assert.match(pluginEngine, /wallpaperApi|setTemporaryEffects|setWallpaper/);
   assert.match(pluginBoot, /provideCapability\('visual\.wallpaper'/);
   assert.match(pluginSettings, /category: 'Appearance'/);
-  assert.match(appSource, /loadPluginSettings/);
-  assert.match(appSource, /loadServiceSettings/);
+  assert.match(appSource, /loadSystemSettings/);
+  assert.match(readSource('core/system-services.js'), /'wallpaper\/settings\.js'/);
   assert.match(readSource('core/settings-menu.js'), /category === 'Appearance'/);
 });
 
@@ -282,7 +282,7 @@ test('plugin-specific player chrome does not become a Core panel convention', ()
 
   assert.doesNotMatch(html, /--seekbar-opacity|backdrop-filter:blur\(60px\)|click again to close/);
   assert.match(registry, /mount\(surfaceEl, context\)/);
-  assert.match(guide, /waveform, track metadata, album art, playback controls/);
+  assert.match(guide, /Core draws no header, toolbar or visual identity/);
 });
 
 test('settings gives system capabilities their own destination', () => {
