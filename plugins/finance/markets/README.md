@@ -1,7 +1,7 @@
 # Markets (Finance module)
 
 Markets was merged into the Finance plugin and is no longer installed on its
-own. The root Finance entry points import these modules. `markets` is an Atmos CoreV2 live market chart plus the existing Watchlist
+own. The root Finance entry points import these modules. `markets` is a live market chart plus the existing Watchlist
 sidebar experience, backed by the shared `market-data` read model. The charting service powers interactive candles,
 Heiken Ashi, line view, OHLC bucketing, pan/zoom, and the Samsara indicator.
 The panel intentionally contains only the chart and a hover-revealed bottom
@@ -23,7 +23,7 @@ toolbar for ticker, view, timeframe, indicator, and fit controls.
 - Watchlist polling runs in Finance's engine frame (`frame-engine.js`); the
   panel and widgets show what it publishes.
 - `src/watchlist-data.js` owns watchlist fetching and mutations.
-- `watchlist.js` is the compatibility API consumed by Portfolio Tracker.
+- `watchlist.js` is the compatibility API consumed by Finance's portfolio code.
 
 The toolbar ticker dropdown is populated from the Watchlist and accepts a typed
 symbol with Enter.

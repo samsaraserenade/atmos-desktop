@@ -50,9 +50,10 @@ window it is pinned open.
 (`atmos.call('plugin:audio-player', …)`) and follow its `engine`,
 `waveform`, `library-changed` and `library-status` events, plus the Audio
 service's changes for time and play/pause. Settings are shared through
-`atmos.state` (the same `audio-player` namespace the in-page version used):
-the engine saves playback keys, the views save display keys. The library
-lives in IndexedDB, written by the engine and read by the views.
+`atmos.state`, kept in a file of its own (`extension-state/plugin-audio-player.json`
+in Atmos's data folder): the engine saves playback keys, the views save
+display keys. The library lives in IndexedDB in Audio Player's own origin
+(`"isolation": "origin"`), written by the engine and read by the views.
 
 **Space** plays and pauses from anywhere in Atmos (the boot contribution
 declares `"keys": ["Space"]`), except in a text field or in a panel that
@@ -61,7 +62,10 @@ uses Space itself.
 **Carried over from the in-page version** (once): settings, via the shared
 state namespace; the library, waveform cache and opened files, from the
 Atmos page's database (`legacyStorage`); the drawer's position and "Dock
-Player", handed to Atmos on the first panel mount.
+Player", handed to Atmos on the first panel mount. Its `audio-player`
+database in the shared first-party origin (where Audio Player kept it
+before 1.0.1) is moved into its own origin by Core, once, before the window
+opens (`legacyStorage.sharedOrigin`).
 
 Run the tests with `node --test tests/*.test.cjs`; end to end with
 `scripts/e2e/audio-player.cjs`.

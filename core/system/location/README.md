@@ -1,11 +1,16 @@
 # Location service
 
-The user's location, shared by any extension that needs it. DOM-free core
-logic plus a section in Settings → Appearance for choosing a location.
+The user's location, for Atmos itself. DOM-free core logic plus a section in
+Settings → Appearance for choosing a location. Extensions can't read it yet:
+the SDK has no location call.
+
+Part of Core (`core/system/location`): Core loads it itself
+(`core/js/core/system-services.js`). It is always on, and is never
+installed, packaged or switched off.
 
 ## Contract
 
-`index.js` (`getServiceFileUrl('location', 'index.js')`):
+`index.js` (imported by Core's own code; `settings.js` uses it):
 
 | Export | Purpose |
 |---|---|

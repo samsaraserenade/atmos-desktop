@@ -127,7 +127,7 @@ connect.
    `/etc/atmos-portfolio.env` (or `.env` with Docker).
 
 Every `/v1` request needs the token, and `/health` says only that the
-server is up. Don't publish port 8787 itself.
+server is up, and its version. Don't publish port 8787 itself.
 
 Docker users can now start it: `docker compose up -d --build`.
 

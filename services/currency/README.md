@@ -1,15 +1,14 @@
 # Currency service
 
 Exchange rates and currency conversion. A library service (`"library": true`):
-pure modules with no state, no DOM and no Core imports, so they run in the
-Atmos page and inside a framed consumer alike. No main-process entry and no
-Settings page. It follows the library rules in ATMOS_CORE_INTEGRATION.md § 19.
+pure modules with no state, no DOM and no Core imports, which run inside a
+framed consumer. No main-process entry and no Settings page. It follows the
+library rules in ATMOS_CORE_INTEGRATION.md § 5.
 
 ## Contract
 
-In the Atmos page, resolve files with `getServiceFileUrl('currency', file)`;
-from a frame (declare `"invokes": ["service:currency"]` and the network host
-below), use `await atmos.library('service:currency', file)`.
+From a frame (declare `"invokes": ["service:currency"]` and the network
+host below), use `await atmos.library('service:currency', file)`.
 
 `rates.js`:
 

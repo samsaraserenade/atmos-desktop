@@ -1,6 +1,6 @@
 # Atmos Market Data service
 
-`market-data` is an Atmos CoreV2 infrastructure service. It owns exchange
+`market-data` is an Atmos infrastructure service. It owns exchange
 connectivity and turns provider trade messages into one canonical stream of
 trades and candles. Plugins consume the service contract and never import
 exchange adapters.
@@ -13,11 +13,12 @@ candles only".
 
 ## Installation and discovery
 
-Market Data is a first-party service bundled with Atmos (`services/market-data`
-in the repo, `resources/extensions/services/market-data` in a build).
-`extension.json` participates in CoreV2 compatibility checks; `main.cjs` is
-activated by the service host before plugins. `extension.json` "contract" lists the
-service-owned API and event contract.
+Market Data is an official service (`services/market-data` in the repo).
+Atmos installs it as a signed package from the official source; Finance
+brings it on a first install (`"recommended"`). `extension.json` takes part
+in dependency checks; `main.cjs` is activated before plugins.
+`extension.json` "contract" lists the service-owned API and event contract.
+Its IPC and events are shared with official extensions only (`"exports"`).
 
 ## Renderer API
 
@@ -50,10 +51,6 @@ await subscription.unsubscribe();
 stopTrades();
 ```
 
-From the Atmos page, resolve it with `getServiceFileUrl('market-data', 'api.js')`
-and pass Core's bridge (`window.atmos.extensionInvoke` / `extensionOn` with
-`'service', 'market-data'`).
-
 `subscribe()` defaults to all available exchanges. Pass an `exchanges` array
 to select providers. It returns the initial committed `snapshot` and a handle
 with `unsubscribe()`. The API also provides `getStatus()`, `getProviders()`,
@@ -84,8 +81,8 @@ or later. Plugins never need to race an event against state reconstruction.
 
 ## Main-process capability
 
-A plugin or service main entry can consume the capability after services have
-activated:
+A plugin or service main entry that declares `"uses": ["market-data"]` can
+consume the capability after services have activated:
 
 ```js
 const market = context.use('market-data');

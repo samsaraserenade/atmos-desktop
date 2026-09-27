@@ -12,15 +12,15 @@ chart work on their own; the portfolio comes from a portfolio server you run
 
 ## How it's built
 
-Finance runs in sandboxed frames (ATMOS_CORE_INTEGRATION.md § 19):
+Finance runs in sandboxed frames, in an origin of its own (`"isolation": "origin"`; ATMOS_CORE_INTEGRATION.md § 4):
 
 ```text
 finance/
-├── extension.json          # frames: panel, six widgets, engine; legacyStorage
+├── extension.json          # frames: panel, seven widgets, engine; legacyStorage
 ├── main.cjs                # Main process: VPS, cached network fetches
 ├── frame-engine.js         # Background frame: reads the VPS, polls prices and rates, publishes
 ├── frame-panel.js          # The Finance panel (portfolio and markets charts)
-├── frame-widget-*.js       # Balance, Performance, Portfolio Connections, Spot, Futures, Watchlist
+├── frame-widget-*.js       # Balance, Performance, Portfolio Connections, Spot, Allocation, Futures, Watchlist
 ├── panel.js, sidebar.js    # Finance's panel and widgets (run inside those frames)
 ├── persist.js              # Versioned state namespaces and legacy migration
 ├── icons/                  # Panel and widget icons
@@ -49,6 +49,11 @@ the same `portfolio-tracker:`-prefixed keys as before.
 run: the three namespaces (and the display currency from the Currency
 service's old namespace, if Finance never took it over), Finance's records in
 the page's shared asset database, and Charting's saved settings.
+
+**Its own origin** (Finance 1.0.1). Core moves `finance-assets` and the
+`finance:state:*` and `atmos:charting-*` keys there from the shared
+first-party origin, once, before the window opens
+(`legacyStorage.sharedOrigin`).
 
 ## Where the portfolio comes from
 
@@ -114,6 +119,6 @@ node tests/samsara-indicator.test.cjs
 
 ## Combined plugin
 
-Finance owns the portfolio tracker and Markets watchlist/chart. Root lifecycle modules load the internal markets/ modules; no separately installed Markets or Portfolio Tracker plugin is needed. The main-process IPC owner is finance. Existing portfolio-tracker, markets, and watchlist state namespaces, chart storage keys and portfolio-tracker panel ID intentionally remain stable to preserve saved data and layout. Finance is the displayed plugin/settings/panel name; Portfolio and Markets remain descriptive sidebar sections.
+Finance owns the portfolio tracker and Markets watchlist/chart. Finance's root modules load the internal markets/ modules; no separately installed Markets or Portfolio Tracker plugin is needed. The main-process IPC owner is finance. Existing portfolio-tracker, markets, and watchlist state namespaces, chart storage keys and portfolio-tracker panel ID intentionally remain stable to preserve saved data and layout. Finance is the displayed plugin/settings/panel name; Portfolio and Markets remain descriptive sidebar sections.
 
-Run all regression checks with: node --experimental-vm-modules --test tests/*.test.cjs markets/tests/*.test.cjs
+Run all regression checks with: node --experimental-vm-modules --test tests/*.test.cjs markets/tests/*.test.cjs (or `npm run test:finance` from the repo root)

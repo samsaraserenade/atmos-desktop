@@ -52,7 +52,7 @@ Atmos finds extensions in three places:
 |---|---|
 | Part of Atmos | `core/system/<id>`: the system services only |
 | Bundled with Atmos | the repo's `plugins/` and `services/` when running from source (`npm start`); an installer bundles none, and offers them as packages on the first start |
-| Installed | `%APPDATA%/atmos/{plugins,services}/<id>/`, by Settings → Extensions or by hand |
+| Installed | `%APPDATA%/atmos/{plugins,services}/<id>/` on Windows (`~/Library/Application Support/atmos` on macOS, `~/.config/atmos` on Linux), by Settings → Extensions or by hand |
 
 Where an extension sits does not decide who vouches for it; its signature
 does. Settings shows the tier as **System**, **Official** or **Community**:
@@ -66,10 +66,10 @@ does. Settings shows the tier as **System**, **Official** or **Community**:
 **The background layer.** Two system services run behind every panel for the
 whole session, in the Atmos page. Extensions reach them through the SDK:
 
-- **Wallpaper** (`services/wallpaper`, formerly the Background plugin) paints
+- **Wallpaper** (`core/system/wallpaper`, formerly the Background plugin) paints
   the wallpaper and its effects and owns desktop blending. Frames use
   `atmos.wallpaper` with `"invokes": ["service:wallpaper"]`.
-- **Audio** (`services/audio`) gives each extension its own playback
+- **Audio** (`core/system/audio`) gives each extension its own playback
   channel (an `<audio>` element keyed by the extension), so sound carries on
   through panel switches, layouts and frame reloads. The extension decides
   what plays; the channel loads, plays, pauses, seeks and reports back.
@@ -109,8 +109,12 @@ example-plugin/
 Every file a frame loads is an ES module served from the extension's own
 origin (`atmos-ext://…`); `main.cjs` is CommonJS because it runs in
 Electron's main process. Relative imports, `new URL('./x.css',
-import.meta.url)`, fonts, images and WebAssembly all work as on the web.
-Folders named `data`, `tests` and `backups` are never served to a frame.
+import.meta.url)`, fonts and images work as on the web. WebAssembly needs
+`"wasm"` in `permissions.browser`. Declared network hosts are open to
+`fetch()`, WebSockets, images and media, but scripts, stylesheets and fonts
+load only from the extension's own files. Folders named `data`, `tests`,
+`backups` and `_to_delete`, and anything whose name starts with `.`, are
+never served to a frame.
 
 ### Surfaces
 
@@ -125,7 +129,9 @@ every layout, sidebar widgets can be reordered and hidden, and so on.
 | `boot.js` | background | hidden, runs for the whole session |
 
 Labels, icons and options come from `"contributes"` in `extension.json`
-(optional; without it, the files above are used with `displayName`):
+(optional; without it, the files above are used with `displayName`). With
+`"contributes"`, only the surfaces it lists are created, so list each one
+(`"boot": {}` is enough for `boot.js`):
 
 ```json
 {
@@ -163,6 +169,8 @@ Panel and sidebar entries may also declare:
   and the rest (see `atmos.drawer`). With `"keys": true`, characters typed on
   the workspace while it is open go to the frame. In a tile or floating
   window the drawer is pinned open. Audio Player's Music panel is one.
+- `"defaultEnabled": false` (sidebar only): the widget starts hidden until
+  the user shows it.
 - `"resizable": false` (sidebar only): the widget's height always follows
   its content; the user can't resize it.
 - `"showIn": ["audio-player"]` (sidebar only): the panels the widget shows
@@ -240,14 +248,15 @@ Every extension has an `extension.json`. The smallest useful one:
 | `version` | The extension's own version, `MAJOR.MINOR.PATCH` (semver). Required to be packaged, and for others to depend on a range of it | this section |
 | `publisher` | Who publishes it (`"atmos"` for official extensions); must match the key that signs it | 7 |
 | `dependencies` | Services (or plugins) it needs, with version ranges; also its start order | this section |
-| `description`, `contract` | A one-line description; for a service, its own API contract (renderer API file, API version, events), formerly `service.json` | 5 |
+| `description`, `contract` | A one-line description; for a service, its own API contract (renderer API file, API version, events), formerly `service.json`. Atmos doesn't read `contract`; it documents the service, and the service's own tests use it | — |
 | `after`, `supersedesServices` | Start order only (prefer `dependencies`); legacy services this plugin replaces | this section |
 | `permissions` | Everything the extension uses | 7 |
 | `exports` | What it shares with other extensions: IPC handlers, events, exposed methods and resource providers, each for official extensions or for all | 7 |
 | `auditExclude` | Folders the permission audit skips | 7 |
+| `tier` | Ignored by Atmos (section 1); bundled manifests say `"first-party"` (`"system"` in `core/system`), which `npm run test:permissions` checks | 1 |
 | `displayName` | Name shown in Settings and, for framed extensions, the default label | 2, 4 |
 | `runtime` | `"frame"`. Every extension runs in frames now, whatever it says; keep it for Atmos 0.11 and older, which ran first-party extensions without it in the page | 9 |
-| `isolation` | `"origin"` gives an official extension an origin of its own: storage and frames no other extension can reach. Every official extension that keeps data should have it (all the bundled ones do); without it an official extension shares `atmos-ext://first-party` | 4 |
+| `isolation` | `"origin"` gives an official extension an origin of its own: storage and frames no other extension can reach. Every official extension that keeps data should have it (all the bundled plugins do; the bundled services are libraries, with no frames of their own); without it an official extension shares `atmos-ext://first-party` | 4 |
 | `contributes` | Labels, icons and entry files for framed surfaces | 2, 4, 5 |
 | `library` | `true` on a service that is a library: imported by consumers, no lifecycle, UI or state of its own | 2, 4, 5 |
 | `legacyStorage` | What an official extension kept elsewhere before: in the Atmos page (`state`, `indexedDB`, `localStorage`, `deleteIndexedDB`, read with `atmos.legacy.*`), and in the shared first-party origin (`sharedOrigin`, moved into its own origin by Core; `sharedOriginIndexedDB`, deleted by Core) | 2, 4, 5 |
@@ -280,8 +289,10 @@ that name them keep loading:
 - `extensions.permissions`
 - `extensions.frames`
 
-The main process keeps its own copy of this list in
-`js/core/extension-host.cjs`; update both when adding a capability.
+The list is `core/js/core/capabilities.js`; the main process keeps its own
+copy in `core/js/core/extension-host.cjs`. Update both when adding a
+capability. The last one, `extensions.frames`, is the SDK's own level
+(section 4); the others are kept only so older manifests load.
 
 ### Versions and dependencies
 
@@ -342,7 +353,7 @@ dependencies of that kind. The older `after` list still orders startup
 
 ```json
 {
-  "after": ["media-library"]
+  "after": ["media-metadata"]
 }
 ```
 
@@ -351,8 +362,11 @@ created (and therefore to the default panel order). Only ids of the
 same kind (plugin or service) that are installed, enabled and compatible are
 considered; missing ids are ignored, so `after` never prevents startup. A cycle
 is logged and broken alphabetically. Services always start before plugins, so
-a plugin never needs `after` for a service. Declare `"extensions.after": 1`
-if the order is required rather than preferred; older Cores ignore the field.
+a plugin never needs `after` for a service. Declare
+`"requires": { "extensions.after": 1 }` if the order is required rather
+than preferred; older Cores ignore the field. Bundled extensions use
+`dependencies` instead (`npm run test:permissions` refuses `after` in
+them).
 
 A plugin replacing a legacy standalone service may also declare:
 
@@ -396,15 +410,17 @@ document.addEventListener('contextmenu', event => {
 | API | What it does | Needs |
 |---|---|---|
 | `atmos.extension` | `{ id, kind, tier }` | — |
-| `atmos.surface` | `{ type, presentation, fileDrops }`. A layout change recreates the frame, so `presentation` is fixed for its lifetime. Sidebar widgets and settings pages are sized to their content by the SDK, including while their section is collapsed or the sidebar closed | — |
+| `atmos.ready` | A promise that resolves once the frame is connected to Atmos (entry files already run after it) | — |
+| `atmos.SDK_VERSION` | The SDK level of this Atmos (`3`) | — |
+| `atmos.surface` | `{ type, id, presentation, fileDrops, glass, drawer }`. A layout change recreates the frame, so `presentation` is fixed for its lifetime. Sidebar widgets and settings pages are sized to their content by the SDK, including while their section is collapsed or the sidebar closed | — |
 | `atmos.surface.setMenu(items)` | Sidebar widgets: the items Atmos adds to the widget header's right-click menu, same shapes as `contextMenu.open` (a ticked row shows as "✓ Label", like the header's own items). Call again when they change | — |
 | `atmos.surface.onFileDrag(fn)` / `onFileDrop(fn)` | Files dragged from the desktop: `{ state: 'over' \| 'leave' }` while a drag is over the frame, then `{ paths, files, types, data, x, y }` on drop (`paths[i]` is `files[i]`'s path, `''` when it has none; `data` holds `text/uri-list`, `text/plain`, `text/html`). Core takes the drop on the frame's behalf, since only the Atmos page can see paths | `"fileDrops": true` on the surface, first-party |
-| `atmos.state.get/set/update/onChange` | Persisted JSON state shared by the extension's frames (≤ 1 MB), saved in a file of its own (`extension-state/<kind>-<id>.json` in user data) shortly after each change. `update` merges into the saved object in one step, so two frames' updates don't undo each other | — |
+| `atmos.state.get/set/update/onChange` | Persisted JSON state shared by the extension's frames (≤ 1 MB), saved in a file of its own (`extension-state/<kind>-<id>.json` in user data) shortly after each change. `update` merges its top-level keys into the saved object in one step, so two frames' updates to different keys don't undo each other | — |
 | `atmos.events.emit(name, payload)` / `on(name, fn)` | Own events; `on('<id>:name')` for another extension's, if it shares them (`exports.events`) | `invokes` for others |
 | `atmos.appearance.get/onChange` | Theme; CSS variables (`--ink-rgb`, `--surface-rgb`, `--app-font-family`, `--color-positive`…) are applied to the frame automatically, and a font the user imported in Appearance is registered in the frame | — |
-| `atmos.surface.setGlass(regions)` | Panels with `"glass": true`: `[{ x, y, width, height, material: 'panel' \| 'shell', radius }]` in frame pixels (`panel`: the panel's blur and opacity; `shell`: the shell's, as behind a composer). `[]` clears it. At most 24 | `"glass"` on the panel |
+| `atmos.surface.setGlass(regions)` | Panels with `"glass": true`: `[{ x, y, width, height, material: 'panel' \| 'shell', radius }]` in frame pixels (`panel`: the panel's blur and opacity; `shell`: the shell's, as behind a composer). `[]` clears it. At most 24; `radius` is capped at 40 px | `"glass"` on the panel |
 | `atmos.surface.trackGlass()` | The same, kept up to date: every element marked `data-atmos-glass="panel\|shell"` (optionally `data-atmos-glass-inset="top right bottom left"` in px; its border radius is used) becomes a region, re-measured when layout changes. Returns a function that stops | `"glass"` on the panel |
-| `atmos.contextMenu.open(x, y, items)` | An Atmos menu at frame coordinates. Items: `{ id, label, run, checked?, hold?, tone? }` (`checked` shows a tick; `hold: true` asks for a press and hold, with a bar filling the row, before it runs; `tone: 'danger'` draws it in the semantic negative colour); `{ type: 'buttons', buttons: [{ id, label, icon?, title?, run }] }`, a row of small buttons (a quick-reaction row: a click runs that button and closes the menu); controls that stay open while changed, each with `run(value)`: `{ type: 'toggle', checked }`, `{ type: 'range', min, max, step, value, suffix?, zeroLabel? }`, `{ type: 'number', min, max, step, value, suffix? }`, `{ type: 'text', value, placeholder?, maxLength? }` (runs on Enter with the trimmed text, then closes), `{ type: 'select', value, options: [{ value, label }] }`, `{ type: 'colors', values: ['#rrggbb'] }` (`closeOnChange` to close on the first change); `{ type: 'separator' \| 'heading' \| 'meta', label }`. Any row may have an `icon`: SVG markup, of which Atmos keeps only plain shapes. Plain data only: Atmos draws the rows. Resolves with the chosen row's id, the last `{ id, value }` changed, or `null` | — |
+| `atmos.contextMenu.open(x, y, items)` | An Atmos menu at frame coordinates. Items: `{ id, label, run, checked?, hold?, tone? }` (`checked` shows a tick; `hold: true` asks for a press and hold, with a bar filling the row, before it runs; `tone: 'danger'` draws it in the semantic negative colour); `{ type: 'buttons', buttons: [{ id, label, icon?, title?, run }] }`, a row of small buttons (a quick-reaction row: a click runs that button and closes the menu); controls that stay open while changed, each with `run(value)`: `{ type: 'toggle', checked }`, `{ type: 'range', min, max, step, value, suffix?, zeroLabel? }`, `{ type: 'number', min, max, step, value, suffix? }`, `{ type: 'text', value, placeholder?, maxLength? }` (runs on Enter with the trimmed text, then closes), `{ type: 'select', value, options: [{ value, label }] }`, `{ type: 'colors', values: ['#rrggbb'] }` (`closeOnChange` to close on the first change); `{ type: 'separator' \| 'heading' \| 'meta', label }`. Any row may have an `icon`: SVG markup, of which Atmos keeps only plain shapes. Plain data only: Atmos draws the rows. Resolves with the chosen row's id, the last `{ id, value }` changed, or `null`. At most 50 rows (12 buttons, 6 colours, 50 options), and labels are cut at 120 characters. Background frames can't open menus | — |
 | `atmos.contextMenu.close()` | Close the menu this frame has open (one another frame opened stays) | — |
 | `atmos.clipboard.writeText(text)` / `writeImage(pngBlob, text?)` | Write the clipboard through Atmos. A frame can write it itself only while it has focus; a menu choice runs while the Atmos page has focus, so a menu's "Copy" uses this | — |
 | `atmos.wallpaper.set(file)` / `get()` / `onChange(fn)` | Set an image `File`/`Blob` as the wallpaper; `{ mode, opacity, thumbnail }` (a small JPEG data URL of the current image, for sampling its colours) now and whenever the image or mode changes | `invokes: ["service:wallpaper"]` |
@@ -413,8 +429,8 @@ document.addEventListener('contextmenu', event => {
 | `atmos.drawer.state` / `onChange(fn)` / `onKey(fn)` | Drawer panels: `{ open, expanded, placement, barPlacement, locked, bar }`; `--atmos-drawer-visible-h` on `:root` is the visible height below the bar while it moves. Wheel and swipes in the frame move the drawer except over elements marked `data-atmos-drawer-scroll` | `"drawer"` on the panel |
 | `atmos.drawer.open/close/expand/collapse()` / `setBarPlacement('top' \| 'bottom')` / `setPlacement(0–2)` | Move it: bar only, hidden, fully open, back to the bar; dock the bar at the bottom (the rest revealed upward); place it (0 open, 1 bar, 2 hidden; for carrying over an old position). Nothing happens while it is pinned open | `"drawer"` on the panel |
 | `atmos.surface.onKey(fn)` | Boot frames: a declared key was pressed, `fn({ code })` | `"keys"` on the boot contribution |
-| `atmos.invoke('service:x', channel, ...args)` | A first-party extension's main-process IPC handler: its own, or one another extension shares (`exports.ipc`) | `invokes` |
-| `atmos.listen('plugin:<id>', channel, fn)` | Events a `main.cjs` sends with `context.send(target, channel, ...args)`; `fn(...args)`. Returns an unsubscribe function | `invokes` and `exports.events`, except for the extension's own |
+| `atmos.invoke('service:x', channel, ...args)` | A first-party extension's main-process IPC handler: its own, or one another extension shares (`exports.ipc`) | `invokes` and `exports.ipc`, except for the extension's own |
+| `atmos.listen('plugin:<id>', channel, fn)` | Events a `main.cjs` sends with `context.send(webContents, channel, ...args)`; `fn(...args)`. Returns an unsubscribe function | `invokes` and `exports.events`, except for the extension's own |
 | `atmos.call('service:x', method, ...args)` | A method an extension exposes from its boot frame (waits up to 15 s for that frame to start) | `invokes` and `exports.methods`, except for the extension's own |
 | `atmos.expose({ method() {} })` | From `boot.js`: offer methods to `call()` | — |
 | `atmos.notifications.show({ title, body?, tag?, silent? })` | A system notification, shown by Atmos for the frame. Resolves `true` once shown, `false` where the system has none | `"notifications"` in `permissions.browser` |
@@ -425,11 +441,17 @@ document.addEventListener('contextmenu', event => {
 | `atmos.legacy.readLocalStorage(keys)` | First-party only: the Atmos page's values for localStorage keys listed in `"legacyStorage": { "localStorage": [...] }`, as `{ key: value \| null }`. A listed `"prefix*"` returns every key starting with the prefix | — |
 | `atmos.legacy.deleteIndexedDB()` | First-party only: delete the page databases listed in `"legacyStorage": { "deleteIndexedDB": [...] }` (names, or `"prefix*"` of at least four characters), for an extension that starts afresh in frames. Resolves the names deleted | — |
 | `atmos.library('service:x', file)` | URL to `import()` a library service's module into this frame | `invokes` |
-| `atmos.background()` | First-party only: the `window` of this extension's own boot frame, once it has started (waits up to 15 s), for views that use live objects the engine holds instead of copying them through `call()`. First-party frames share one origin, so this is a same-origin window in the same process; third-party frames each have their own origin and can't. Objects from it belong to that realm (`instanceof Array` is false for its arrays; use `Array.isArray`), and listeners a view gives it must be removed when the view's frame goes (`pagehide`) | — |
+| `atmos.background({ timeout })` | Official extensions only: the `window` of this extension's own boot frame, once it has started (waits up to 15 s, or `timeout` ms), for views that use live objects the engine holds instead of copying them through `call()`. An extension's frames all share its origin, so this is a same-origin window in the same process. Community extensions are refused. Objects from it belong to that realm (`instanceof Array` is false for its arrays; use `Array.isArray`), and listeners a view gives it must be removed when the view's frame goes (`pagehide`) | — |
 
 Every call is asynchronous and checked by Core; a refused call rejects with
-an `AtmosPermissionError` naming the missing declaration. `listen`,
-`setWallpaper`, `readLocalStorage`, file drops and panel shortcuts need
+an `AtmosPermissionError` naming the missing declaration. `events.on`,
+`listen` and the `onChange` subscriptions don't reject: a refusal is logged
+in the frame's console.
+
+Core doesn't check the `extensions.frames` level when a call is made:
+`requires` only stops an older Atmos, which lacks a feature, from loading
+the extension at all. Declare the level of the newest feature you use.
+`listen`, `readLocalStorage`, file drops and panel shortcuts need
 `"requires": { "extensions.frames": 2 }`; header menus, `readState`,
 IndexedDB `keys`, `legacyId`, `shortcutToggles`, menu ticks, selects,
 controls and icons, `notifications`, `wallpaper`, `audio`, drawers, boot
@@ -440,9 +462,9 @@ button rows, `contextMenu.close`, `clipboard`, `deleteIndexedDB` and
 **Media from other extensions.** A frame may load `atmos-resource://<provider>`
 URLs (in `<img>`, `<video>` and `fetch()`) for providers it registers itself
 (`"resources"`) or that an extension it declares in `"invokes"` shares with
-it (`"exports": { "resources": { "media-library": "official" } }` in a media
-library service, say, with `"invokes": ["service:media-library"]` in the
-extension using it). Its Content-Security-Policy allows exactly those.
+it (`"exports": { "resources": { "example-art": "official" } }` in the
+extension that registers it, with `"invokes": ["plugin:example-plugin"]` in
+the one using it). Its Content-Security-Policy allows exactly those.
 
 ### Background frame and views
 
@@ -467,7 +489,7 @@ engine's objects when its frame goes (`pagehide`).
 Each third-party extension has its own origin (`atmos-ext://plugin-<id>` or
 `atmos-ext://service-<id>`), and so does each official one with
 `"isolation": "origin"` (`atmos-ext://first-party-<kind>-<id>`; all the
-bundled ones have it). An origin is a storage partition and a process, so
+bundled plugins have it). An origin is a storage partition and a process, so
 a frame may use `localStorage` and IndexedDB for larger data, and its
 frames can share them, but no other extension can read, overwrite or
 script them. Official extensions without `"isolation"` share
@@ -500,7 +522,8 @@ shared origin lists it when it moves out, and Core carries it across:
 - **Record.** `extension-origin-moves.json` in user data.
 - **Delete only.** `"sharedOriginIndexedDB": ["name", "prefix*"]` asks for
   databases to be deleted from the shared origin once, without copying (an
-  extension that starts afresh, as Matrix Chat did).
+  extension that starts afresh, as Matrix Chat did). Recorded in
+  `shared-origin-cleanup-v2.json`; a changed list runs again.
 
 A frame cannot:
 
@@ -656,7 +679,8 @@ the extension for this session: what it registered is withdrawn (later
 registrations are refused), whatever requires it is skipped ("Needs X,
 which failed to start"), the rest of Atmos starts as usual, and Settings →
 Extensions lists it under Needs attention. It is tried again at the next
-start.
+start. Running unpackaged, `--activation-timeout=<ms>` changes the limit (for
+end-to-end runs).
 
 The extension's frames reach it through the SDK, scoped to the extension:
 
@@ -715,7 +739,7 @@ Every extension, whatever its tier, lists what it uses in `extension.json`:
     "electron":  ["dialog", "shell"],
     "ipc":       true,
     "provides":  ["example-data"],
-    "uses":      ["media-library"],
+    "uses":      ["media-metadata"],
     "resources": ["example-art"]
   }
 }
@@ -750,7 +774,7 @@ manifest shares it. That covers four things: the IPC handlers its
     "ipc":       { "subscribe": "official", "read-tags": "all" },
     "events":    { "event": "official" },
     "methods":   { "greet": "all" },
-    "resources": { "media-library": "official" }
+    "resources": { "example-art": "official" }
   }
 }
 ```
@@ -759,6 +783,10 @@ manifest shares it. That covers four things: the IPC handlers its
   `"all"` with community extensions too.
 - What isn't listed is the extension's own: its frames and its `main.cjs`
   reach it as before, and so does the Atmos page.
+- A manifest with no `"exports"` block at all shares everything with
+  system and official extensions that declare it in `invokes`, and nothing
+  with community ones (so that packages from before 0.12 kept working).
+  Add a block, even an empty `{}`, to keep things private.
 - Another extension reaches a shared name only if it also declares the
   owner in `permissions.invokes`.
 - Libraries' modules (`library()`) and the Wallpaper and Audio calls are
@@ -791,7 +819,9 @@ is declared.
   providers are handed out only as declared (section 6).
 - **Browser permissions** — each origin is granted only what its
   extensions declare: the Atmos page (`atmos-app://local`) what the system
-  services declare, each frame origin what its own extension declares.
+  services and first-party libraries declare, each frame origin what its
+  extensions declare (the shared first-party origin, what all of them
+  declare).
   Everything else is denied.
 - **Navigation** — the window never leaves `atmos-app://local/`. Links and
   `window.open()` to `http(s)`/`mailto` open in the default browser; other
@@ -851,7 +881,12 @@ npm run pack:extensions -- --key <file> finance --out <dir>
 `pack:extensions` copies what an installer would bundle (the filters in
 `package.json` "build.extraResources"), signs the copy, checks it against
 `core/trusted-keys.json` and zips it; `--from <folder>` packs another tree,
-such as an export for the public repo. The system services are part of
+such as an export for the public repo. `--key` defaults to
+`ATMOS_SIGNING_KEY`. The run stops if the key isn't official, if an
+extension has uncommitted changes (`--allow-dirty` overrides), or if one
+changed without a higher `version` than the official source has
+(`--previous <folder or url>` compares with another; `--same-version`
+overrides). The system services are part of
 Atmos and never packaged. The key file stays outside the repo (the scripts refuse
 one inside it) and the passphrase is asked for, or read from
 `ATMOS_SIGNING_PASSPHRASE`. To replace a key, add the new one, mark the old
@@ -868,9 +903,10 @@ one, and otherwise against its own `signature.json` if it has one.
 `--out` folder. The index names each package's kind, id, version, Core
 compatibility, dependencies, size and SHA-256, and is signed with an
 official key, so the host needn't be trusted. Sources are listed in
-`core/extension-sources.json` (built in; the official one is added when
-packages are published) and in `extension-sources.json` in user data
-(added on the Extensions page). Unpackaged, `--extension-source=<folder or
+`core/extension-sources.json` (built in: the official source, the public
+repo's latest GitHub release), the packages a personal build carries
+("Comes with Atmos"), and `extension-sources.json` in user data (added on
+the Extensions page). Unpackaged, `--extension-source=<folder or
 url>` (or `ATMOS_EXTENSION_SOURCE`) adds one for the session.
 
 - **Checking** reads the indexes only, shortly after start and every 12
@@ -891,8 +927,8 @@ url>` (or `ATMOS_EXTENSION_SOURCE`) adds one for the session.
 - **Remove** is for what's in the installed folder (one bundled with Atmos
   is switched off instead; removing an update of one goes back to the
   bundled version). It asks every time whether to keep the extension's
-  settings and data (the default) or delete them, and is refused while an
-  installed extension needs it.
+  settings and data (the default) or delete them, and is refused while
+  another extension requires it (unless a copy bundled with Atmos stays).
 - **At the next start**, before anything is listed, pending changes are
   applied: staged packages move into the installed folder, removed ones are
   deleted. The version an update replaced is kept in
@@ -1005,9 +1041,9 @@ copied their old data once with `atmos.legacy.*` (their `"legacyStorage"`
 lists what). Those calls remain for now and will be removed in a later
 version; new extensions have no use for them.
 
-**Sharing.** An official extension with no `"exports"` block (packages from
-before Atmos 0.12) still shares everything with official extensions, and
-nothing with community ones (section 7).
+**Sharing.** An extension with no `"exports"` block (every package from
+before 0.12, and some bundled ones still) shares everything with official
+extensions, and nothing with community ones (section 7).
 
 **Storage.**
 - `atmos.state` lived in the Atmos page's one saved blob until 0.12. The

@@ -1,7 +1,7 @@
 {
   "apiVersion": 2,
   "tier": "first-party",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "publisher": "atmos",
   "displayName": "Charting",
   "description": "Reusable SVG time-series charts with shared, live chart and Samsara settings.",

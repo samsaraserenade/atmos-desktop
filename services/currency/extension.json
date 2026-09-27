@@ -3,7 +3,7 @@
   "description": "Exchange rates and money formatting for other extensions.",
   "apiVersion": 2,
   "tier": "first-party",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "atmos",
   "requires": {
     "extensions.manifest": 1

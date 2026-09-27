@@ -79,8 +79,12 @@ signed perpetual notional (shorts are negative) netted against Spot assets.
 The existing `spot` and `perp` history columns stay separate, while holdings
 history retains the metadata needed for historical allocation analysis.
 
-The v1 routes require a bearer token. The deployed service listens on its
-Tailscale address and is blocked from the public internet by the host firewall.
+The v1 routes require a bearer token. By default the service listens on
+127.0.0.1 only; see "Pairing Finance with this server" for Tailscale or
+HTTPS. Keep it off the public internet.
+
+Tests: `python3 -m unittest discover -s . -p 'test_*.py'` in this folder
+(`upgrade.sh` runs them too).
 
 ## Collectors
 
@@ -206,7 +210,7 @@ restart `atmos-portfolio`, and pair Finance again.
 
 `GET /v1/info` (token required) is what Finance's Test button calls: the
 server's name, version, API version, number of sources and last update.
-`GET /health` needs no token and says only that the service is up.
+`GET /health` needs no token and says only that the service is up, and its version.
 
 ## Licence
 

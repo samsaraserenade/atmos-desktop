@@ -4,6 +4,10 @@ System service that owns audio playback for the whole session. With the
 Wallpaper service it makes up Atmos's background layer: the two things that
 keep running behind every panel.
 
+Part of Core (`core/system/audio`): Core loads it itself
+(`core/js/core/system-services.js`). It is always on, and is never
+installed, packaged or switched off.
+
 Each extension gets its own **channel**: an `<audio>` element in the Atmos
 page, keyed by the extension (`plugin:audio-player`). Because it lives in the
 page, not in a panel, playback carries on through panel switches, layout
@@ -21,5 +25,5 @@ From a frame: `atmos.audio` in the SDK, with `"invokes": ["service:audio"]`.
 Every frame of the extension hears its channel's changes, so a panel and
 its widgets can follow playback without asking the extension's boot frame.
 
-In the Atmos page: the `media.audio` renderer capability,
+In Core's own code: the `media.audio` renderer capability,
 `getCapability('media.audio').channel('<kind>:<id>')`.

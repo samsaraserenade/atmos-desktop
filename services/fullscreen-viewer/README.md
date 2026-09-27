@@ -7,9 +7,8 @@ to callbacks.
 
 ## Contract
 
-A library service (`"library": true`; ATMOS_CORE_INTEGRATION.md § 19): pure
-modules that run in the consumer's document. From the Atmos page use
-`getServiceFileUrl('fullscreen-viewer', 'index.js')`; from a frame, declare
+A library service (`"library": true`; ATMOS_CORE_INTEGRATION.md § 5): pure
+modules that run in the consumer's frame. Declare
 `"invokes": ["service:fullscreen-viewer"]` and use
 `atmos.library('service:fullscreen-viewer', 'index.js')`.
 

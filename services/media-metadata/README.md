@@ -5,18 +5,15 @@ Reads tags from audio files and writes cover art into them.
 ## Contract
 
 A library service (`"library": true`) with main-process handlers.
-`renderer.js` runs in the consumer's document: in the Atmos page resolve it
-with `getServiceFileUrl('media-metadata', 'renderer.js')`; from a frame
-(declare `"invokes": ["service:media-metadata"]`):
+`renderer.js` runs in the consumer's frame (declare
+`"invokes": ["service:media-metadata"]`):
 
 ```js
 const metadata = await import(await atmos.library('service:media-metadata', 'renderer.js'));
 metadata.setInvoke((channel, ...args) => atmos.invoke('service:media-metadata', channel, ...args));
 ```
 
-A consumer in the Atmos page passes Core's bridge instead:
-`(channel, ...args) => window.atmos.extensionInvoke('service', 'media-metadata', channel, ...args)`
-(Audio Player does this in `src/media-metadata.js`). Until `setInvoke()` is
+Audio Player does this in its engine frame (`src/media-metadata.js`). Until `setInvoke()` is
 called, `readTags()` returns `{}` and `writeCoverArt()` fails. The library
 follows the library rules in ATMOS_CORE_INTEGRATION.md § 5.
 
@@ -34,6 +31,8 @@ Renderer exports:
 
 Service side (`main.cjs`): scoped IPC handlers `read-file-bytes` and `write-cover-art`, and
 the `media-metadata` capability for other extensions. Paths must be absolute.
+Both handlers are shared with official extensions only (`"exports"`), since
+they take any path.
 
 ## Cover art
 

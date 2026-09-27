@@ -50,8 +50,9 @@ Atmos provides the foundation:
 Atmos is built around extensions. They can add panels, sidebar widgets,
 background tasks, shared services and custom workflows.
 
-First-party extensions integrate deeply with Atmos, while third-party
-extensions run through a permission-based SDK.
+Every extension, official or not, runs in sandboxed frames and uses the
+same permission-based SDK. Official extensions can also run code in
+Atmos's main process, limited to what they declare.
 
 ### A desktop built for extensions
 
@@ -100,30 +101,35 @@ Atmos Core owns the shell, and extensions fill it.
 Extensions should be powerful without requiring unlimited access. Atmos is
 designed so that you can safely install things you did not write.
 
-- **Sandboxed.** Every plugin runs in its own isolated frame and reaches
-  Atmos only through the Atmos SDK. It can't see Atmos, other extensions
-  or your files.
+- **Sandboxed.** Extensions run in sandboxed frames and reach Atmos only
+  through the Atmos SDK. A community extension can't see Atmos, other
+  extensions or your files, and can't run code outside its frames.
+  Official extensions can also run main-process code, but only get the
+  APIs they declare.
 - **Storage of its own.** Each extension's data (its settings and whatever
   it stores in the browser) is kept apart from every other extension's, so
-  none can read or overwrite another's.
+  none can read or overwrite another's. (Official extensions from before
+  Atmos 0.12 share one store until they are updated.)
 - **Declared permissions.** Each extension lists what it needs (network
   hosts, browser permissions, other extensions it talks to) and Atmos
   enforces that list. Settings shows it in plain language.
 - **Approval.** An extension you add yourself doesn't run until you approve
   it, and if its files change afterwards, Atmos asks again.
 - **Shared on purpose.** An extension reaches another's features only where
-  that extension has chosen to share them, and Atmos checks every such call
-  in its main process too. The built-in ones share their file and network
-  access with official extensions only.
+  that extension has chosen to share them, and Atmos checks every such IPC
+  call again in its main process. Community extensions get only what is
+  shared with them explicitly; Media Metadata and Market Data share their
+  file and network access with official extensions only.
 - **Signed packages.** Official extensions are signed packages. Atmos
   checks every file against the signature when it starts and refuses to
   load one that has been changed.
-- **Built-in services.** Extensions share capabilities from Atmos (audio,
-  wallpaper, location, media tags) rather than each reimplementing them.
 
 ---
 
-## Included extensions
+## Official extensions
+
+Atmos offers these on its first start. Each is downloaded and installed on
+its own, and can be removed or updated on Settings → Extensions.
 
 ### Audio Player
 
@@ -210,13 +216,14 @@ widgets, background processes and custom functionality.
 
 ### Services
 
-Reusable capabilities shared between extensions. Audio, wallpaper and
-location are part of Core itself; the others are extensions like any plugin:
-media metadata, full-screen viewing, charting, currency conversion and live
-market data.
+Reusable capabilities shared between extensions, so each one doesn't
+reimplement them. Audio, wallpaper and location are part of Core itself;
+the others are extensions like any plugin: media metadata, full-screen
+viewing, charting, currency conversion and live market data.
 
-Every plugin and service runs in its own sandboxed frames and talks to Core
-through the Atmos SDK.
+Every plugin runs in sandboxed frames and talks to Core through the Atmos
+SDK. A service is a library that runs inside the frames of the extensions
+that use it; some also have main-process code.
 
 ---
 
@@ -290,7 +297,8 @@ Atmos/
 ├── services/    # Capabilities extensions call into (charting, currency, fullscreen-viewer,
 │                #   market-data, media-metadata)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
-├── release.json # What an installer bundles
+├── .github/     # CI: npm run test:all on every push
+├── release.json # What is released: exported to the public repo and packed as packages
 └── ATMOS_CORE_INTEGRATION.md   # The extension API
 ```
 
@@ -302,11 +310,12 @@ Atmos/
 | `npm run test:core` | Core tests |
 | `npm run test:services` | Service contract tests |
 | `npm run test:permissions` | Checks each bundled extension's code against its declared permissions |
+| `npm run test:build` | The build hook (`scripts/after-pack.cjs`) |
 | `cd plugins/audio-player && node --test tests/*.test.cjs` | Audio Player tests |
-| `cd plugins/matrix-chat && npm test` | Matrix Chat tests (`npm run check:browser` adds the message-sanitizer attack checks in a browser) |
+| `cd plugins/matrix-chat && npm ci && npm test` | Matrix Chat tests (`npm run check:browser` adds the message-sanitizer attack checks in a browser; it uses Edge, so set `MATRIX_TEST_BROWSER` elsewhere) |
 | `npm run test:finance` | Finance and Markets tests |
 | `cd plugins/finance/backend && python -m unittest` | Portfolio server tests |
-| `node --test services/market-data/tests/*.test.cjs` | Market Data tests |
+| `node --experimental-vm-modules --test services/<id>/tests/*.test.cjs` | A service's own tests (Charting, Market Data, Media Metadata; Charting needs the flag) |
 | `node scripts/e2e/<name>.cjs` | End-to-end checks in a throwaway profile (Linux/macOS/WSL; see `scripts/e2e/README.md`) |
 
 ---

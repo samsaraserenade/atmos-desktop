@@ -1,6 +1,6 @@
 # Atmos charting service
 
-`charting` is a renderer-side CoreV2 service for reusable time-series charts.
+`charting` is a library for reusable time-series charts.
 It owns rendering, toolbar state, interactions, coordinate transforms, price
 and time scales, viewport state, zoom, pan limits, visible and hidden ranges,
 resize density, OHLC derivation, Heiken Ashi conversion, smoothing, optional
@@ -14,7 +14,7 @@ currency conversion remain outside this service.
 
 Charting is a library service (`"library": true`): its modules only import
 each other, so they can also run inside a framed extension's own frame.
-It follows the library rules (ATMOS_CORE_INTEGRATION.md § 19): shared chart
+It follows the library rules (ATMOS_CORE_INTEGRATION.md § 5): shared chart
 preferences (`preferences.js`) and named charts' view state (`chart-next.js`,
 by `stateKey`) are kept in storage the consumer hands in, and only in memory
 until it does:
@@ -36,24 +36,21 @@ import atmos from 'atmos-sdk';
 const { createTimeSeriesChart } = await import(await atmos.library('service:charting', 'api.js'));
 ```
 
-In the Atmos page, resolve the API through Core instead of importing another plugin:
+Then:
 
 ```js
-import { getServiceFileUrl } from 'atmos-core/core/service-loader.js';
-
-const apiUrl = await getServiceFileUrl('charting', 'api.js');
-if (!apiUrl) throw new Error('The charting service is unavailable.');
-const { createTimeSeriesChart } = await import(apiUrl);
-
 const chart = createTimeSeriesChart(hostElement, {
   type: 'line',
-  signal: context.signal,
+  signal, // optional AbortSignal
   data: [{ time: Date.now(), value: 100 }],
 });
 ```
 
-The lifecycle signal destroys the chart automatically. Consumers can also
-call `chart.destroy()` explicitly.
+An aborted `signal` destroys the chart. Consumers can also call
+`chart.destroy()` explicitly.
+
+Tests: `node --experimental-vm-modules --test tests/*.test.cjs` in this
+folder (most fail without the flag; `npm run test:all` passes it).
 
 Line points accept `{ time, value }` (with `{ t, v }`, `timestamp`, and
 `price` aliases). Candles accept canonical `{ start, end, open, high, low,

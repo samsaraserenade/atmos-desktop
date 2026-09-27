@@ -12,9 +12,15 @@ opaque window and native resizing.
 Together with the Audio service it makes up Atmos's background layer: the
 two things that run behind every panel for the whole session.
 
-- In the Atmos page, use the `visual.wallpaper` renderer capability from
-  `atmos-core/core/renderer-capabilities.js` (`getState`, `setState`,
-  `setWallpaper`, `removeWallpaper`, `useDefaultWallpaper`, `imageKind`, `setTemporaryEffects`, `subscribe`). With no image of your own, it shows `core/assets/atmos-background.jpg`; Remove shows none.
+Part of Core (`core/system/wallpaper`): Core loads it itself
+(`core/js/core/system-services.js`). It is always on, and is never
+installed, packaged or switched off.
+
+- In Core's own code, use the `visual.wallpaper` renderer capability from
+  `atmos-core/core/renderer-capabilities.js` (`getState`,
+  `getPersistentState`, `setState`, `setWallpaper`, `removeWallpaper`,
+  `useDefaultWallpaper`, `imageKind`, `setTemporaryEffects`,
+  `clearTemporaryEffects`, `subscribe`, `getThumbnail`). With no image of your own, it shows `core/assets/atmos-background.jpg`; Remove shows none.
 - From a frame, use `atmos.wallpaper` in the SDK, with
   `"invokes": ["service:wallpaper"]`.
 

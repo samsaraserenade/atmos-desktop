@@ -4,7 +4,7 @@ Matrix chat for Atmos. First-party, runs in frames (`"runtime": "frame"`).
 
 ```text
 matrix-chat/
-├── extension.json        # Frames contract: Chat panel, Rooms widget, boot frame
+├── extension.json        # Frames contract: Chat panel, Matrix Chat and Matrix Account widgets, boot frame
 ├── boot.js               # Background frame: the Matrix engine, for the whole session
 ├── panel.js              # "Chat" panel: sign-in, the open room (the last one reopens)
 ├── sidebar.js            # "Matrix Chat" widget: invites, DMs and each space as groups
@@ -77,8 +77,8 @@ this; they verify with another device or use their recovery key.
 **Secrets at rest.** Nothing secret is stored readable:
 
 - **Own origin.** Matrix Chat's frames run in `atmos-ext://first-party-plugin-matrix-chat`
-  (`"isolation": "origin"`), not the origin other first-party extensions
-  share, so none of them can open its storage or script its frames.
+  (`"isolation": "origin"`), like every bundled official extension, so no
+  other extension can open its storage or script its frames.
 - **Vault key.** `vault.cjs` (main process) keeps one random 256-bit key,
   encrypted with the OS's secure storage (Electron `safeStorage`: DPAPI on
   Windows). `src/vault.js` derives two keys from it with HKDF: one seals the
@@ -117,7 +117,8 @@ network beyond names that appear as text; every Matrix request goes through
 Origin, Host, Sec-*, proxy and framing). Homeservers must be `https://`
 (plain http only on this computer).
 
-Run the checks from this directory:
+Run the checks from this directory, after `npm ci` (the tests import
+`node_modules/matrix-js-sdk`):
 
 ```powershell
 npm test
