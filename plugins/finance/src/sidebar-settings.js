@@ -1,5 +1,5 @@
 import { portfolioState } from '../persist.js';
-import { renderExchangeList } from './registry.js';
+import { onPortfolioUpdate, renderExchangeList } from './registry.js';
 import {
   setSamsaraOverlayEnabled,
   setSamsaraMaEnabled, setSamsaraIndividualMaEnabled, setSamsaraMaOpacity,
@@ -42,4 +42,6 @@ export function indicatorContextMenuItems() {
 export function mountPortfolioConnections(body, context) {
   body.innerHTML = '<div id="exchange-mount"></div>';
   renderExchangeList(context);
+  // Values follow the portfolio, the currency and the rates.
+  context.onCleanup(onPortfolioUpdate(() => renderExchangeList()));
 }

@@ -1,5 +1,5 @@
 import { atmos, SELF, invokeFinance as invoke } from './host/frame.js';
-import { excludedGroupKeys, excludedHoldingKeys, excludedSourceIds } from './portfolio-scope.js';
+import { excludedGroupKeys, excludedHoldingKeys, excludedSourceIds, historyScopeKey } from './portfolio-scope.js';
 
 const HISTORY_TIERS = [
   { resolution: '1d', from: 0, until: 365 * 24 * 60 * 60_000 },
@@ -31,24 +31,27 @@ export const disconnectServer = () => invoke('vps:disconnect');
 /** Ask the engine frame to re-read the saved connection and restart. */
 export const requestEngineReconnect = () => atmos.call(SELF, 'reconnect');
 
-async function loadHistory(exclusions = excludedHoldingKeys(), excludedSources = excludedSourceIds(), excludedGroups = excludedGroupKeys()) {
-  const now = Date.now();
-  const boundaries = [
-    0,
-    now - HISTORY_TIERS[0].until,
-    now - HISTORY_TIERS[1].until,
-    now - HISTORY_TIERS[2].until,
-    now,
-  ];
-  const batches = await Promise.all(HISTORY_TIERS.map((tier, index) => {
-    const from = Math.max(0, boundaries[index]);
-    const to = Math.max(from, boundaries[index + 1] - (index < HISTORY_TIERS.length - 1 ? 1 : 0));
-    const params = new URLSearchParams({ from: String(from), to: String(to), resolution: tier.resolution });
-    for (const key of exclusions) params.append('exclude', key);
-    for (const sourceId of excludedSources) params.append('excludeSource', sourceId);
-    for (const key of excludedGroups) params.append('excludeGroup', key);
-    return fetchJson(`/v1/history?${params}`);
-  }));
+// Re-read this much before the newest point on each refresh, in case a
+// sample reached the server late.
+const RECENT_OVERLAP_MS = 10 * 60_000;
+// Further behind than this (the computer slept, say), reload the whole history.
+const RECENT_MAX_SPAN_MS = 24 * 60 * 60_000;
+// And this long after the last full load, so older samples settle into the
+// coarser tiers and whatever the server corrected shows up. Views are still
+// sent only what differs.
+const FULL_RELOAD_MS = 6 * 60 * 60_000;
+
+/** `to` null: up to the server's newest sample, whatever the two clocks say. */
+function historyRoute(from, to, resolution, exclusions, excludedSources, excludedGroups) {
+  const params = new URLSearchParams({ from: String(from), ...(to === null ? {} : { to: String(to) }), resolution });
+  for (const key of exclusions) params.append('exclude', key);
+  for (const sourceId of excludedSources) params.append('excludeSource', sourceId);
+  for (const key of excludedGroups) params.append('excludeGroup', key);
+  return `/v1/history?${params}`;
+}
+
+/** Points as Finance keeps them, one per timestamp, oldest first. */
+function historyPoints(batches) {
   const byTime = new Map();
   for (const batch of batches) {
     for (const point of batch.points || []) {
@@ -77,6 +80,30 @@ async function loadHistory(exclusions = excludedHoldingKeys(), excludedSources =
   return [...byTime.values()].sort((a, b) => a.t - b.t);
 }
 
+/** The whole history, coarser the older it is. */
+async function loadHistory(exclusions = excludedHoldingKeys(), excludedSources = excludedSourceIds(), excludedGroups = excludedGroupKeys()) {
+  const now = Date.now();
+  const boundaries = [
+    0,
+    now - HISTORY_TIERS[0].until,
+    now - HISTORY_TIERS[1].until,
+    now - HISTORY_TIERS[2].until,
+    now,
+  ];
+  const batches = await Promise.all(HISTORY_TIERS.map((tier, index) => {
+    const from = Math.max(0, boundaries[index]);
+    const to = Math.max(from, boundaries[index + 1] - (index < HISTORY_TIERS.length - 1 ? 1 : 0));
+    return fetchJson(historyRoute(from, to, tier.resolution, exclusions, excludedSources, excludedGroups));
+  }));
+  return historyPoints(batches);
+}
+
+/** Every sample from `from` on. `truncated` when the server held some back. */
+async function loadRecentHistory(from, exclusions, excludedSources, excludedGroups) {
+  const batch = await fetchJson(historyRoute(from, null, 'raw', exclusions, excludedSources, excludedGroups));
+  return { points: historyPoints([batch]), truncated: batch.truncated === true };
+}
+
 /**
  * Point-in-time holdings: quantity, price and value per symbol per source,
  * across a time range. Backed by the VPS's /v1/holdings-history, which
@@ -99,7 +126,13 @@ export async function fetchHoldingsHistory({ from, to, source, symbol } = {}) {
   return Array.isArray(data.points) ? data.points : [];
 }
 
-export async function startVpsPortfolio(context, { publish, remove, setStatus, setHistory }) {
+/**
+ * Engine: read the portfolio every minute, and the history: in full at the
+ * start, whenever what the portfolio includes changes, and every six hours
+ * (setHistory), otherwise only the newest samples (mergeHistory(from,
+ * points): replace everything at or after `from` with `points`).
+ */
+export async function startVpsPortfolio(context, { publish, remove, setStatus, setHistory, mergeHistory }) {
   const remoteIds = new Set();
   let pending = null;
   let historyPending = null;
@@ -167,27 +200,48 @@ export async function startVpsPortfolio(context, { publish, remove, setStatus, s
     return pending;
   };
 
+  // What the history the engine has covers: { scope, lastT, fullAt } (lastT null: it is empty).
+  let loaded = null;
   const refreshHistory = () => {
     const exclusions = excludedHoldingKeys();
     const excludedSources = excludedSourceIds();
     const excludedGroups = excludedGroupKeys();
-    const scope = [...exclusions.map(key => `h:${key}`), ...excludedSources.map(id => `s:${id}`), ...excludedGroups.map(key => `g:${key}`)].sort().join('\n');
+    const scope = historyScopeKey();
     if (historyPending) {
       if (historyPendingScope === scope) return historyPending;
       return historyPending.then(() => refreshHistory());
     }
     historyPendingScope = scope;
-    historyPending = loadHistory(exclusions, excludedSources, excludedGroups)
-      .then(points => { if (!stopped) setHistory(points); })
+    // Only the newest samples, when the history is for this scope and recent
+    // enough; otherwise all of it (an empty history costs nothing to reload).
+    const startedAt = Date.now();
+    const recentFrom = loaded?.scope === scope && loaded.lastT !== null && startedAt - loaded.fullAt < FULL_RELOAD_MS
+      ? Math.max(0, loaded.lastT - RECENT_OVERLAP_MS)
+      : null;
+    let reloadInFull = false;
+    const load = recentFrom !== null && startedAt - recentFrom < RECENT_MAX_SPAN_MS
+      ? loadRecentHistory(recentFrom, exclusions, excludedSources, excludedGroups).then(({ points, truncated }) => {
+        if (stopped) return;
+        if (truncated) { loaded = null; reloadInFull = true; return; }
+        mergeHistory(recentFrom, points);
+        loaded = { ...loaded, lastT: points.at(-1)?.t ?? loaded.lastT };
+      })
+      : loadHistory(exclusions, excludedSources, excludedGroups).then(points => {
+        if (stopped) return;
+        setHistory(points);
+        loaded = { scope, lastT: points.at(-1)?.t ?? null, fullAt: startedAt };
+      });
+    historyPending = load
       .catch(error => console.warn('[portfolio-vps] history load failed:', error.message))
       .finally(() => { historyPending = null; historyPendingScope = ''; });
-    return historyPending;
+    return historyPending.then(() => (reloadInFull ? refreshHistory() : undefined));
   };
 
   await Promise.allSettled([refreshHistory(), refresh()]);
-  // History is cheap at this scale. Refresh it independently so a transient
-  // launch failure cannot leave the desktop chart empty until the next app
-  // restart, and so VPS samples continue to arrive in an open chart.
+  // Refresh the history independently so a transient launch failure cannot
+  // leave the desktop chart empty until the next app restart, and so VPS
+  // samples continue to arrive in an open chart. After the first load, a
+  // refresh reads only the newest samples.
   const timers = [setInterval(refresh, 60_000), setInterval(refreshHistory, 60_000)];
   // stop(): the user disconnected or switched servers.
   const stop = () => { stopped = true; timers.forEach(clearInterval); };

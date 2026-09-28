@@ -1,4 +1,5 @@
 import { portfolioState } from '../persist.js';
+import { legacyGroup } from './legacy-holdings.js';
 
 const SEP = '|';
 
@@ -12,10 +13,9 @@ export function holdingScopeKey(sourceId, holdingOrId) {
 export function excludedHoldingKeys() {
   return Object.entries(portfolioState.excludedHoldings || {})
     .filter(([, excluded]) => excluded === true)
-    .map(([key]) => key)
-    // Hyperliquid used to expose its internal cash and position rows here.
-    // Those saved keys are obsolete now that Perp and Earn are stable groups.
-    .filter(key => !key.startsWith(`hyperliquid-wallet${SEP}`));
+    .map(([key]) => key);
+  // A saved key for a grouped holding (from before groups) is harmless: the
+  // server, like isHoldingIncluded(), ignores it and goes by the group.
 }
 
 export function excludedSourceIds() {
@@ -24,16 +24,33 @@ export function excludedSourceIds() {
     .map(([sourceId]) => sourceId);
 }
 
+/**
+ * The group a holding belongs to (meta.group, set by its connector:
+ * Hyperliquid's 'perp' and 'earn', say), or null. A grouped holding is
+ * included or left out with its group, never on its own.
+ */
 export function holdingScopeGroup(sourceId, holding) {
-  if (sourceId !== 'hyperliquid-wallet') return null;
-  if (holding?.meta?.account === 'earn') return 'earn';
-  return ['perp', 'perp-cash'].includes(holding?.meta?.instrument) ? 'perp' : null;
+  const group = holding?.meta?.group;
+  if (typeof group === 'string' && group) return group;
+  return legacyGroup(sourceId, holding);
 }
 
 export function excludedGroupKeys() {
   return Object.entries(portfolioState.excludedGroups || {})
     .filter(([, excluded]) => excluded === true)
     .map(([key]) => key);
+}
+
+/**
+ * What the portfolio includes, as one string. The VPS history depends on
+ * this and on no other setting, so it is reloaded only when this changes.
+ */
+export function historyScopeKey() {
+  return [
+    ...excludedHoldingKeys().map(key => `h:${key}`),
+    ...excludedSourceIds().map(id => `s:${id}`),
+    ...excludedGroupKeys().map(key => `g:${key}`),
+  ].sort().join('\n');
 }
 
 export function isGroupIncluded(sourceId, group) {
@@ -61,10 +78,9 @@ export function setSourceIncluded(sourceId, included) {
 
 export function isHoldingIncluded(sourceId, holding) {
   if (!isSourceIncluded(sourceId)) return false;
-  // Hyperliquid capital has two stable semantic books. Free USDC and position
-  // equity are one Perp balance; reallocations between them must never change
-  // scope. Earn is the second balance. Old per-holding exclusions are ignored
-  // for both groups so the first experimental UI cannot leave chart artifacts.
+  // A group is one balance (Hyperliquid's free USDC and position equity are
+  // one Perp balance), so moving money within it must never change scope.
+  // Per-holding exclusions are ignored for grouped holdings.
   const group = holdingScopeGroup(sourceId, holding);
   if (group) return isGroupIncluded(sourceId, group);
   return portfolioState.excludedHoldings?.[holdingScopeKey(sourceId, holding)] !== true;

@@ -7,6 +7,8 @@ db="${ATMOS_PORTFOLIO_DB:-/var/lib/atmos-portfolio/portfolio.sqlite3}"
 backup="/var/backups/atmos-portfolio-$(date -u +%Y%m%dT%H%M%SZ)"
 install -d -m 0700 "$backup"
 cp -a /opt/atmos-portfolio/server.py /opt/atmos-portfolio/collectors.py "$backup/"
+# Before 0.8 there was no connectors folder: the collectors were all in collectors.py.
+if [[ -d /opt/atmos-portfolio/connectors ]]; then cp -a /opt/atmos-portfolio/connectors "$backup/"; fi
 cd "$stage"
 python3 -m unittest discover -s . -p 'test_*.py'
 # Snapshot safely even when SQLite has a WAL file.
@@ -29,6 +31,8 @@ rollback() {
   echo "Upgrade failed; restoring $backup"
   systemctl stop atmos-portfolio-collector.service atmos-portfolio.service || true
   cp "$backup/server.py" "$backup/collectors.py" /opt/atmos-portfolio/
+  rm -rf /opt/atmos-portfolio/connectors
+  if [[ -d "$backup/connectors" ]]; then cp -a "$backup/connectors" /opt/atmos-portfolio/; fi
   python3 - "$backup/portfolio.sqlite3" "$db" <<'PY'
 import sqlite3,sys
 with sqlite3.connect(sys.argv[1]) as source, sqlite3.connect(sys.argv[2]) as target:
@@ -38,6 +42,13 @@ PY
 }
 trap 'rollback' ERR
 install -o root -g root -m 0755 server.py collectors.py /opt/atmos-portfolio/
+rm -rf /opt/atmos-portfolio/connectors
+cp -R connectors /opt/atmos-portfolio/connectors
+find /opt/atmos-portfolio/connectors -name __pycache__ -prune -exec rm -rf {} +
+chown -R root:root /opt/atmos-portfolio/connectors
+chmod -R u=rwX,go=rX /opt/atmos-portfolio/connectors
+# The installed collector can load every connector.
+python3 /opt/atmos-portfolio/collectors.py connectors >/dev/null
 python3 /opt/atmos-portfolio/server.py init --db "$db"
 python3 /opt/atmos-portfolio/server.py integrity --db "$db"
 systemctl start atmos-portfolio.service

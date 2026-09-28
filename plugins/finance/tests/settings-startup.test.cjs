@@ -33,12 +33,8 @@ assert.match(
 );
 assert.match(persist, /serialize\(namespace\)/,
   'the complete Portfolio Tracker namespace must be serialized explicitly');
-assert.match(persist, /if \(legacyState \|\| legacyOutputCurrency \|\| balanceFontStateNeedsSave\) onStateLoaded\(save\)/,
-  'legacy migrated settings must be committed after hydration');
 assert.match(persist, /outputCurrency: 'GBP'/,
   'the display currency is Finance state, not the Currency service\'s');
-assert.match(persist, /extensionState\?\.currency\?\.data\?\.outputCurrency/,
-  'the display currency carries over from the Currency service\'s old namespace');
 assert.match(sidebar, /export function indicatorContextMenuItems\(\)/,
   'indicator controls must read current persisted state whenever the chart menu opens');
 assert.doesNotMatch(persist, /allocationMonotone:/, 'obsolete palette preference is no longer persisted');

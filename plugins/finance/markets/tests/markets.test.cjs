@@ -29,7 +29,6 @@ test('Markets reuses the Portfolio chart panel', () => {
   assert.match(read('persist.js'), /version: 2/);
   assert.match(read('persist.js'), /migrate\(data, fromVersion\)/);
   assert.match(read('persist.js'), /persistChartSettings/);
-  assert.match(read('persist.js'), /extensionState\['market-query'\]/);
 });
 
 test('plugin consumes services through the loader and owns lifecycle cleanup', () => {

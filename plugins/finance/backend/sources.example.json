@@ -1,14 +1,53 @@
 {
   "poll_seconds": 60,
   "sources": {
-    "binance-spot": { "enabled": false, "api_key": "", "api_secret": "" },
-    "aptos-wallet": { "enabled": false, "addresses": [] },
-    "arbitrum-wallet": { "enabled": false, "addresses": [] },
-    "bsc-wallet": { "enabled": false, "addresses": [] },
-    "cardano-wallet": { "enabled": false, "addresses": [] },
-    "hyperliquid-wallet": { "enabled": false, "addresses": [] },
-    "inj-wallet": { "enabled": false, "addresses": [] },
-    "monero-wallet": { "enabled": false, "amount": 0 },
-    "solana-wallet": { "enabled": false, "addresses": [], "jupiter_api_key": "", "jupiter_locks": [] }
+    "aptos-wallet": {
+      "type": "aptos",
+      "enabled": false,
+      "addresses": []
+    },
+    "arbitrum-wallet": {
+      "type": "arbitrum",
+      "enabled": false,
+      "addresses": []
+    },
+    "binance-spot": {
+      "type": "binance",
+      "enabled": false,
+      "api_key": "",
+      "api_secret": ""
+    },
+    "bsc-wallet": {
+      "type": "bsc",
+      "enabled": false,
+      "addresses": []
+    },
+    "cardano-wallet": {
+      "type": "cardano",
+      "enabled": false,
+      "addresses": []
+    },
+    "hyperliquid-wallet": {
+      "type": "hyperliquid",
+      "enabled": false,
+      "addresses": []
+    },
+    "inj-wallet": {
+      "type": "injective",
+      "enabled": false,
+      "addresses": []
+    },
+    "monero-wallet": {
+      "type": "monero",
+      "enabled": false,
+      "amount": 0
+    },
+    "solana-wallet": {
+      "type": "solana",
+      "enabled": false,
+      "addresses": [],
+      "jupiter_api_key": "",
+      "jupiter_locks": []
+    }
   }
 }

@@ -111,7 +111,6 @@ const DEFAULTS = {
   allocationMode: 'capital',
   allocationBook: 'all',
   allocationDimension: 'dapp',
-  tickerEnabled: {},
   // Currency every total is shown in -- cycled by the toggle in the
   // Connections header (see src/totals.js). The Currency service only
   // converts; which currency to display is Finance's own choice.
@@ -120,74 +119,24 @@ const DEFAULTS = {
 
 const OUTPUT_CURRENCIES = new Set(['GBP', 'USD', 'EUR', 'CHF']);
 
-const LEGACY_FIELDS = Object.keys(DEFAULTS).filter(
-  key => !['chartVisible', 'tickerEnabled'].includes(key),
-);
-
 function objectCopy(value) {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? { ...value }
     : {};
 }
 
-function readLegacyState() {
-  try {
-    const raw = localStorage.getItem('samsara_v4') || localStorage.getItem('samsara_v3');
-    const saved = raw ? JSON.parse(raw) : {};
-    if (saved?.extensionState?.['portfolio-tracker']) return null;
-
-    const tickerEnabled = objectCopy(JSON.parse(
-      localStorage.getItem('exchange-ticker-enabled') || '{}',
-    ));
-    const hasFlatState = LEGACY_FIELDS.some(key => saved?.[key] != null);
-    if (!hasFlatState && Object.keys(tickerEnabled).length === 0) return null;
-
-    const migrated = structuredClone(DEFAULTS);
-    for (const key of LEGACY_FIELDS) {
-      if (saved?.[key] != null) migrated[key] = saved[key];
-    }
-    migrated.chartVisible = !!saved?.visState?.['vis-total-chart'];
-    migrated.tickerEnabled = tickerEnabled;
-    return migrated;
-  } catch (error) {
-    console.warn('[portfolio-tracker] unable to read legacy state:', error);
-    return null;
-  }
-}
-
-// The display currency used to be stored by the Currency service, in its
-// own 'currency' namespace (and before that in a flat localStorage key).
-// Read it once so the choice carries over, until Finance has saved its own.
-function readLegacyOutputCurrency() {
-  try {
-    const raw = localStorage.getItem('samsara_v4') || localStorage.getItem('samsara_v3');
-    const saved = raw ? JSON.parse(raw) : {};
-    if (OUTPUT_CURRENCIES.has(saved?.extensionState?.['portfolio-tracker']?.data?.outputCurrency)) return null;
-    const candidates = [
-      saved?.extensionState?.currency?.data?.outputCurrency,
-      localStorage.getItem('exchange-output-currency'),
-    ];
-    return candidates.find(value => OUTPUT_CURRENCIES.has(value)) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-const legacyState = readLegacyState();
-const legacyOutputCurrency = readLegacyOutputCurrency();
 let balanceFontStateNeedsSave = false;
 
 export const portfolioState = registerStateNamespace('portfolio-tracker', {
   version: 1,
   // An imported font is kept beside Atmos state, not in it (src/host/persist.js).
   large: ['customBalanceFonts'],
-  defaults: { ...(legacyState || DEFAULTS), outputCurrency: legacyOutputCurrency ?? DEFAULTS.outputCurrency },
+  defaults: DEFAULTS,
   hydrate(namespace, saved = {}) {
     Object.assign(namespace, DEFAULTS, saved);
     namespace.outputCurrency = OUTPUT_CURRENCIES.has(saved.outputCurrency)
       ? saved.outputCurrency
-      : legacyOutputCurrency ?? DEFAULTS.outputCurrency;
-    namespace.tickerEnabled = objectCopy(saved.tickerEnabled);
+      : DEFAULTS.outputCurrency;
     namespace.collapsedFutures = objectCopy(saved.collapsedFutures);
     namespace.excludedHoldings = objectCopy(saved.excludedHoldings);
     namespace.excludedSources = objectCopy(saved.excludedSources);
@@ -206,7 +155,6 @@ export const portfolioState = registerStateNamespace('portfolio-tracker', {
   serialize(namespace) {
     const snapshot = {};
     for (const key of Object.keys(DEFAULTS)) snapshot[key] = namespace[key];
-    snapshot.tickerEnabled = objectCopy(namespace.tickerEnabled);
     snapshot.collapsedFutures = objectCopy(namespace.collapsedFutures);
     snapshot.excludedHoldings = objectCopy(namespace.excludedHoldings);
     snapshot.excludedSources = objectCopy(namespace.excludedSources);
@@ -218,7 +166,6 @@ export const portfolioState = registerStateNamespace('portfolio-tracker', {
   },
 });
 
-// Commit the one-time flat-state import after Core has finished hydrating.
-// Without this, a migrated value only lived in the namespace's in-memory
-// defaults and could disappear on the next full app reload.
-if (legacyState || legacyOutputCurrency || balanceFontStateNeedsSave) onStateLoaded(save);
+// Hydration kept only the selected imported font (or fell back to Bebas):
+// save that, so the extra saved fonts don't come back on the next start.
+if (balanceFontStateNeedsSave) onStateLoaded(save);

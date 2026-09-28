@@ -86,13 +86,70 @@ HTTPS. Keep it off the public internet.
 Tests: `python3 -m unittest discover -s . -p 'test_*.py'` in this folder
 (`upgrade.sh` runs them too).
 
-## Collectors
+## Connectors
 
-`collectors.py` supports Binance Spot, Aptos, Arbitrum, BSC, Cardano, Hyperliquid,
-Injective, manual Monero, and Solana. Hyperliquid includes Spot, Perp, and
-native Earn supply; Earn is assigned to the Perp balance. Trading 212 and
-Litecoin are intentionally excluded. Each provider is isolated: a failed poll
-keeps its previous confirmed value instead of collapsing the aggregate.
+The server reads each source through a connector: Binance Spot, Aptos,
+Arbitrum, BSC, Cardano, Hyperliquid, Injective, manual Monero, and Solana.
+Hyperliquid includes Spot, Perp, and native Earn supply; Earn is assigned to
+the Perp balance. Trading 212 and Litecoin are intentionally excluded. Each
+source is isolated: a failed poll keeps its previous confirmed value instead
+of collapsing the aggregate.
+
+`collectors.py` is the runner: it reads the configuration, collects every
+enabled source through its connector, and stores the result. The connectors
+are in `connectors/`, one folder each, found when it starts:
+
+```
+connectors/
+  shared/        network access, prices, EVM and holding helpers
+  binance/       __init__.py: CONNECTOR (what it is) and collect(config)
+  solana/        __init__.py, plus chain.py, jupiter.py, pump.py
+  ...
+```
+
+A connector's `CONNECTOR` declares its `type`, a `name` and `label`, its
+configuration `fields` (in the order to ask for them: `addresses`, `secret`
+or `number`, and which are required) and its `dimensions` (the dapp, chain
+and so on each holding defaults to). `collect(config)` returns
+`shared.collected(holdings, errors, wallet_addresses)`. It doesn't name its
+source: the runner does, from the configuration, so one connector can serve
+several sources. Everything else comes from the declarations:
+`collectors.py connectors` lists them, `collectors.py example-config` writes
+`sources.example.json` (a test checks it is current), and
+`collectors.py configure` asks for each field. **Adding a connector** is
+adding a folder, then regenerating `sources.example.json`.
+
+### The configuration
+
+Each entry under `sources` is one source, by its id:
+
+```json
+{
+  "poll_seconds": 60,
+  "sources": {
+    "solana-wallet": { "type": "solana", "enabled": true, "addresses": ["..."] },
+    "binance:work":  { "type": "binance", "enabled": true, "label": "Work", "api_key": "...", "api_secret": "..." }
+  }
+}
+```
+
+`type` names the connector. Without it, the id says: each connector's
+original id (`solana-wallet`, `binance-spot`, ...) or an id of the form
+`<type>` or `<type>:<name>`. Keep existing ids as they are: Finance's history
+and your hidden sources and holdings are keyed by them. `label` (optional)
+replaces the connector's label in Finance. Several sources of one type work
+the same way, Hyperliquid's Perp and Earn balances included.
+
+### Groups
+
+A holding whose meta has `group` belongs to that balance of its source:
+Hyperliquid puts its collateral and positions in `perp` and its Earn supply
+in `earn`, and declares both under `groups`. Finance includes or leaves a
+group out as a whole (`excludeGroup=<source>|<group>` on `/v1/history`), never
+one of its holdings on its own, and shows each group of a derivatives account
+as a balance in its Futures widget. Any connector can group holdings the same
+way. Rows stored before 0.8 have no `group`; `server.py` fills it in for them
+(`_legacy_meta`, the one place it names Hyperliquid).
 
 The BSC source reads native BNB and Binance-Peg BSC USDT directly through
 chain RPC. It does not depend on the anonymous Ankr portfolio indexer, which
@@ -114,14 +171,20 @@ key or web service.
 
 Provider configuration lives only at `/etc/atmos-portfolio-sources.json`, owned
 by root and readable by the dedicated service group. The collector never logs
-secrets or provider response bodies. `sources.example.json` contains the full
-schema with every source disabled and no credentials.
+secrets or provider response bodies. `sources.example.json` has every source
+disabled and no credentials.
 
-Run `configure-sources.ps1` locally to enter configuration through masked
-prompts. It connects to the server and SSH key given by `-Server` and
-`-SshKeyPath`, or by `deploy.local.json` beside it (gitignored; copy
-`deploy.example.json`). It keeps the generated document in memory and streams it directly to
-the server over private SSH; it does not write a local credentials file.
+To enter it with masked prompts, run `sudo python3
+/opt/atmos-portfolio/collectors.py configure --output FILE` on the server. It
+asks for every source, and after each one you use, offers another account of
+the same kind: name it ("Work") and it becomes `binance:work`, labelled Work.
+It replaces FILE keeping its owner and permissions (a new file is readable
+only by its owner); without `--output` it prints the configuration. It
+writes the whole configuration each time, so enter every source again, or
+edit the file by hand to change one. From Windows, `configure-sources.ps1` does that over SSH, with the server
+and SSH key given by `-Server` and `-SshKeyPath` or by `deploy.local.json`
+beside it (gitignored; copy `deploy.example.json`), then installs the file and
+restarts the collector. Nothing is written on your PC.
 
 ## Atmos client mode
 

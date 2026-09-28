@@ -3,7 +3,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 import server
-import collectors
+import connectors
+from connectors import hyperliquid as hl
+from connectors.shared import CollectorError
 
 class SectionTests(unittest.TestCase):
     def test_snapshots_and_migration(self):
@@ -30,8 +32,8 @@ class SectionTests(unittest.TestCase):
             if payload['type']=='borrowLendUserState': return {'tokenToState':[]}
             if payload['type']=='clearinghouseState': return {'assetPositions':[]}
             return {}
-        with patch.object(collectors,'_hl_spot_meta',return_value={}), patch.object(collectors,'_hl_info',side_effect=info), patch.object(collectors,'_hl_funding_rates',return_value={}), patch.object(collectors,'_hl_spot_price',return_value=1):
-            result=collectors.collect_hyperliquid({'addresses':['test']})
+        with patch.object(hl,'_spot_meta',return_value={}), patch.object(hl,'_info',side_effect=info), patch.object(hl,'_funding_rates',return_value={}), patch.object(hl,'_spot_price',return_value=1):
+            result=connectors.collect('hyperliquid-wallet',{'addresses':['test']})
         self.assertEqual(result['value'],100)
         self.assertEqual(result['holdings'][0]['meta']['instrument'],'perp-cash')
 
@@ -46,8 +48,8 @@ class SectionTests(unittest.TestCase):
             if payload['type']=='clearinghouseState': return {'assetPositions':[]}
             return {}
         spot_meta = {'tokens': [{'index': 0, 'name': 'USDC'}], 'universe': []}
-        with patch.object(collectors,'_hl_spot_meta',return_value=spot_meta), patch.object(collectors,'_hl_info',side_effect=info), patch.object(collectors,'_hl_funding_rates',return_value={}):
-            result=collectors.collect_hyperliquid({'addresses':['test']})
+        with patch.object(hl,'_spot_meta',return_value=spot_meta), patch.object(hl,'_info',side_effect=info), patch.object(hl,'_funding_rates',return_value={}):
+            result=connectors.collect('hyperliquid-wallet',{'addresses':['test']})
         self.assertAlmostEqual(result['value'],170.00023442)
         self.assertEqual(result['error_count'],0)
         earn=result['holdings'][0]
@@ -67,11 +69,11 @@ class SectionTests(unittest.TestCase):
     def test_earn_failure_keeps_spot_and_perp_data(self):
         def info(payload):
             if payload['type']=='spotClearinghouseState': return {'balances':[{'coin':'USDC','total':'25'}]}
-            if payload['type']=='borrowLendUserState': raise collectors.CollectorError('temporary')
+            if payload['type']=='borrowLendUserState': raise CollectorError('temporary')
             if payload['type']=='clearinghouseState': return {'assetPositions':[]}
             return {}
-        with patch.object(collectors,'_hl_spot_meta',return_value={}), patch.object(collectors,'_hl_info',side_effect=info), patch.object(collectors,'_hl_funding_rates',return_value={}), patch.object(collectors,'_hl_spot_price',return_value=1):
-            result=collectors.collect_hyperliquid({'addresses':['test']})
+        with patch.object(hl,'_spot_meta',return_value={}), patch.object(hl,'_info',side_effect=info), patch.object(hl,'_funding_rates',return_value={}), patch.object(hl,'_spot_price',return_value=1):
+            result=connectors.collect('hyperliquid-wallet',{'addresses':['test']})
         self.assertEqual(result['value'],25)
         self.assertEqual(result['error_count'],1)
 
@@ -88,13 +90,13 @@ class SectionTests(unittest.TestCase):
                     'leverage':{'value':10},
                 }}]}
             return {}
-        with patch.object(collectors,'_hl_spot_meta',return_value={}), \
-             patch.object(collectors,'_hl_info',side_effect=info), \
-             patch.object(collectors,'_hl_funding_rates',return_value={}), \
-             patch.object(collectors,'_hl_funding_24h',return_value={}), \
-             patch.object(collectors,'_hl_fees_24h',return_value={}), \
-             patch.object(collectors,'_hl_spot_price',return_value=1):
-            result=collectors.collect_hyperliquid({'addresses':['test']})
+        with patch.object(hl,'_spot_meta',return_value={}), \
+             patch.object(hl,'_info',side_effect=info), \
+             patch.object(hl,'_funding_rates',return_value={}), \
+             patch.object(hl,'_funding_24h',return_value={}), \
+             patch.object(hl,'_fees_24h',return_value={}), \
+             patch.object(hl,'_spot_price',return_value=1):
+            result=connectors.collect('hyperliquid-wallet',{'addresses':['test']})
         position=next(h for h in result['holdings'] if h['meta']['instrument']=='perp')
         self.assertEqual(position['value'],0)
         self.assertGreater(position['quantity'],0)

@@ -3,9 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-let source = fs.readFileSync(`${__dirname}/../src/portfolio-scope.js`, 'utf8')
-  .replace("import { portfolioState } from '../persist.js';", '')
+const script = file => fs.readFileSync(`${__dirname}/../src/${file}`, 'utf8')
+  .replace(/^import .*?;\r?\n/gm, '')
   .replace(/\bexport\s+/g, '');
+let source = script('legacy-holdings.js') + script('portfolio-scope.js');
 const context = vm.createContext({ portfolioState: { excludedHoldings: {}, excludedSources: {}, excludedGroups: {} } });
 vm.runInContext(source, context);
 
@@ -26,8 +27,15 @@ assert.equal(context.holdingScopeGroup('hyperliquid-wallet', position), 'perp');
 assert.equal(context.holdingScopeGroup('hyperliquid-wallet', earn), 'earn');
 context.setHoldingIncluded('hyperliquid-wallet', position, false);
 assert.equal(context.isHoldingIncluded('hyperliquid-wallet', position), true, 'positions cannot be excluded independently');
-assert.equal(context.excludedHoldingKeys().some(key => key.startsWith('hyperliquid-wallet|')), false, 'legacy Hyperliquid item keys are not sent');
+assert.equal(context.excludedHoldingKeys().includes('hyperliquid-wallet|BTC Perp:invested'), true, 'a saved key is sent; the server ignores it for a grouped holding');
 context.setGroupIncluded('hyperliquid-wallet', 'perp', false);
 assert.equal(context.isHoldingIncluded('hyperliquid-wallet', position), false);
 assert.equal(context.isHoldingIncluded('hyperliquid-wallet', earn), true);
+// Groups are the connector's: any source, any group id.
+const margin = { id: 'USDT:cash', value: 50, meta: { instrument: 'perp-cash', group: 'futures' } };
+assert.equal(context.holdingScopeGroup('exchange:main', margin), 'futures');
+context.setGroupIncluded('exchange:main', 'futures', false);
+assert.equal(context.isHoldingIncluded('exchange:main', margin), false);
+assert.equal(context.holdingScopeGroup('solana-wallet', { meta: { instrument: 'perp' } }), null, 'only an old server\'s Hyperliquid rows are grouped without meta.group');
+assert.equal(context.holdingScopeGroup('hyperliquid-wallet', { meta: { instrument: 'spot' } }), null);
 console.log('Passed: portfolio scope keeps reversible stable holding exclusions');

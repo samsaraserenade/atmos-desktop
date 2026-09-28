@@ -336,6 +336,15 @@ let _lastFlowRenderKey = null;
 let _athCache = null;         // memoized _computeAth() result
 let _athCacheLen = -1;        // _history.length it was computed at
 
+/**
+ * _history's points were replaced or revalued rather than only appended to
+ * (a change from the VPS, a currency switch): its length alone no longer
+ * says whether the all-time high is still right.
+ */
+export function balanceHistoryReplaced() {
+  _athCacheLen = -1;
+}
+
 export function setAthVisible(value) {
   portfolioState.athVisible = value !== false;
   save();

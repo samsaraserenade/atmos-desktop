@@ -44,6 +44,7 @@ function injectStyles() {
     .fin-conn-status.is-ok { color:var(--color-positive, #4ade80); }
     .fin-conn-server { display:flex; align-items:center; gap:8px; }
     .fin-conn-server span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .fin-conn-server .fin-conn-updated { flex:0 1 auto; color:rgba(var(--ink-rgb),.38); font-size:.6rem; }
   `;
   document.head.appendChild(style);
 }
@@ -145,6 +146,11 @@ export function mountConnectionForm(mount) {
 }
 
 /** A server is set up: show it, and let the user disconnect. */
+/**
+ * A server is set up: its address, when it last reported, and Disconnect.
+ * Returns update(lastUpdate) to refresh the "updated" note without
+ * rebuilding (a half-clicked Disconnect stays armed).
+ */
 export function mountConnectionFooter(mount, connection) {
   injectStyles();
   const root = element('div', 'fin-conn');
@@ -152,9 +158,10 @@ export function mountConnectionFooter(mount, connection) {
   const host = (() => { try { return new URL(connection.address).host; } catch { return connection.address || 'your server'; } })();
   const label = element('span', null, `Server: ${isPrivate() ? MASK : host}`);
   label.title = isPrivate() ? '' : connection.address || '';
+  const updated = element('span', 'fin-conn-updated');
   const disconnect = element('button', null, 'Disconnect');
   disconnect.type = 'button';
-  row.append(label, disconnect);
+  row.append(label, updated, disconnect);
   root.append(row);
   if (connection.protected === false) {
     root.append(element('p', null, 'This system has no secure storage, so the token is saved without encryption, readable only by your user account.'));
@@ -178,4 +185,10 @@ export function mountConnectionFooter(mount, connection) {
       disconnect.disabled = false;
     }
   });
+  return {
+    update(lastUpdate) {
+      const when = lastUpdate ? ago(lastUpdate) : null;
+      updated.textContent = when ? `updated ${when}` : '';
+    },
+  };
 }

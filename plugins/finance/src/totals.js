@@ -1,5 +1,5 @@
 import { isPerpHolding, splitPortfolio } from './portfolio-sections.js';
-import { isGroupIncluded, isHoldingIncluded, scopedPortfolioData } from './portfolio-scope.js';
+import { holdingScopeGroup, isGroupIncluded, isHoldingIncluded, isSourceIncluded, scopedPortfolioData } from './portfolio-scope.js';
 ﻿/**
  * js/plugins/portfolio-tracker/src/totals.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -11,7 +11,7 @@ import { isGroupIncluded, isHoldingIncluded, scopedPortfolioData } from './portf
  * total, and the currency toggle button rendered in the Connections header.
  *
  * This module reads the exchange/portfolio data that registry.js owns (via
- * getAllPortfolios / getExchanges / isTickerEnabled) and pushes redraw
+ * getAllPortfolios) and pushes redraw
  * notifications back through notifyPortfolioUpdate(). registry.js in turn
  * calls initCurrencyService() / startRatesPolling() from here, so the two
  * modules import each other — that's expected, just don't rely on either
@@ -20,7 +20,7 @@ import { isGroupIncluded, isHoldingIncluded, scopedPortfolioData } from './portf
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { getAllPortfolios, getExchanges, isTickerEnabled, notifyPortfolioUpdate } from './registry.js';
+import { getAllPortfolios, notifyPortfolioUpdate } from './registry.js';
 import { portfolioState } from '../persist.js';
 import { save } from './host/persist.js';
 import { getServiceFileUrl } from './host/service-loader.js';
@@ -35,6 +35,8 @@ let {
 } = {};
 let { startRatesPolling, onRatesUpdate, ratesReady, getRates, useRates } = {};
 let _currencyServicePromise = null;
+const _rateChangeHooks = new Set();
+let _ratesJson = null;
 
 export function initCurrencyService() {
   if (!_currencyServicePromise) _currencyServicePromise = (async () => {
@@ -47,7 +49,14 @@ export function initCurrencyService() {
        symbolForIso, OUTPUT_CURRENCIES } = await import(converterUrl));
     ({ startRatesPolling, onRatesUpdate, ratesReady, getRates, useRates } = await import(ratesUrl));
     _shownCurrency = portfolioState.outputCurrency;
-    onRatesUpdate(() => notifyPortfolioUpdate());
+    onRatesUpdate(() => {
+      notifyPortfolioUpdate();
+      // A view is handed the engine's rates with every event; most are the same.
+      const json = JSON.stringify(getRates());
+      if (json === _ratesJson) return;
+      _ratesJson = json;
+      for (const fn of [..._rateChangeHooks]) { try { fn(); } catch (error) { console.error('[finance] rates listener failed:', error); } }
+    });
     onCurrencyChange(() => notifyPortfolioUpdate());
   })();
   return _currencyServicePromise;
@@ -62,6 +71,11 @@ export { convertToGbp, startRatesPolling };
 export function exportRates() { return ratesReady?.() ? getRates() : null; }
 /** View: use the engine's rates instead of fetching them here. */
 export function applyRates(rates) { if (rates) useRates?.(rates); }
+/** fn() when the exchange rates differ from the last ones (not on every refresh). */
+export function onRatesChange(fn) {
+  _rateChangeHooks.add(fn);
+  return () => _rateChangeHooks.delete(fn);
+}
 
 // ── Output currency (Finance's own preference, in portfolioState) ────────────
 
@@ -121,25 +135,6 @@ export function getTotal() {
   return { value, symbol: sym, iso, ready: ratesReady(), liveCount, pendingCount, errorCount, gbp: totalGbp };
 }
 
-// Per-connection values (same GBP→output-currency normalisation as getTotal(),
-// but broken out per exchange id instead of summed). Used by the chart to
-// plot individual connection lines. Only includes connections with live data.
-export function getConnectionTotals() {
-  const iso       = getOutputCurrency();
-  const sym       = symbolForIso(iso);
-  const exchanges = getExchanges();
-  const out       = [];
-  for (const [id, data] of getAllPortfolios().entries()) {
-    if (!data || data.lastUpdate === null) continue;
-    const scoped = scopedPortfolioData(data, id);
-    const gbp   = convertToGbp(scoped.value ?? 0, scoped.currency ?? '$');
-    const value = convertFromGbp(gbp);
-    const ex    = exchanges.find(e => e.id === id);
-    out.push({ id, name: ex?.name ?? id, value, symbol: sym, enabled: isTickerEnabled(id) });
-  }
-  return out;
-}
-
 const FIAT_SYMBOLS = new Set(['GBP', 'USD', 'EUR', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD']);
 
 // Crypto-pegged "stable" tokens — unlike plain fiat cash, these still get
@@ -178,7 +173,7 @@ function _holdingKind(holding) {
 // be a trade" apart from "we genuinely don't know". For 'cash' holdings
 // (plain fiat, and stablecoins -- see _holdingKind above) there's no
 // separate price to move in the first place: a real stablecoin position
-// legitimately reports quantity=value at price=1 (collectors.py hard-codes
+// legitimately reports quantity=value at price=1 (the backend's connectors hard-code
 // 1.0 for stablecoin prices), which is bit-for-bit the same shape as the
 // backend's fabricated fallback. Rejecting it there throws out real
 // quantity data for every stablecoin trade, which is exactly backwards --
@@ -223,7 +218,7 @@ export function getPortfolioComposition() {
     if (!Array.isArray(scoped.holdings)) { totalGbp += connectorGbp; continue; }
 
     // This bar is Spot-only -- a leveraged position isn't "invested" the
-    // way a spot token is (see collect_hyperliquid's docstring on why its
+    // way a spot token is (see the Hyperliquid connector's collect() on why its
     // equity figure isn't a market-priced holding), and its matching cash
     // (below) is really that same connector's locked/floating position
     // value wearing a cash costume. Both get held out of this connector's
@@ -338,8 +333,8 @@ export function getSpotScopePositions() {
     .sort((a, b) => b.gbp - a.gbp);
 }
 
-// Leveraged positions (currently: Hyperliquid perps -- see collectors.py's
-// collect_hyperliquid) carry a bunch of their own extra numbers -- funding
+// Leveraged positions (currently: Hyperliquid perps -- see the backend's
+// connectors/hyperliquid) carry a bunch of their own extra numbers -- funding
 // rate, leverage, entry/mark/liquidation price, margin, 24h fees -- that a
 // generic "symbol + $ value" composition asset (above) has no room for and
 // has no business knowing about. This walks the raw per-connector holdings
@@ -369,7 +364,7 @@ export function getFuturesPositions() {
       const meta = holding.meta;
       positions.push({
         // Connectors publish the perp symbol as "<coin> Perp" (see
-        // collectors.py) -- stripped back to the plain coin here since the
+        // connectors/hyperliquid) -- stripped back to the plain coin here since the
         // "Perp" suffix is now this section's whole reason to exist, not
         // something that needs repeating on every row.
         coin: String(holding.symbol || '').replace(/\s+Perp$/i, '').trim() || 'Position',
@@ -406,31 +401,39 @@ export function getFuturesSourceTotal() {
   return convertFromGbp(gbp);
 }
 
+const _groupLabel = group => `${group.charAt(0).toUpperCase()}${group.slice(1)} Balance`;
+
+/**
+ * The balances of the derivatives accounts, one per source and group
+ * (meta.group: Hyperliquid's Perp and Earn), whether or not they are
+ * included, for the Futures widget: [{ sourceId, group, label, value,
+ * included }]. A group's value is the sum of its holdings.
+ */
 export function getFuturesBalances() {
-  if (typeof convertToGbp !== 'function' || typeof convertFromGbp !== 'function') {
-    return { perp: 0, earn: 0, perpIncluded: true, earnIncluded: true };
-  }
-  let perpGbp = 0;
-  let earnGbp = 0;
-  for (const [id, data] of getAllPortfolios()) {
-    if (!data || data.lastUpdate === null) continue;
+  if (typeof convertToGbp !== 'function' || typeof convertFromGbp !== 'function') return [];
+  const balances = new Map();
+  for (const [sourceId, data] of getAllPortfolios()) {
+    if (!data || data.lastUpdate === null || !Array.isArray(data.holdings)) continue;
     const currency = data.currency ?? '$';
-    if (id === 'hyperliquid-wallet' && Array.isArray(data.holdings)) {
-      const earn = data.holdings
-        .filter(holding => holding?.meta?.account === 'earn')
-        .reduce((sum, holding) => sum + Math.max(0, Number(holding.value) || 0), 0);
-      earnGbp += convertToGbp(earn, currency);
-      perpGbp += convertToGbp(Math.max(0, (Number(data.value) || 0) - earn), currency);
-    } else {
-      perpGbp += splitPortfolio(data, id, convertToGbp).perp ?? 0;
+    for (const holding of data.holdings) {
+      if (!isPerpHolding(holding, sourceId)) continue;
+      const group = holdingScopeGroup(sourceId, holding);
+      if (!group) continue;
+      const key = `${sourceId}|${group}`;
+      const entry = balances.get(key) || { sourceId, sourceLabel: String(data.label || sourceId), group, gbp: 0 };
+      entry.gbp += convertToGbp(Math.max(0, Number(holding.value) || 0), holding.currency ?? currency);
+      balances.set(key, entry);
     }
   }
-  return {
-    perp: convertFromGbp(perpGbp),
-    earn: convertFromGbp(earnGbp),
-    perpIncluded: isGroupIncluded('hyperliquid-wallet', 'perp'),
-    earnIncluded: isGroupIncluded('hyperliquid-wallet', 'earn'),
-  };
+  // Two accounts with the same kind of balance say whose each is.
+  const sources = new Set([...balances.values()].map(entry => entry.sourceId));
+  return [...balances.values()].map(entry => ({
+    sourceId: entry.sourceId,
+    group: entry.group,
+    label: sources.size > 1 ? `${_groupLabel(entry.group)} · ${entry.sourceLabel}` : _groupLabel(entry.group),
+    value: convertFromGbp(entry.gbp),
+    included: isSourceIncluded(entry.sourceId) && isGroupIncluded(entry.sourceId, entry.group),
+  }));
 }
 
 // Long vs short split across every open perp position, by equity value
@@ -459,7 +462,7 @@ export function getFuturesDirectionSplit() {
     // value already shows (see markets/sidebar.js's updateFuturesCard),
     // not `position.value` (equity: marginUsed + unrealizedPnl, the
     // figure that feeds the *portfolio* total instead -- see
-    // collectors.py's collect_hyperliquid docstring). A long/short split
+    // the Hyperliquid connector's collect()). A long/short split
     // is about market exposure/direction, which is what positionValue
     // answers; equity is "how much money is in this," which doesn't
     // change what "long" or "short" as a fraction of exposure means.

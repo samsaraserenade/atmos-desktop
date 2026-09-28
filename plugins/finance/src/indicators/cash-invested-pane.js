@@ -23,6 +23,7 @@ import { areaPath, clipToDomain, downsampleSeries } from '../chart-service.js';
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { buildRatioSeries, nearestSampleTime } from '../ratio-history-chart.js';
+import { indexAtOrAfter } from '../history-change.js';
 
 export const CASH_INVESTED_PANE_ID = 'cash-invested';
 export const CASH_INVESTED_PANE_HEIGHT = 56;
@@ -43,6 +44,19 @@ export function prepareCashInvestedData(data) {
   Object.freeze(series);
   preparedRatioSeries.add(series);
   return series;
+}
+/**
+ * `series` (from prepareCashInvestedData) after a change to the history it
+ * was built from ({ from, points }, see src/history-change.js), without
+ * rebuilding the points before `from`.
+ */
+export function extendCashInvestedData(series, change) {
+  const added = buildRatioSeries(change.points);
+  for (const point of added) Object.freeze(point);
+  const next = series.slice(0, indexAtOrAfter(series, change.from)).concat(added);
+  Object.freeze(next);
+  preparedRatioSeries.add(next);
+  return next;
 }
 function ratioSeries(data) {
   return preparedRatioSeries.has(data) ? data : buildRatioSeries(data);

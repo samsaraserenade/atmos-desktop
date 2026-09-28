@@ -14,6 +14,12 @@ fi
 install -d -o root -g root -m 0755 /opt/atmos-portfolio
 install -o root -g root -m 0755 "$stage/server.py" /opt/atmos-portfolio/server.py
 install -o root -g root -m 0755 "$stage/collectors.py" /opt/atmos-portfolio/collectors.py
+# The connectors, one folder each (without any Python caches from the copy).
+rm -rf /opt/atmos-portfolio/connectors
+cp -R "$stage/connectors" /opt/atmos-portfolio/connectors
+find /opt/atmos-portfolio/connectors -name __pycache__ -prune -exec rm -rf {} +
+chown -R root:root /opt/atmos-portfolio/connectors
+chmod -R u=rwX,go=rX /opt/atmos-portfolio/connectors
 install -o root -g root -m 0644 "$stage/README.md" /opt/atmos-portfolio/README.md
 install -o root -g root -m 0644 "$stage/atmos-portfolio.service" \
   /etc/systemd/system/atmos-portfolio.service

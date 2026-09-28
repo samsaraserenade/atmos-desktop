@@ -10,27 +10,19 @@ export const ALLOCATION_DIMENSIONS = Object.freeze([
   { id: 'accounting', label: 'Stable / Invested' },
 ]);
 
-const SOURCE_PROFILES = Object.freeze({
-  'binance-spot': { dapp: 'Binance', protocol: 'Exchange', exchange: 'Binance', chain: 'Exchange' },
-  'hyperliquid-wallet': { dapp: 'Hyperliquid', protocol: 'Perpetuals', exchange: 'Hyperliquid', chain: 'Hyperliquid L1' },
-  'solana-wallet': { dapp: 'Wallet', protocol: 'Wallet', exchange: 'Self-custody', chain: 'Solana' },
-  'cardano-wallet': { dapp: 'Wallet', protocol: 'Wallet', exchange: 'Self-custody', chain: 'Cardano' },
-  'bsc-wallet': { dapp: 'Wallet', protocol: 'Wallet', exchange: 'Self-custody', chain: 'BNB Chain' },
-  'arbitrum-wallet': { dapp: 'Wallet', protocol: 'Wallet', exchange: 'Self-custody', chain: 'Arbitrum' },
-  'aptos-wallet': { dapp: 'Wallet', protocol: 'Wallet', exchange: 'Self-custody', chain: 'Aptos' },
-  'inj-wallet': { dapp: 'Wallet', protocol: 'Wallet', exchange: 'Self-custody', chain: 'Injective' },
-  'monero-wallet': { dapp: 'Wallet', protocol: 'Wallet', exchange: 'Self-custody', chain: 'Monero' },
-});
-
 const STABLES = new Set(['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'FDUSD', 'USDP', 'PYUSD', 'GUSD', 'FRAX', 'LUSD', 'USDD', 'EURC', 'EURT', 'USDHL']);
 
 function cleanSymbol(symbol) {
   return String(symbol || '').replace(/\s+(Earn|Perp|\(staked\))$/i, '').toUpperCase();
 }
 
+/**
+ * Where a holding sits (dApp, protocol, exchange, chain, wallet). Each
+ * connector on the server fills these in (its declared dimensions, under
+ * the holding's own meta); the fallbacks here are only for what it left out.
+ */
 export function holdingDimensions(sourceId, sourceLabel, holding) {
   const meta = holding?.meta || {};
-  const profile = SOURCE_PROFILES[sourceId] || {};
   const symbol = String(holding?.symbol || 'Asset');
   const earn = meta.account === 'earn' || /\sEarn$/i.test(symbol);
   const staked = meta.protocolType === 'Staking' || /staked/i.test(symbol);
@@ -39,11 +31,11 @@ export function holdingDimensions(sourceId, sourceLabel, holding) {
   const wallet = String(meta.walletAddress || '').trim();
   return {
     book: perp ? 'perp' : 'spot',
-    dapp: String(meta.dapp || profile.dapp || sourceLabel || sourceId || 'Other'),
-    protocol: String(meta.protocolType || (earn ? 'Lending' : staked ? 'Staking' : perp ? 'Perpetuals' : sourceId === 'hyperliquid-wallet' ? 'Exchange' : profile.protocol || 'Wallet')),
-    exchange: String(meta.exchange || profile.exchange || 'Self-custody'),
-    chain: String(meta.chain || profile.chain || 'Other'),
-    wallet: wallet || (profile.exchange && profile.exchange !== 'Self-custody' ? `${profile.exchange} account` : 'Unspecified wallet'),
+    dapp: String(meta.dapp || sourceLabel || sourceId || 'Other'),
+    protocol: String(meta.protocolType || (earn ? 'Lending' : staked ? 'Staking' : perp ? 'Perpetuals' : 'Wallet')),
+    exchange: String(meta.exchange || 'Self-custody'),
+    chain: String(meta.chain || 'Other'),
+    wallet: wallet || (meta.exchange && meta.exchange !== 'Self-custody' ? `${meta.exchange} account` : 'Unspecified wallet'),
     accounting: stable ? 'Stablecoin' : 'Invested',
   };
 }

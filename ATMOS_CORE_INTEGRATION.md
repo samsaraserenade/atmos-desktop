@@ -569,10 +569,17 @@ several widgets all display the same data, make the boot frame the engine:
 it fetches and polls, publishes what it has as an event (debounced) and
 `expose()`s a `snapshot()` for frames that open later. The panel and the
 widgets are views: they run the extension's ordinary modules, apply what
-the engine publishes, and never fetch. Settings are saved together in
-`atmos.state` as `{ namespaces: { id: { version, data } } }`, so every frame
-sees every change; a field too big for state (an imported font) goes to the
-origin's localStorage. Views `call()` the engine's `ready()` first.
+the engine publishes, and never fetch. Publish what changed, not
+everything: number the engine's data with a revision, send a frame that
+has just opened a full `snapshot()`, and after that only the change since
+the last event; a view that sees a gap in the revisions asks for a snapshot.
+Settings go in `atmos.state` with each field its own top-level key (Finance
+uses `ns:<namespace>:<field>`), so every frame sees every change and a
+frame writes only the fields it changed: `update()` merges top-level keys in
+one step, so two frames saving at once keep both changes, where writing a
+whole object from a frame's own copy would undo the other's. A field too big
+for state (an imported font) goes to the origin's localStorage. Views
+`call()` the engine's `ready()` first.
 
 ## 5. Services and libraries
 

@@ -10,6 +10,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -18,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.7.0"
+VERSION = "0.8.1"
 API_VERSION = 1
 PAIRING_PREFIX = "atmos-finance:"
 DEFAULT_DB = "/var/lib/atmos-portfolio/portfolio.sqlite3"
@@ -184,6 +185,29 @@ def migrate(db_path: str) -> None:
 
 
 MAX_HOLDING_META_JSON_CHARS = 2000
+PERP_INSTRUMENTS = ("perp", "perp-cash")
+# A holding's meta.group: a balance of its source included or left out as a
+# whole (Hyperliquid's "perp" and "earn"). Connectors set it; see connectors/.
+GROUP_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+def _legacy_meta(source_id: str, kind: str, meta: dict) -> dict:
+    """Holdings stored before 0.8 don't say their group, and the oldest
+    Hyperliquid cash rows don't say their instrument either. Only
+    Hyperliquid (source "hyperliquid-wallet") had groups, so this is the one
+    place the server knows its name. Returns `meta` itself when it has
+    nothing to add; delete this once no such rows are left."""
+    if source_id != "hyperliquid-wallet" or meta.get("group"):
+        return meta
+    filled = dict(meta)
+    instrument = filled.get("instrument")
+    if kind == "cash" and instrument not in ("spot", "spot-cash", *PERP_INSTRUMENTS):
+        filled["instrument"] = instrument = "perp-cash"
+    if filled.get("account") == "earn":
+        filled["group"] = "earn"
+    elif instrument in PERP_INSTRUMENTS:
+        filled["group"] = "perp"
+    return filled if filled != meta else meta
 
 
 def _clean_holding_meta(raw_meta: object) -> str | None:
@@ -242,14 +266,13 @@ def clean_frame(raw: dict) -> dict:
         perp_value = 0.0
         for holding in holdings:
             meta = json.loads(holding["meta"]) if holding["meta"] else {}
-            instrument = meta.get("instrument")
-            if instrument in ("perp", "perp-cash"):
+            filled = _legacy_meta(source_id, holding["kind"], meta)
+            if "group" in filled and not GROUP_ID.match(str(filled["group"])):
+                filled = {key: value for key, value in filled.items() if key != "group"}
+            if filled is not meta:
+                holding["meta"] = _clean_holding_meta(filled)
+            if filled.get("instrument") in PERP_INSTRUMENTS:
                 perp_value += holding["value"]
-            elif source_id == "hyperliquid-wallet" and holding["kind"] == "cash" and instrument not in ("spot", "spot-cash"):
-                # Compatibility with pre-upgrade idle collateral and stale snapshots.
-                perp_value += holding["value"]
-                meta["instrument"] = "perp-cash"
-                holding["meta"] = _clean_holding_meta(meta)
         if perp_value > source_value + max(0.01, source_value * 1e-8):
             raise ValueError("perp equity exceeds source total")
         sources.append(
@@ -339,6 +362,9 @@ def _holding_row(row: sqlite3.Row) -> dict:
         item["meta"] = json.loads(raw_meta) if raw_meta else None
     except (TypeError, ValueError):
         item["meta"] = None
+    filled = _legacy_meta(item.get("source_id") or "", item.get("kind") or "", item["meta"] or {})
+    if filled:
+        item["meta"] = filled
     return item
 
 
@@ -409,19 +435,15 @@ def history(db_path: str, start_ms: int, end_ms: int, resolution: str,
                     meta = json.loads(item["meta"]) if item["meta"] else {}
                 except (TypeError, ValueError):
                     meta = {}
+                meta = _legacy_meta(item["source_id"], item["kind"], meta)
                 instrument = meta.get("instrument")
-                group = None
-                if item["source_id"] == "hyperliquid-wallet":
-                    if meta.get("account") == "earn":
-                        group = "earn"
-                    elif instrument in ("perp", "perp-cash"):
-                        group = "perp"
+                group = meta.get("group") or None
                 source_match = item["source_id"] in (excluded_sources or set())
                 group_match = (item["source_id"], group) in (excluded_groups or set())
                 holding_match = (item["source_id"], item["holding_id"]) in (excluded or set())
-                # Positions are exposure backed by their parent's shared
-                # balance. A legacy per-position key is ignored; excluding
-                # the Perp group or whole source removes the stable balance.
+                # A grouped holding (a position, and the collateral backing
+                # it) is left out only with its group or its whole source;
+                # an exclusion of it on its own is ignored.
                 if not source_match and not group_match and (not holding_match or group is not None):
                     continue
                 adjustment = adjustments.setdefault(item["ts_ms"], {
@@ -431,11 +453,7 @@ def history(db_path: str, start_ms: int, end_ms: int, resolution: str,
                 value = max(0.0, float(item["value"] or 0))
                 adjustment["total"] += value
                 adjustment["cash" if item["kind"] == "cash" else "invested"] += value
-                is_perp = instrument in ("perp", "perp-cash") or (
-                    item["source_id"] == "hyperliquid-wallet"
-                    and item["kind"] == "cash"
-                    and instrument not in ("spot", "spot-cash")
-                )
+                is_perp = instrument in PERP_INSTRUMENTS
                 adjustment["perp" if is_perp else "spot"] += value
 
     points = []
@@ -717,7 +735,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             excluded_groups: set[tuple[str, str]] = set()
             for key in query.get("excludeGroup", [])[:100]:
                 source_id, separator, group = str(key).partition("|")
-                if separator and source_id and group in ("perp", "earn"):
+                if separator and source_id and GROUP_ID.match(group):
                     excluded_groups.add((source_id[:64], group))
             points = history(
                 self.server.db_path, start_ms, end_ms, resolution,

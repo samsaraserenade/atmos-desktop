@@ -80,9 +80,14 @@ you use and fill them in:
 sources only need public addresses. Binance is the only source that needs a
 secret, and the file is readable only by root and the service.
 
-On Windows, `configure-sources.ps1` asks for each value with masked
-prompts and sends the file to the server over SSH, so no secrets land on
-your PC. See `README.md`.
+Or let the server ask: `sudo python3 /opt/atmos-portfolio/collectors.py
+configure --output /etc/atmos-portfolio-sources.json` prompts for each
+source with masked input (blank keeps a source disabled). On Windows,
+`configure-sources.ps1` runs that over SSH, so no secrets land on your PC.
+After each source you use it offers another account of the same kind (a
+work Binance account, a second set of wallets); in the file these are
+sources like `"binance:work": { "type": "binance", ... }` (see "The
+configuration" in `README.md`).
 
 Then start or restart the collector:
 

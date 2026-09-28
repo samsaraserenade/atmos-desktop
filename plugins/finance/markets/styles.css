@@ -60,7 +60,7 @@
   display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:0 14px;
   border-bottom:1px solid rgba(var(--ink-rgb),.06); color:rgba(var(--ink-rgb),.52);
 }
-.portfolio-section-summary[data-futures-balance] { cursor:context-menu; }
+.portfolio-section-summary[data-futures-group] { cursor:context-menu; }
 .portfolio-section-summary.is-excluded,
 .watchlist-row.is-excluded { opacity:.38; }
 .portfolio-section-summary.is-excluded .portfolio-section-summary-label,

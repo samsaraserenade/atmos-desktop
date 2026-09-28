@@ -30,10 +30,6 @@ assert.match(registry, /if \(_remoteMode\)[\s\S]*?startVpsPortfolio/,
   'the portfolio comes from the VPS');
 assert.doesNotMatch(registry, /connectAll|loadPlugins|_buildPluginAPI|connections:list/,
   'the desktop runs no connection plugins of its own');
-assert.match(registry, /if \(!_remoteMode\) \{\s*mountConnectionForm\(mount\);/,
-  'without a server the Connections widget offers the pairing form');
-assert.match(registry, /Collected privately by your portfolio server/,
-  'remote sources should render a read-only connection body');
 assert.match(chart, /if \(!isRemotePortfolioMode\(\)\) return combined;[\s\S]*?return getRemoteTotalHistory\(\)\.map/,
   'the chart should use only authoritative VPS history in remote mode');
 assert.match(chart, /onRemoteTotalHistoryUpdate\(replaceHistoryFromVps\)/,

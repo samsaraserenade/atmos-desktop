@@ -3,7 +3,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
-const source = fs.readFileSync(path.join(root, 'src/portfolio-sections.js'), 'utf8').replaceAll('export ', '');
+const script = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/^import .*?;\r?\n/gm, '').replaceAll('export ', '');
+const source = script('src/legacy-holdings.js') + script('src/portfolio-sections.js');
 const portfolios = new Map();
 const excluded = new Set();
 const context = vm.createContext({
@@ -12,6 +13,8 @@ const context = vm.createContext({
   getExchanges: () => [],
   isHoldingIncluded: (sourceId, holding) => !excluded.has(`${sourceId}|${holding.id || `${holding.symbol}:${holding.kind || 'invested'}`}`),
   isGroupIncluded: () => true,
+  isSourceIncluded: () => true,
+  holdingScopeGroup: (sourceId, holding) => holding?.meta?.group || context.legacyGroup(sourceId, holding),
   scopedPortfolioData: (data, sourceId) => {
     if (!Array.isArray(data?.holdings)) return data;
     const holdings = data.holdings.filter(holding => context.isHoldingIncluded(sourceId, holding));
@@ -68,9 +71,36 @@ assert.equal(run('history[0].v'), 50);
 run("section='total';selectSectionHistory()");
 assert.equal(run('history === totalHistory'), true);
 const sidebar = fs.readFileSync(path.join(root, 'markets/sidebar.js'), 'utf8');
-vm.runInContext("var summaryClass={toggle(){}}; var futuresPerpBalanceEl={isConnected:true,textContent:'',closest:()=>({classList:summaryClass})}; var futuresEarnBalanceEl={isConnected:true,textContent:'',closest:()=>({classList:summaryClass})}; var formatHoldingValue=v=>String(v);", context);
-vm.runInContext(sidebar.slice(sidebar.indexOf('function updateFuturesTotal('), sidebar.indexOf('function updateSpotTotal(')), context);
+// The Futures widget's balance rows, against a tiny stand-in for the DOM.
+vm.runInContext(`
+  var element = tag => { const node = { tag, dataset: {}, children: [], textContent: '', className: '',
+    classList: { set: new Set(), toggle(name, on) { on ? this.set.add(name) : this.set.delete(name); }, contains(name) { return this.set.has(name); } },
+    append(...nodes) { this.children.push(...nodes); },
+    replaceChildren(...nodes) { this.children = nodes; },
+    querySelector(selector) { return this.children.find(child => selector === '.' + child.className); } }; return node; };
+  var document = { createElement: element };
+  var futuresBalancesEl = Object.assign(element('div'), { isConnected: true });
+  var _lastFuturesBalancesKey = null;
+  var formatHoldingValue = v => String(v);`, context);
+vm.runInContext(sidebar.slice(sidebar.indexOf('function updateFuturesTotal('), sidebar.indexOf('function openFuturesBalanceMenu(')), context);
+const rows = () => JSON.parse(run('JSON.stringify(futuresBalancesEl.children.map(row => [row.dataset.futuresSource, row.dataset.futuresGroup, row.children[0].textContent, row.children[1].textContent]))'));
+portfolios.clear();
+const hl = holdings => ({ label: 'HL', value: holdings.reduce((sum, h) => sum + h.value, 0), currency: 'GBP', lastUpdate: 1, holdings });
+portfolios.set('hyperliquid-wallet', hl([
+  { symbol: 'USDC', kind: 'cash', value: 1000, currency: 'GBP', meta: { instrument: 'perp-cash', group: 'perp' } },
+  { symbol: 'USDC Earn', kind: 'cash', value: 250, currency: 'GBP', meta: { instrument: 'perp-cash', account: 'earn', group: 'earn' } },
+  { symbol: 'HYPE', value: 90, currency: 'GBP', meta: { instrument: 'spot' } },
+]));
 run('updateFuturesTotal()');
-assert.equal(run('futuresPerpBalanceEl.textContent'), '1000', 'Futures shows idle Perp balance with no positions');
-assert.equal(run('futuresEarnBalanceEl.textContent'), '0', 'Futures keeps Earn separate from Perp balance');
+assert.deepEqual(rows(), [['hyperliquid-wallet', 'perp', 'Perp Balance', '1250'], ['hyperliquid-wallet', 'earn', 'Earn Balance', '312.5']],
+  'a row per group; idle collateral is the Perp balance, Earn is its own, spot tokens are neither');
+portfolios.set('hyperliquid-wallet', hl([
+  { symbol: 'USDC', kind: 'cash', value: 1000, currency: 'GBP', meta: { instrument: 'perp-cash' } },
+  { symbol: 'USDC Earn', kind: 'cash', value: 250, currency: 'GBP', meta: { instrument: 'perp-cash', account: 'earn' } },
+]));
+run('updateFuturesTotal()');
+assert.deepEqual(rows().map(row => row[1]), ['perp', 'earn'], 'a server before 0.8 (no meta.group) still gets both rows');
+portfolios.set('hyperliquid:alt', { ...hl([{ symbol: 'USDC', kind: 'cash', value: 5, currency: 'GBP', meta: { instrument: 'perp-cash', group: 'perp' } }]), label: 'Alt' });
+run('updateFuturesTotal()');
+assert.deepEqual(rows().map(row => row[2]), ['Perp Balance · HL', 'Earn Balance · HL', 'Perp Balance · Alt'], 'two accounts say whose each balance is');
 console.log('Passed: section histories, currency conversion, mixed accounts, and idle perp cash');

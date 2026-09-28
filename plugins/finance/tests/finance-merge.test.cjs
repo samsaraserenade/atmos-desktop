@@ -42,10 +42,10 @@ test('Finance registers and hydrates the existing saved state namespaces togethe
   await finance.evaluate();
   assert.deepEqual([...registered.keys()].sort(), ['markets', 'portfolio-tracker', 'watchlist']);
   const portfolio = {};
-  registered.get('portfolio-tracker').hydrate(portfolio, { chartVisible: true, chartSmoothing: 7, tickerEnabled: { wallet: true } });
+  registered.get('portfolio-tracker').hydrate(portfolio, { chartVisible: true, chartSmoothing: 7, excludedSources: { wallet: true } });
   assert.equal(portfolio.chartVisible, true);
   assert.equal(portfolio.chartSmoothing, 7);
-  assert.equal(portfolio.tickerEnabled.wallet, true);
+  assert.equal(portfolio.excludedSources.wallet, true);
   const watchlist = {};
   registered.get('watchlist').hydrate(watchlist, { tickers: ['SOL'], activeT: 'SOL' });
   assert.equal(watchlist.activeT, 'SOL');

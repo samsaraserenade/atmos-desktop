@@ -13,6 +13,7 @@ RUN install -d -o 10001 -g 10001 -m 0700 /data
 
 WORKDIR /app
 COPY server.py collectors.py ./
+COPY connectors ./connectors
 
 USER 10001:10001
 VOLUME ["/data"]

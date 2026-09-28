@@ -24,8 +24,8 @@ let positionsRowsHost = null;
 let marketsRowsHost = null;
 let futuresRowsHost = null;
 let spotTotalEl = null;
-let futuresPerpBalanceEl = null;
-let futuresEarnBalanceEl = null;
+let futuresBalancesEl = null;
+let _lastFuturesBalancesKey = null;
 let futuresDirectionEl = null;
 let _lastFuturesDirectionKey = null;
 // symbol -> row entry, one cache per host, so renderRows() can patch
@@ -211,7 +211,7 @@ function updateFuturesCard(entry, position) {
   // price) -- "how much SOL am I short", which is what you actually care
   // about glancing at, not the equity/margin figure (that one only
   // matters for the portfolio total behind the scenes -- see totals.js's
-  // getFuturesPositions() and the file-level docstring in collectors.py).
+  // getFuturesPositions() and the Hyperliquid connector's collect()).
   entry.valueEl.textContent = formatHoldingValue(position.positionValue ?? position.value);
   const pnl = position.unrealizedPnl;
   entry.pnlEl.textContent = pnl == null ? '' : formatSignedUsd(pnl);
@@ -237,28 +237,48 @@ function updateFuturesCard(entry, position) {
   entry.fees24hEl.style.color = position.fees24h == null ? '' : _directionalColor(false, .85);
 }
 
+// One summary row per balance the derivatives accounts report (a source's
+// groups: Hyperliquid's Perp and Earn), rebuilt only when that list changes.
 function updateFuturesTotal() {
-  if (!futuresPerpBalanceEl?.isConnected || !futuresEarnBalanceEl?.isConnected) return;
+  if (!futuresBalancesEl?.isConnected) return;
   const balances = getFuturesBalances();
-  futuresPerpBalanceEl.textContent = formatHoldingValue(balances.perp);
-  futuresEarnBalanceEl.textContent = formatHoldingValue(balances.earn);
-  futuresPerpBalanceEl.closest('.portfolio-section-summary')?.classList.toggle('is-excluded', !balances.perpIncluded);
-  futuresEarnBalanceEl.closest('.portfolio-section-summary')?.classList.toggle('is-excluded', !balances.earnIncluded);
+  const key = balances.map(balance => `${balance.sourceId}|${balance.group}|${balance.label}`).join('\n');
+  if (key !== _lastFuturesBalancesKey) {
+    _lastFuturesBalancesKey = key;
+    futuresBalancesEl.replaceChildren(...balances.map(balance => {
+      const row = document.createElement('div');
+      row.className = 'portfolio-section-summary';
+      row.dataset.futuresSource = balance.sourceId;
+      row.dataset.futuresGroup = balance.group;
+      const label = document.createElement('span');
+      label.className = 'portfolio-section-summary-label';
+      label.textContent = balance.label;
+      const total = document.createElement('span');
+      total.className = 'portfolio-section-total';
+      row.append(label, total);
+      return row;
+    }));
+  }
+  balances.forEach((balance, index) => {
+    const row = futuresBalancesEl.children[index];
+    row.querySelector('.portfolio-section-total').textContent = formatHoldingValue(balance.value);
+    row.classList.toggle('is-excluded', !balance.included);
+  });
 }
 
-function openFuturesBalanceMenu(event, group) {
-  const balances = getFuturesBalances();
-  const included = group === 'earn' ? balances.earnIncluded : balances.perpIncluded;
-  const label = group === 'earn' ? 'Earn Balance' : 'Perp Balance';
+function openFuturesBalanceMenu(event, sourceId, group) {
+  const balance = getFuturesBalances().find(item => item.sourceId === sourceId && item.group === group);
+  if (!balance) return;
   void atmos.contextMenu.open(event.clientX, event.clientY, [
-    { type: 'heading', label },
+    { type: 'heading', label: balance.label },
     {
       id: `finance.futures.scope.${group}`,
       type: 'toggle',
       label: 'Included in portfolio',
-      checked: included,
+      checked: balance.included,
       run(checked) {
-        setGroupIncluded('hyperliquid-wallet', group, checked);
+        if (checked) setSourceIncluded(sourceId, true);
+        setGroupIncluded(sourceId, group, checked);
         save();
         updateFuturesTotal();
         notifyPortfolioUpdate();
@@ -731,12 +751,12 @@ registerSection('portfolio-futures', {
     link.href = styleUrl;
     document.head.appendChild(link);
     context.onCleanup(() => link.remove());
-    body.innerHTML = '<div class="portfolio-section-summary-stack"><div class="portfolio-section-summary" data-futures-balance="perp"><span class="portfolio-section-summary-label">Perp Balance</span><span id="futures-perp-balance" class="portfolio-section-total"></span></div><div class="portfolio-section-summary" data-futures-balance="earn"><span class="portfolio-section-summary-label">Earn Balance</span><span id="futures-earn-balance" class="portfolio-section-total"></span></div></div><div id="futures-direction-bar"></div><div class="futures-rows"></div>';
+    body.innerHTML = '<div class="portfolio-section-summary-stack futures-balances"></div><div id="futures-direction-bar"></div><div class="futures-rows"></div>';
     futuresRowsHost = body.querySelector('.futures-rows');
     context.onCleanup(() => { if (futuresRowsHost?.closest('.fin-section-body') === body) futuresRowsHost = null; });
-    futuresPerpBalanceEl = body.querySelector('#futures-perp-balance');
-    futuresEarnBalanceEl = body.querySelector('#futures-earn-balance');
-    context.onCleanup(() => { futuresPerpBalanceEl = null; futuresEarnBalanceEl = null; });
+    futuresBalancesEl = body.querySelector('.futures-balances');
+    _lastFuturesBalancesKey = null;
+    context.onCleanup(() => { futuresBalancesEl = null; });
     futuresDirectionEl = body.querySelector('#futures-direction-bar');
     _lastFuturesDirectionKey = null;
     context.onCleanup(() => { futuresDirectionEl = null; });
@@ -768,11 +788,11 @@ registerSection('portfolio-futures', {
     context.onCleanup(onUpdate(renderFuturesRows));
     context.onCleanup(onPriceColorChange(renderFuturesRows));
     context.listen(body, 'contextmenu', event => {
-      const row = event.target.closest('[data-futures-balance]');
+      const row = event.target.closest('[data-futures-group]');
       if (!row || !body.contains(row)) return;
       event.preventDefault();
       event.stopPropagation();
-      openFuturesBalanceMenu(event, row.dataset.futuresBalance);
+      openFuturesBalanceMenu(event, row.dataset.futuresSource, row.dataset.futuresGroup);
     });
 
     // Click the coin/side/leverage header row to collapse just that

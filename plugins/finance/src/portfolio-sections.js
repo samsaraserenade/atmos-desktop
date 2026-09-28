@@ -1,10 +1,15 @@
-/** Account ownership is independent of whether a position is open. */
+import { legacyIsPerp } from './legacy-holdings.js';
+
+/**
+ * Whether a holding is in a derivatives account (a position, or the
+ * collateral and Earn supply that go with it), from its meta.instrument.
+ * Account ownership is independent of whether a position is open.
+ */
 export function isPerpHolding(holding, sourceId = '') {
   const instrument = holding?.meta?.instrument;
   if (instrument === 'spot' || instrument === 'spot-cash') return false;
   if (instrument === 'perp' || instrument === 'perp-cash') return true;
-  return /hyperliquid/i.test(sourceId) &&
-    (holding?.kind === 'cash' || /\bperp\b/i.test(holding?.symbol || ''));
+  return legacyIsPerp(sourceId, holding);
 }
 export function splitPortfolio(data, sourceId, convert) {
   const total = convert(Number(data?.value) || 0, data?.currency ?? '$');

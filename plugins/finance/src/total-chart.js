@@ -9,8 +9,9 @@ import {
   onPortfolioUpdate, getAllPortfolioHistories, getRemoteTotalHistory,
   isRemotePortfolioMode, onRemoteTotalHistoryUpdate, recordPortfolioHistoryFrame,
 } from './registry.js';
-import { getTotal, onCurrencyChange, convertToGbp, convertFromGbp } from './totals.js';
+import { getTotal, onCurrencyChange, onRatesChange, convertToGbp, convertFromGbp } from './totals.js';
 import { getPriceColors, setPriceColorUp, setPriceColorDown, onPriceColorChange } from './host/semantic-colors.js';
+import { indexAtOrAfter } from './history-change.js';
 import { onStateLoaded, save as saveState } from './host/persist.js';
 import { saveChartHistory, loadChartHistory, saveChartHidden, loadChartHidden } from './storage.js';
 import { portfolioState } from '../persist.js';
@@ -18,13 +19,13 @@ import {
   initBalanceWidget, updateBalanceDisplay, refreshMiniChartLayout,
   setBalanceVisible as applyBalanceVisible,
   getBalanceAnimMs, resetBalanceAnim,
-  showHistoricalComposition, clearHistoricalComposition,
+  showHistoricalComposition, clearHistoricalComposition, balanceHistoryReplaced,
 } from './balance.js';
 import { activatePanelPlugin, activateDefaultPanelPlugin, getActivePanelPluginId } from './host/panel-registry.js';
 import { atmos, role } from './host/frame.js';
 import { MAX_HISTORY_POINTS } from './history-constants.js';
 import { createTimeSeriesChart, setChartSettings, lineColorForTrend, CHART_INTERVALS, CHART_RANGES, chartControlMarkup } from './chart-service.js';
-import { createCashInvestedPane, CASH_INVESTED_PANE_ID, prepareCashInvestedData } from './indicators/cash-invested-pane.js';
+import { createCashInvestedPane, CASH_INVESTED_PANE_ID, prepareCashInvestedData, extendCashInvestedData } from './indicators/cash-invested-pane.js';
 
 const PORTFOLIO_INTERVALS = CHART_INTERVALS.filter(item => item.value !== '4h');
 const PORTFOLIO_RANGES = CHART_RANGES.filter(item => item.value !== 'ytd');
@@ -34,6 +35,9 @@ const VIEW_TYPES = Object.freeze({ line: 'line', candles: 'candlestick', heiken:
 const totalHistory = [];
 const legacyTotalHistory = [];
 let history = totalHistory;
+// totalHistory is the VPS history, point for point, converted at the current
+// rates. False while it holds this computer's own samples (no VPS).
+let mirrorsVps = false;
 let section = 'total';
 let sectionButtons = [];
 let remoteSections = [];
@@ -57,7 +61,8 @@ export function portfolioSectionHistory(selected) {
     .sort((a, b) => a.t - b.t).map(point => ({ ...point, g: point[selected], v: convertFromGbp(point[selected]) }));
 }
 const extraPortfolioViews = new Set();
-function refreshExtraPortfolioViews(presentationOnly = false) { for (const refresh of extraPortfolioViews) refresh(presentationOnly); }
+/** `appended`: points just added to the end of totalHistory, nothing else changed. */
+function refreshExtraPortfolioViews(presentationOnly = false, appended = null) { for (const refresh of extraPortfolioViews) refresh(presentationOnly, appended); }
 
 export function mountPortfolioSection(host, context, selected = 'total', stateKey = 'portfolio-extra') {
   host.innerHTML = '<div class="finance-portfolio-chart"><div class="finance-plot-surface"><div class="portfolio-chart-host"></div></div><div class="finance-portfolio-toolbar atmos-chart-controls"><div class="finance-toolbar-scroll">' + '<div role="group" aria-label="Timeline">' + chartControlMarkup('timeline') + chartControlMarkup('bridge') + chartControlMarkup('scale') + '</div><div role="group" aria-label="Chart type">' + chartControlMarkup('type') + '</div><div role="group" aria-label="Candle timeframe">' + chartControlMarkup('timeframe', { intervals: PORTFOLIO_INTERVALS }) + '</div><div role="group" aria-label="Visible range">' + chartControlMarkup('range', { ranges: PORTFOLIO_RANGES }) + '</div>' + '</div></div></div>';
@@ -74,12 +79,14 @@ export function mountPortfolioSection(host, context, selected = 'total', stateKe
   bindChartResetMeasurement(host.querySelector('.finance-plot-surface'), () => view, context);
   view.on('hiddenRanges', updateHiddenRanges);
   let displayedData = data;
-  const refresh = (presentationOnly = false) => {
+  const refresh = (presentationOnly = false, appended = null) => {
+    const append = !presentationOnly && appended && selected === 'total';
     if (!presentationOnly) displayedData = portfolioSectionHistory(selected);
     const data = displayedData;
     view.batch(() => {
       view.setOptions({ ...presentationOptions(), lineColor: lineColorForTrend(data, getPriceColors?.() || { up: '#34d399', down: '#f87171' }, point => point.v) });
-      if (!presentationOnly) view.setData(data, { preserveViewport: true });
+      if (append) view.appendMany(appended);
+      else if (!presentationOnly) view.setData(data, { preserveViewport: true });
     });
   };
   extraPortfolioViews.add(refresh);
@@ -154,10 +161,13 @@ function buildCombinedHistoryFromConnectors() {
     combined.push({ spot: known ? spot : null, perp: known ? perp : null, t: timestamp, v: convertFromGbp(gbp), g: gbp, liveCount: latest.size, errorCount });
   }
   if (!isRemotePortfolioMode()) return combined;
-  return getRemoteTotalHistory().map(point => {
-    const gbp = convertToGbp(point.value ?? 0, point.currency ?? 'USD');
-    return { spot: point.spot == null ? null : convertToGbp(point.spot, point.currency ?? 'USD'), perp: point.perp == null ? null : convertToGbp(point.perp, point.currency ?? 'USD'), t: point.t, v: convertFromGbp(gbp), g: gbp, liveCount: 1, errorCount: Math.max(0, Number(point.errorCount) || 0) };
-  });
+  return getRemoteTotalHistory().map(chartPointFromVps);
+}
+
+/** A VPS history point as the chart and balance widgets draw it. */
+function chartPointFromVps(point) {
+  const gbp = convertToGbp(point.value ?? 0, point.currency ?? 'USD');
+  return { spot: point.spot == null ? null : convertToGbp(point.spot, point.currency ?? 'USD'), perp: point.perp == null ? null : convertToGbp(point.perp, point.currency ?? 'USD'), t: point.t, v: convertFromGbp(gbp), g: gbp, liveCount: 1, errorCount: Math.max(0, Number(point.errorCount) || 0) };
 }
 
 function chartStatus() {
@@ -229,10 +239,21 @@ function updateHiddenRanges(ranges) {
   refreshExtraPortfolioViews(true);
   updateBalanceDisplay();
 }
-function replaceChartData() {
-  refreshExtraPortfolioViews();
-  selectSectionHistory();
+/** `appended`: points just added to the end of totalHistory, nothing else changed. */
+function replaceChartData(appended = null) {
+  refreshExtraPortfolioViews(false, appended);
+  // Only a chart draws the selected section; a widget frame has none.
   if (!chart) return;
+  if (appended && section === 'total') {
+    history = totalHistory;
+    chart.batch(() => {
+      chart.setOptions(presentationOptions());
+      chart.appendMany(appended);
+      chart.setPaneData(CASH_INVESTED_PANE_ID, cashInvestedData);
+    });
+    return;
+  }
+  selectSectionHistory();
   chart.batch(() => {
     chart.setOptions(presentationOptions());
     chart.setData(history, { preserveViewport: true });
@@ -240,19 +261,54 @@ function replaceChartData() {
   });
 }
 
-function replaceHistoryFromVps() {
-  if (!isRemotePortfolioMode()) return;
-  const splits = new Map(remoteSections.map(point => [point.t, point]));
-  for (const point of totalHistory) if (point.spot != null) splits.set(point.t, point);
-  remoteSections = [...splits.values()].sort((a, b) => a.t - b.t).slice(-MAX_HISTORY_POINTS);
-  const remote = buildCombinedHistoryFromConnectors().slice(-MAX_HISTORY_POINTS);
-  legacyTotalHistory.length = 0;
-  totalHistory.length = 0;
-  for (const point of remote) totalHistory.push(point);
+/**
+ * Keep the Spot/Perp split of every point seen, so a section chart keeps
+ * points the VPS later stops sending split (portfolioSectionHistory).
+ */
+function rememberSections(points) {
+  const split = points.filter(point => point.spot != null);
+  if (!split.length) return;
+  if (!remoteSections.length || split[0].t > remoteSections.at(-1).t) {
+    for (const point of split) remoteSections.push(point);
+  } else {
+    const byTime = new Map(remoteSections.map(point => [point.t, point]));
+    for (const point of split) byTime.set(point.t, point);
+    remoteSections = [...byTime.values()].sort((a, b) => a.t - b.t);
+  }
+  if (remoteSections.length > MAX_HISTORY_POINTS) remoteSections = remoteSections.slice(-MAX_HISTORY_POINTS);
+}
+
+/**
+ * The VPS history changed (registry.js onRemoteTotalHistoryUpdate).
+ * `change` ({ from, points }) replaces only the points at or after `from`;
+ * new samples at the end are appended to the chart rather than redrawn.
+ * Without it, the whole history was replaced.
+ */
+function replaceHistoryFromVps(change) {
+  if (!isRemotePortfolioMode()) { mirrorsVps = false; return; }
+  // A change applies to the VPS history; anything else here is rebuilt from it.
+  if (!mirrorsVps) change = undefined;
+  const previousLength = totalHistory.length;
+  const keep = change ? indexAtOrAfter(totalHistory, change.from) : 0;
+  const fresh = (change ? change.points : getRemoteTotalHistory()).map(chartPointFromVps);
+  if (!change) legacyTotalHistory.length = 0;
+  rememberSections(totalHistory.slice(keep)); // the points about to go, as before
+  totalHistory.length = keep;
+  for (const point of fresh) totalHistory.push(point);
+  if (totalHistory.length > MAX_HISTORY_POINTS) totalHistory.splice(0, totalHistory.length - MAX_HISTORY_POINTS);
+  rememberSections(fresh);
+  mirrorsVps = true;
   history = totalHistory;
+  balanceHistoryReplaced();
   updateBalanceDisplay();
-  cashInvestedData = prepareCashInvestedData(getRemoteTotalHistory());
-  replaceChartData();
+  // The cash/invested pane is drawn only with the chart (the panel).
+  if (chart) {
+    cashInvestedData = change
+      ? extendCashInvestedData(cashInvestedData, change)
+      : prepareCashInvestedData(getRemoteTotalHistory());
+  }
+  const appendedOnly = !!change && keep === previousLength && totalHistory.length === previousLength + fresh.length;
+  replaceChartData(appendedOnly ? fresh : null);
 }
 
 function restoreRuntimeSettings() {
@@ -306,6 +362,8 @@ export async function initTotalChart(context) {
   const legacy = remote ? [] : savedHistory.filter(point => point.t < splitStart);
   legacyTotalHistory.push(...legacy.slice(-MAX_HISTORY_POINTS));
   totalHistory.push(...legacy.concat(rebuilt).slice(-MAX_HISTORY_POINTS));
+  if (remote) rememberSections(totalHistory);
+  mirrorsVps = remote;
   history = totalHistory;
   hiddenRanges = savedHidden;
   context.onCleanup(atmos.events.on('chart-hidden', ranges => { if (Array.isArray(ranges)) applyHiddenRanges(ranges); }));
@@ -317,6 +375,9 @@ export async function initTotalChart(context) {
   context.listen(window, 'resize', refreshMiniChartLayout);
   context.onCleanup(onPortfolioUpdate(sample));
   context.onCleanup(onRemoteTotalHistoryUpdate(replaceHistoryFromVps));
+  // Each point is converted from the VPS's currency when it arrives: new
+  // rates convert the whole history again.
+  context.onCleanup(onRatesChange(() => replaceHistoryFromVps()));
   context.onCleanup(onCurrencyChange(reconvertHistoryForCurrencyChange));
   context.setInterval(sample, POLL_MS);
   context.setTimeout(sample, Math.max(0, collectAfter - Date.now()));
@@ -463,7 +524,7 @@ export function setSamsaraCandleColorBasis(value) { updateSamsara('samsaraCandle
 
 function reconvertHistoryForCurrencyChange() {
   for (const point of totalHistory) if (point.g != null) point.v = convertFromGbp(point.g);
-  resetBalanceAnim(); updateBalanceDisplay(); saveChartHistory([...legacyTotalHistory]); replaceChartData();
+  balanceHistoryReplaced(); resetBalanceAnim(); updateBalanceDisplay(); saveChartHistory([...legacyTotalHistory]); replaceChartData();
 }
 function isHidden(point) { return hiddenRanges.some(range => point.t >= range.tStart && point.t <= range.tEnd); }
 
@@ -478,7 +539,8 @@ function sample() {
   // every historical chart point.
   if (isRemotePortfolioMode()) {
     updateBalanceDisplay();
-    refreshExtraPortfolioViews();
+    // The history itself changes only when the engine sends a change.
+    refreshExtraPortfolioViews(true);
     if (chart) chart.setStatus(chartStatus());
     return;
   }

@@ -6,7 +6,7 @@
  * longer runs connection plugins of its own. This file keeps the list of
  * sources the VPS reports, their latest data and status, the saved
  * per-source history the charts combine with the VPS's, and the
- * Portfolio Connections widget's list.
+ * Portfolio Connections widget's data (its list is ./connections-list.js).
  *
  * Currency conversion is the Currency library's (services/currency); the
  * totals and the currency toggle are in ./totals.js.
@@ -19,13 +19,10 @@ import {
   saveConnectionHistoryChunk, saveConnectionHistoryManifest,
 } from './storage.js';
 import { MAX_HISTORY_POINTS } from './history-constants.js';
-import { portfolioState } from '../persist.js';
-import { save } from './host/persist.js';
 import { getConnection, startVpsPortfolio, fetchHoldingsHistory } from './remote.js';
-import { mountConnectionForm, mountConnectionFooter } from './connection-form.js';
+import { renderConnections } from './connections-list.js';
 import { isEngine } from './host/frame.js';
-
-let _connectionsContext = null;
+import { applyHistoryChange, composeHistoryChanges, diffHistoryTail } from './history-change.js';
 
 // Markets is part of Finance; share its module instance and watchlist state.
 let _watchlistModPromise = null;
@@ -49,6 +46,11 @@ const _remoteHistoryHooks = new Set();
 export { fetchHoldingsHistory };
 export function isRemotePortfolioMode() { return _remoteMode; }
 export function getRemoteTotalHistory() { return _remoteTotalHistory; }
+/**
+ * fn(change) after the VPS history changed: `change` is { from, points }
+ * (everything at or after `from` was replaced by `points`, see
+ * history-change.js), or undefined when the whole history was replaced.
+ */
 export function onRemoteTotalHistoryUpdate(fn) {
   _remoteHistoryHooks.add(fn);
   return () => _remoteHistoryHooks.delete(fn);
@@ -57,10 +59,34 @@ export function refreshRemoteHistory() {
   return _refreshRemoteHistory?.() ?? Promise.resolve();
 }
 
+function _historyReplaced(change) {
+  for (const hook of _remoteHistoryHooks) {
+    try { hook(change); } catch (error) { console.error('[registry] history listener failed:', error); }
+  }
+}
+
+/** Engine: start again from `points` (a server disconnected or switched). Views are sent all of it. */
 function _setRemoteTotalHistory(points) {
   _remoteTotalHistory = Array.isArray(points) ? points : [];
   _historyRevision++;
-  for (const hook of _remoteHistoryHooks) hook();
+  _unpublishedChange = null;
+  _historyReplaced();
+  _engineChanged();
+}
+
+/**
+ * Engine: the newest samples, replacing everything at or after `from`
+ * (-Infinity: a reload of the whole history). Views are sent only what differs.
+ */
+function _mergeRemoteTotalHistory(from, points) {
+  const change = diffHistoryTail(_remoteTotalHistory, from, Array.isArray(points) ? points : []);
+  if (!change) return;
+  _remoteTotalHistory = applyHistoryChange(_remoteTotalHistory, change);
+  if (_historyRevision === _publishedRevision) _unpublishedChange = change;
+  else if (_unpublishedChange) _unpublishedChange = composeHistoryChanges(_unpublishedChange, change);
+  // (else a full replacement is still unpublished, and views get all of it anyway)
+  _historyRevision++;
+  _historyReplaced(change);
   _engineChanged();
 }
 
@@ -69,7 +95,13 @@ function _setRemoteTotalHistory(points) {
 // publishes, so the rest of this module works the same everywhere.
 
 const _statuses = new Map(); // source id -> 'ok' | 'partial' | 'error'
+// The VPS history's revision, counted from 0 in each engine session (the epoch).
+const _historyEpoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 let _historyRevision = 0;
+let _publishedRevision = 0;
+// What changed since _publishedRevision ({ from, points }), or null when
+// the whole history has to be sent (it was reloaded).
+let _unpublishedChange = null;
 const _engineListeners = new Set();
 /** Engine: fn() after anything views mirror changed. */
 export function onEngineChange(fn) {
@@ -81,39 +113,73 @@ function _engineChanged() {
   for (const fn of _engineListeners) { try { fn(); } catch (error) { console.error('[registry] engine listener failed:', error); } }
 }
 
-/** Engine: everything a view needs. The VPS history only when `sinceRevision` is behind. */
+/**
+ * Engine: everything a view needs. Of the VPS history: nothing when
+ * `sinceRevision` is current, what changed when it is the last published
+ * revision, and otherwise all of it (a frame that has just opened).
+ */
 export function exportEngineState(sinceRevision = -1) {
+  let history = {};
+  if (sinceRevision === _historyRevision) { /* the view has it all */ }
+  else if (sinceRevision === _publishedRevision && _unpublishedChange) history = { historyChange: { base: sinceRevision, ..._unpublishedChange } };
+  else history = { remoteTotalHistory: _remoteTotalHistory };
   return {
     remoteMode: _remoteMode,
     connection: _connection,
     exchanges: exchanges.map(ex => ({ ...ex })),
     portfolios: [..._portfolios],
     statuses: [..._statuses],
+    historyEpoch: _historyEpoch,
     historyRevision: _historyRevision,
-    ...(sinceRevision === _historyRevision ? {} : { remoteTotalHistory: _remoteTotalHistory }),
+    ...history,
   };
 }
 
+/** Engine: every view has been sent the history up to `revision`; collect changes from there. */
+export function markHistoryPublished(revision) {
+  if (revision !== _historyRevision) return;
+  _publishedRevision = revision;
+  _unpublishedChange = null;
+}
+
+let _appliedHistoryEpoch = null;
 let _appliedHistoryRevision = -1;
-/** View: take the engine's state, then redraw as if it had been fetched here. */
+/**
+ * View: take the engine's state, then redraw as if it had been fetched
+ * here. Returns false when this frame's history is behind and can't be
+ * brought up to date from `snapshot` (a change it missed): ask the engine
+ * for a full snapshot then.
+ */
 export function applyEngineState(snapshot) {
-  if (!snapshot) return;
+  if (!snapshot) return true;
   _remoteMode = !!snapshot.remoteMode;
   _connection = snapshot.connection || { configured: _remoteMode };
   exchanges.length = 0;
   for (const ex of snapshot.exchanges || []) exchanges.push(ex);
   _portfolios.clear();
   for (const [id, data] of snapshot.portfolios || []) _portfolios.set(id, data);
+  const sameEpoch = snapshot.historyEpoch === _appliedHistoryEpoch;
   if (Array.isArray(snapshot.remoteTotalHistory)) {
+    // A snapshot can arrive after a newer change: keep the newer.
+    if (!sameEpoch || snapshot.historyRevision > _appliedHistoryRevision) {
+      _appliedHistoryEpoch = snapshot.historyEpoch;
+      _appliedHistoryRevision = snapshot.historyRevision;
+      _remoteTotalHistory = snapshot.remoteTotalHistory;
+      _historyReplaced();
+    }
+  } else if (snapshot.historyChange && sameEpoch && snapshot.historyChange.base === _appliedHistoryRevision) {
+    const { from, points } = snapshot.historyChange;
+    const change = { from, points };
     _appliedHistoryRevision = snapshot.historyRevision;
-    _remoteTotalHistory = snapshot.remoteTotalHistory;
-    for (const hook of _remoteHistoryHooks) hook();
+    _remoteTotalHistory = applyHistoryChange(_remoteTotalHistory, change);
+    _historyReplaced(change);
   }
-  renderExchangeList();
   for (const [id, status] of snapshot.statuses || []) setExchangeStatus(id, status);
+  renderExchangeList();
   notifyPortfolioUpdate();
+  return snapshot.historyEpoch === _appliedHistoryEpoch && _appliedHistoryRevision >= snapshot.historyRevision;
 }
-/** View: the VPS history revision this frame has, so the engine can skip resending it. */
+/** View: the VPS history revision this frame has. */
 export function appliedHistoryRevision() { return _appliedHistoryRevision; }
 
 // ── Portfolio value history (for candlestick/time-series charting) ────────────
@@ -251,83 +317,6 @@ export function notifyPortfolioUpdate() {
     }
     finally { _notifying = false; }
   });
-}
-
-// ── Ticker-enabled persistence ────────────────────────────────────────────────
-
-function _loadEnabledMap() {
-  return portfolioState.tickerEnabled;
-}
-
-function _saveEnabledMap(map) {
-  portfolioState.tickerEnabled = { ...map };
-  save();
-}
-
-export function isTickerEnabled(id) {
-  return _loadEnabledMap()[id] !== false;
-}
-
-export function setTickerEnabled(id, enabled) {
-  _setTickerEnabled(id, enabled);
-}
-
-function _setTickerEnabled(id, enabled) {
-  const map = _loadEnabledMap();
-  map[id] = enabled;
-  _saveEnabledMap(map);
-}
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-function _injectStyles() {
-  if (document.getElementById('exchange-registry-styles')) return;
-  const style = document.createElement('style');
-  style.id = 'exchange-registry-styles';
-  style.textContent = `
-    .exch-sub-acc {
-      display:flex; align-items:center; gap:9px;
-      padding:7px 12px; cursor:pointer; border-radius:6px;
-      transition:background .08s; user-select:none;
-    }
-    .exch-sub-acc:hover   { background:rgba(var(--ink-rgb),.07); }
-    .exch-sub-acc.is-open { background:rgba(var(--ink-rgb),.04); }
-    .exch-sub-name {
-      flex:1; font-size:.7rem;
-      color:rgba(var(--ink-rgb),.75); letter-spacing:.04em;
-    }
-    .exch-sub-chevron {
-      font-size:.55rem; opacity:.4; transition:transform .25s ease;
-    }
-    .exch-sub-acc.is-open .exch-sub-chevron { transform:rotate(180deg); }
-    .exch-sub-body {
-      overflow:hidden; max-height:0; opacity:0;
-      transition:max-height .38s cubic-bezier(.22,1,.36,1), opacity .22s ease;
-      pointer-events:none;
-    }
-    .exch-sub-body.open { max-height:700px; opacity:1; pointer-events:all; }
-    .exch-sub-wrap + .exch-sub-wrap { border-top:1px solid rgba(var(--ink-rgb),.05); }
-    .exch-status-badge {
-      display:flex; align-items:center; justify-content:center;
-      width:14px; flex-shrink:0;
-    }
-    .exch-ticker-toggle {
-      display:flex; align-items:center; justify-content:center;
-      width:22px; height:22px; flex-shrink:0;
-      background:none; border:none; padding:0;
-      cursor:pointer; border-radius:4px;
-      color:rgba(var(--ink-rgb),.22);
-      transition:color .12s, background .12s;
-    }
-    .exch-ticker-toggle:hover   { background:rgba(var(--ink-rgb),.08); color:rgba(var(--ink-rgb),.7); }
-    .exch-ticker-toggle.enabled { color:rgba(var(--ink-rgb),.65); }
-    .exch-ticker-toggle.enabled:hover { color:rgb(var(--ink-rgb)); }
-    .exch-vps-note {
-      margin:0; padding:10px 12px 12px;
-      color:rgba(var(--ink-rgb),.42); font-size:.64rem; line-height:1.45;
-    }
-  `;
-  document.head.appendChild(style);
 }
 
 // ── Sources ───────────────────────────────────────────────────────────────────
@@ -471,7 +460,7 @@ export function getAllPortfolioHistories() {
   return _history;
 }
 
-// ── Status badge ──────────────────────────────────────────────────────────────
+// ── Source status ─────────────────────────────────────────────────────────────
 
 export function setExchangeStatus(id, status) {
   if (_statuses.get(id) !== status) { _statuses.set(id, status); _engineChanged(); }
@@ -490,117 +479,19 @@ export function setExchangeStatus(id, status) {
       notifyPortfolioUpdate();
     }
   }
-
-  const mount  = document.getElementById('exchange-mount');
-  const wrap   = mount?.querySelector(`.exch-sub-wrap[data-exchange-id="${id}"]`);
-  const header = wrap?.querySelector('.exch-sub-acc');
-  if (!header) return;
-
-  let badge = header.querySelector('.exch-status-badge');
-  if (!badge) {
-    badge = document.createElement('span');
-    badge.className = 'exch-status-badge';
-    const before = header.querySelector('.exch-ticker-toggle') ?? header.querySelector('.exch-sub-chevron');
-    header.insertBefore(badge, before);
-  }
-
-  if (status === 'ok') {
-    badge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-    badge.title = 'Connected';
-  } else if (status === 'error') {
-    badge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-    badge.title = 'Connection failed';
-  } else if (status === 'partial') {
-    badge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="13"/><circle cx="12" cy="18" r="1" fill="#fbbf24" stroke="none"/></svg>`;
-    badge.title = 'Partial data — using last confirmed values where needed';
-  } else {
-    badge.innerHTML = '';
-    badge.title = '';
-  }
 }
+
+/** 'ok', 'partial', 'error', or undefined before the first poll. */
+export function getSourceStatus(id) { return _statuses.get(id); }
+
+/** { configured, address?, protected? }: the portfolio server Finance reads (never the token). */
+export function getServerConnection() { return _connection; }
 
 // ── UI ────────────────────────────────────────────────────────────────────────
 
+/** Redraw the Portfolio Connections widget, if this frame shows it (./connections-list.js). */
 export function renderExchangeList(context) {
-  if (context) {
-    _connectionsContext = context;
-    context.onCleanup(() => {
-      if (_connectionsContext === context) _connectionsContext = null;
-    });
-  }
-  const mount = document.getElementById('exchange-mount');
-  if (!mount) return;
-
-  _injectStyles();
-  mount.innerHTML = '';
-
-  if (!_remoteMode) {
-    mountConnectionForm(mount);
-    return;
-  }
-  const visibleExchanges = exchanges.filter(ex => _portfolios.get(ex.id) != null);
-
-  visibleExchanges.forEach(ex => {
-    const wrap = document.createElement('div');
-    wrap.className = 'exch-sub-wrap';
-    wrap.dataset.exchangeId = ex.id;
-
-    const enabled   = isTickerEnabled(ex.id);
-    const tickerBtn = document.createElement('button');
-    tickerBtn.className = 'exch-ticker-toggle' + (enabled ? ' enabled' : '');
-    tickerBtn.title     = enabled ? 'Showing in ticker — click to hide' : 'Hidden from ticker — click to show';
-    tickerBtn.innerHTML = _eyeIcon(enabled);
-
-    tickerBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      const next = !isTickerEnabled(ex.id);
-      _setTickerEnabled(ex.id, next);
-      tickerBtn.className = 'exch-ticker-toggle' + (next ? ' enabled' : '');
-      tickerBtn.title     = next ? 'Showing in ticker — click to hide' : 'Hidden from ticker — click to show';
-      tickerBtn.innerHTML = _eyeIcon(next);
-      _loadWatchlist()
-        .then(m => { m.renderTickerRows(); m.updateTickerActive(); })
-        .catch(err => console.warn('[registry] watchlist unavailable — ticker UI not refreshed:', err.message));
-    });
-
-    const header = document.createElement('div');
-    header.className = 'exch-sub-acc';
-    header.innerHTML = `<span class="exch-sub-name">${ex.name ?? ex.id}</span>`;
-    header.appendChild(tickerBtn);
-    header.insertAdjacentHTML('beforeend', `<span class="exch-sub-chevron">▼</span>`);
-
-    const body = document.createElement('div');
-    body.className = 'exch-sub-body';
-
-    // Append to live DOM BEFORE render() so getElementById works inside plugins
-    wrap.appendChild(header);
-    wrap.appendChild(body);
-    mount.appendChild(wrap);
-
-    const data = _portfolios.get(ex.id);
-    const note = document.createElement('p');
-    note.className = 'exch-vps-note';
-    note.textContent = data
-      ? 'Collected privately by your portfolio server. Portfolio visibility is controlled from the Spot and Futures rows.'
-      : 'No balance is currently reported by this source.';
-    body.append(note);
-
-    header.addEventListener('click', e => {
-      e.stopPropagation();
-      const isOpen = body.classList.contains('open');
-      mount.querySelectorAll('.exch-sub-body.open').forEach(b  => b.classList.remove('open'));
-      mount.querySelectorAll('.exch-sub-acc.is-open').forEach(h => h.classList.remove('is-open'));
-      if (!isOpen) { body.classList.add('open'); header.classList.add('is-open'); }
-    });
-  });
-
-  mountConnectionFooter(mount, _connection);
-}
-
-function _eyeIcon(visible) {
-  return visible
-    ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
-    : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+  renderConnections(context);
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -642,7 +533,8 @@ async function _connect() {
     publish: (id, data) => { _trackSource(id, data?.label); setPortfolioData(id, data); },
     remove: id => { _forgetSource(id); setPortfolioData(id, null); },
     setStatus: setExchangeStatus,
-    setHistory: _setRemoteTotalHistory,
+    setHistory: points => _mergeRemoteTotalHistory(-Infinity, points),
+    mergeHistory: _mergeRemoteTotalHistory,
   });
   _remote = remote;
   _refreshRemoteHistory = remote.refreshHistory;

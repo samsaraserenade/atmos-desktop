@@ -3,17 +3,22 @@
  *
  * Settings: Finance's three state namespaces ('portfolio-tracker', 'markets',
  * 'watchlist') keep their shape, hydrate/migrate/serialize and ids, and are
- * saved together in Finance's Atmos state as { namespaces: { id: { version,
- * data } } }, shared by all of its frames. Fields a namespace lists as
- * `large` (an imported font) live in this origin's localStorage instead, to
- * stay well under Atmos state's 1 MB.
+ * shared by all of its frames through Finance's Atmos state. Each field is
+ * its own top-level key there, `ns:<namespace>:<field>`, with the namespace's
+ * version at `nsv:<namespace>`. A frame writes only the fields it changed:
+ * Atmos merges top-level keys in one step, so two frames saving at once
+ * can't undo each other's change. Fields a namespace lists as `large` (an
+ * imported font) live in this origin's localStorage instead, to stay well
+ * under Atmos state's 1 MB.
  *
  * Assets (chart and per-source history): IndexedDB in Finance's frame
  * origin, same keys as before.
  *
- * The first time Finance runs in frames, the engine copies all of this from
- * what the in-page Finance left in the Atmos page (legacyStorage in
- * extension.json); views wait for it.
+ * Before any frame reads settings, the engine prepares them once: from the
+ * earlier layout (all namespaces in one `namespaces` key, Finance 1.0.2 and
+ * older), or, the first time Finance runs in frames, from what the in-page
+ * Finance left in the Atmos page (legacyStorage in extension.json). Views
+ * wait for it.
  */
 
 import { atmos, isEngine, role, SELF } from './frame.js';
@@ -21,6 +26,21 @@ import { atmos, isEngine, role, SELF } from './frame.js';
 const LEGACY_NAMESPACES = ['portfolio-tracker', 'markets', 'watchlist'];
 const LARGE_PREFIX = 'finance:state:';
 const ASSET_DB = 'finance-assets';
+
+/** state.settingsLayout once settings are kept a field per key. */
+const LAYOUT = 2;
+const FIELD_PREFIX = 'ns:';
+const VERSION_PREFIX = 'nsv:';
+const fieldKey = (id, field) => `${FIELD_PREFIX}${id}:${field}`;
+const versionKey = id => `${VERSION_PREFIX}${id}`;
+/** The namespace a settings key belongs to, or null for Finance's other state (pendingAction, ...). */
+function namespaceOf(key) {
+  if (key.startsWith(VERSION_PREFIX)) return key.slice(VERSION_PREFIX.length);
+  if (!key.startsWith(FIELD_PREFIX)) return null;
+  const rest = key.slice(FIELD_PREFIX.length);
+  const colon = rest.indexOf(':');
+  return colon === -1 ? null : rest.slice(0, colon);
+}
 
 // ── Assets (IndexedDB) ───────────────────────────────────────────────────────
 
@@ -67,9 +87,10 @@ export async function loadAsset(key, fallback = null) {
   }
 }
 
-// ── One-time copy from the Atmos page ────────────────────────────────────────
+// ── Preparing settings (engine, once) ────────────────────────────────────────
 
-async function copyFromPage(saved) {
+/** One-time copy from the Atmos page: { id: { data } } for each namespace it had. */
+async function copyFromPage() {
   const namespaces = {};
   for (const id of LEGACY_NAMESPACES) {
     const data = await atmos.legacy.readState(id).catch(() => null);
@@ -102,19 +123,52 @@ async function copyFromPage(saved) {
   for (const [key, value] of Object.entries(chartKeys || {})) {
     try { if (value !== null && localStorage.getItem(key) === null) localStorage.setItem(key, value); } catch {}
   }
-  const next = { ...saved, namespaces, copiedFromPage: new Date().toISOString() };
-  await atmos.state.update({ namespaces, copiedFromPage: next.copiedFromPage });
-  return next;
+  return namespaces;
+}
+
+/** { id: { version?, data } } as one state patch, a key per field. */
+function fieldsOf(namespaces) {
+  const patch = {};
+  for (const [id, stored] of Object.entries(namespaces || {})) {
+    if (Number.isFinite(stored?.version)) patch[versionKey(id)] = stored.version;
+    if (!stored?.data || typeof stored.data !== 'object') continue;
+    for (const [field, value] of Object.entries(stored.data)) patch[fieldKey(id, field)] = value;
+  }
+  return patch;
+}
+
+/**
+ * Settings as this module reads them. If the engine couldn't write the new
+ * layout, the earlier one is read in its place; fields saved since win.
+ */
+function readable(state) {
+  return state.settingsLayout === LAYOUT || !state.namespaces ? state : { ...fieldsOf(state.namespaces), ...state };
+}
+
+async function prepareSettings(saved) {
+  const patch = { settingsLayout: LAYOUT };
+  if (saved.namespaces) {
+    // Finance 1.0.2's layout. The old key stays, unread, so going back to an
+    // earlier Finance finds its settings rather than copying the page again.
+    Object.assign(patch, fieldsOf(saved.namespaces));
+  } else {
+    Object.assign(patch, fieldsOf(await copyFromPage()));
+    patch.copiedFromPage = new Date().toISOString();
+  }
+  // If Atmos refuses it, carry on with it here: views read the old layout
+  // the same way (below), and each save writes the fields it changes.
+  await atmos.state.update(patch).catch(error => console.error('[finance] could not prepare settings:', error.message));
+  return { ...saved, ...patch };
 }
 
 let _saved = await atmos.state.get().catch(() => ({})) || {};
-if (!_saved.namespaces) {
+if (_saved.settingsLayout !== LAYOUT) {
   if (isEngine()) {
-    _saved = await copyFromPage(_saved);
+    _saved = await prepareSettings(_saved);
   } else {
-    // The engine copies the page's data once; wait for it.
+    // The engine prepares settings once; wait for it.
     await atmos.call(SELF, 'ready').catch(error => console.warn(`[finance:${role}] engine not ready:`, error.message));
-    _saved = await atmos.state.get().catch(() => ({})) || {};
+    _saved = readable(await atmos.state.get().catch(() => ({})) || {});
   }
 }
 
@@ -123,8 +177,8 @@ if (!_saved.namespaces) {
 const _clone = value => {
   try { return structuredClone(value); } catch { return JSON.parse(JSON.stringify(value)); }
 };
+const _json = value => JSON.stringify(value);
 const _defs = new Map(); // id -> { state, defaults, version, serialize, hydrate, migrate, large }
-let _lastJson = JSON.stringify(_saved.namespaces || {});
 
 function _readLarge(id, field) {
   try {
@@ -133,16 +187,26 @@ function _readLarge(id, field) {
   } catch { return undefined; }
 }
 
+/** The namespace's saved fields as one object, or undefined if nothing is saved. */
+function _storedData(id) {
+  const prefix = `${FIELD_PREFIX}${id}:`;
+  let data;
+  for (const [key, value] of Object.entries(_saved)) {
+    if (key.startsWith(prefix)) (data ??= {})[key.slice(prefix.length)] = _clone(value);
+  }
+  return data;
+}
+
 function _hydrate(id, def) {
-  const stored = _saved.namespaces?.[id];
-  let data = stored?.data === undefined ? undefined : _clone(stored.data);
+  let data = _storedData(id);
   if (data && typeof data === 'object') {
     for (const field of def.large) {
       const value = _readLarge(id, field);
       if (value !== undefined) data[field] = value;
     }
   }
-  const fromVersion = Number.isFinite(stored?.version) ? stored.version : def.version;
+  const stored = _saved[versionKey(id)];
+  const fromVersion = Number.isFinite(stored) ? stored : def.version;
   if (data !== undefined && fromVersion !== def.version && typeof def.migrate === 'function') {
     data = def.migrate(data, fromVersion, def.version);
   }
@@ -177,31 +241,48 @@ export function onLocalStateChange(fn) {
   return () => _localListeners.delete(fn);
 }
 
+// Fields this frame has sent that Atmos hasn't confirmed yet: key -> { seq, value }.
+// Another frame's change can arrive in between, carrying the state from just
+// before ours was merged; these are laid over it so ours isn't lost here.
+const _unconfirmed = new Map();
+let _writeSeq = 0;
+
+function _write(patch) {
+  const seq = ++_writeSeq;
+  for (const [key, value] of Object.entries(patch)) _unconfirmed.set(key, { seq, value });
+  _saved = { ..._saved, ...patch };
+  for (const fn of [..._localListeners]) { try { fn(); } catch (error) { console.error('[finance] settings listener failed:', error); } }
+  atmos.state.update(patch)
+    .catch(error => console.error('[finance] could not save settings:', error.message))
+    .finally(() => {
+      for (const key of Object.keys(patch)) if (_unconfirmed.get(key)?.seq === seq) _unconfirmed.delete(key);
+    });
+}
+
 let _saveQueued = false;
 function _flush() {
   _saveQueued = false;
-  const namespaces = { ..._saved.namespaces };
+  const patch = {};
   for (const [id, def] of _defs) {
     let data;
     try { data = _clone(typeof def.serialize === 'function' ? def.serialize(def.state) : def.state); }
     catch (error) { console.error(`[finance] state namespace '${id}' failed to serialize:`, error); continue; }
     for (const field of def.large) {
       const key = `${LARGE_PREFIX}${id}:${field}`;
-      const json = JSON.stringify(data[field] ?? null);
+      const json = _json(data[field] ?? null);
       try { if (localStorage.getItem(key) !== json) localStorage.setItem(key, json); } catch (error) { console.error(`[finance] could not save ${field}:`, error); }
       delete data[field];
     }
-    namespaces[id] = { version: def.version, data };
+    if (_saved[versionKey(id)] !== def.version) patch[versionKey(id)] = def.version;
+    for (const [field, value] of Object.entries(data)) {
+      const key = fieldKey(id, field);
+      if (_json(value) !== _json(_saved[key])) patch[key] = value;
+    }
   }
-  const json = JSON.stringify(namespaces);
-  if (json === _lastJson) return;
-  _lastJson = json;
-  _saved = { ..._saved, namespaces };
-  for (const fn of [..._localListeners]) { try { fn(); } catch (error) { console.error('[finance] settings listener failed:', error); } }
-  atmos.state.update({ namespaces }).catch(error => console.error('[finance] could not save settings:', error.message));
+  if (Object.keys(patch).length) _write(patch);
 }
 
-/** Save every namespace (coalesced; unchanged settings aren't written). */
+/** Save what changed in any namespace (coalesced; only changed fields are written). */
 export function save() {
   if (_saveQueued) return;
   _saveQueued = true;
@@ -225,12 +306,18 @@ function _notifyExternal() {
 }
 
 atmos.state.onChange(next => {
-  if (!next?.namespaces) return;
-  const json = JSON.stringify(next.namespaces);
-  _saved = next;
-  if (json === _lastJson) return;
-  _lastJson = json;
-  for (const [id, def] of _defs) _hydrate(id, def);
+  if (!next || typeof next !== 'object') return;
+  const merged = { ...readable(next) };
+  for (const [key, { value }] of _unconfirmed) merged[key] = value;
+  const before = _saved;
+  _saved = merged;
+  const changed = new Set();
+  for (const key of new Set([...Object.keys(before), ...Object.keys(merged)])) {
+    const id = namespaceOf(key);
+    if (id && _defs.has(id) && !changed.has(id) && _json(before[key]) !== _json(merged[key])) changed.add(id);
+  }
+  if (!changed.size) return;
+  for (const id of changed) _hydrate(id, _defs.get(id));
   _notifyExternal();
 });
 

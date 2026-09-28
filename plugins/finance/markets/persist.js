@@ -1,4 +1,4 @@
-import { onStateLoaded, registerStateNamespace, save } from '../src/host/persist.js';
+import { registerStateNamespace, save } from '../src/host/persist.js';
 
 const DEFAULT_TICKERS = ['BTC', 'ETH'];
 const objectCopy = value => value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
@@ -32,47 +32,6 @@ function normalizeChartSettings(value = {}) {
   };
 }
 
-function readLegacyWatchlistState() {
-  try {
-    const raw = localStorage.getItem('samsara_v4') || localStorage.getItem('samsara_v3');
-    if (!raw) return null;
-    const saved = JSON.parse(raw);
-    if (saved?.extensionState?.watchlist) return null;
-    if (!Array.isArray(saved?.tickers) && !saved?.tickerSource && !saved?.cgIdCache) return null;
-    const tickers = Array.isArray(saved.tickers) && saved.tickers.length
-      ? saved.tickers.map(value => String(value).trim().toUpperCase()).filter(Boolean)
-      : [...DEFAULT_TICKERS];
-    return {
-      tickers,
-      activeT: tickers.includes(saved.activeT) ? saved.activeT : tickers[0] || null,
-      tickerSource: { ...objectCopy(saved.tickerSource), XMR: 'coingecko' },
-      cgIdCache: objectCopy(saved.cgIdCache),
-    };
-  } catch (error) {
-    console.warn('[markets] unable to read legacy watchlist state:', error);
-    return null;
-  }
-}
-
-function readLegacyMarketState() {
-  try {
-    const raw = localStorage.getItem('samsara_v4') || localStorage.getItem('samsara_v3');
-    if (!raw) return null;
-    const extensionState = JSON.parse(raw)?.extensionState;
-    if (extensionState?.markets || !extensionState?.['market-query']) return null;
-    const saved = extensionState['market-query'];
-    return {
-      lastQuery: String(saved.lastQuery || 'BTCUSDT overview'),
-      exchanges: Array.isArray(saved.exchanges) ? [...saved.exchanges] : ['binance', 'bybit', 'kraken'],
-      recentQueries: Array.isArray(saved.recentQueries) ? [...saved.recentQueries] : [],
-    };
-  } catch (error) {
-    console.warn('[markets] unable to read legacy market state:', error);
-    return null;
-  }
-}
-
-const legacyMarketState = readLegacyMarketState();
 export const marketQueryState = registerStateNamespace('markets', {
   version: 2,
   defaults: {
@@ -80,7 +39,6 @@ export const marketQueryState = registerStateNamespace('markets', {
     exchanges: ['binance', 'bybit', 'kraken'],
     recentQueries: [],
     chart: { ...CHART_DEFAULTS },
-    ...(legacyMarketState || {}),
   },
   migrate(data, fromVersion) {
     if (fromVersion < 2) data.chart ??= { ...CHART_DEFAULTS };
@@ -94,10 +52,9 @@ export const marketQueryState = registerStateNamespace('markets', {
   },
 });
 
-const legacyWatchlistState = readLegacyWatchlistState();
 export const watchlistState = registerStateNamespace('watchlist', {
   version: 1,
-  defaults: legacyWatchlistState || {
+  defaults: {
     tickers: [...DEFAULT_TICKERS], activeT: 'BTC', tickerSource: { XMR: 'coingecko' }, cgIdCache: {},
   },
   hydrate(namespace, saved) {
@@ -112,7 +69,6 @@ export const watchlistState = registerStateNamespace('watchlist', {
   },
 });
 watchlistState.tickerSource.XMR = 'coingecko';
-if (legacyMarketState || legacyWatchlistState) onStateLoaded(save);
 
 const queryListeners = new Set();
 /** Called with the new query whenever the main chart's query changes. */

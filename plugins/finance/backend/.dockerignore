@@ -1,3 +1,5 @@
 *
 !server.py
 !collectors.py
+!connectors
+**/__pycache__

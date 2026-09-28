@@ -106,7 +106,7 @@ test('framed sidebar controls use body UI or Core header menus, never legacy hea
   assert.match(markets, /id:\s*'finance\.spot\.sort'[\s\S]*?type:\s*'select'/);
   assert.match(markets, /id:\s*'finance\.futures\.sort'[\s\S]*?type:\s*'select'/);
   assert.match(markets, /body\.innerHTML = '[^']*spot-total-balance[^']*tc-sidebar-composition/);
-  assert.match(markets, /body\.innerHTML = '[^']*futures-perp-balance[^']*futures-earn-balance[^']*futures-direction-bar/);
+  assert.match(markets, /body\.innerHTML = '[^']*futures-balances[^']*futures-direction-bar/);
   assert.match(markets, /context\.listen\(body, 'contextmenu',[\s\S]*?openSpotVisibilityMenu/);
   assert.match(markets, /atmos\.contextMenu\.open[\s\S]*?type: 'toggle'[\s\S]*?label: 'Included in portfolio'/);
   assert.match(markets, /body\.innerHTML = '[^']*markets-watchlist-input[^']*watchlist-rows/);

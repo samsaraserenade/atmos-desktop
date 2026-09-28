@@ -38,9 +38,22 @@ exchange rates, and publishes what it has (`src/host/mirror.js`). The panel
 and widgets run Finance's ordinary modules as views of it, so opening more
 widgets never multiplies requests.
 
+**The history.** The engine loads the whole VPS history at the start, when
+what the portfolio includes changes (a source or a holding hidden or
+shown) and every six hours; other settings never reload it. Each minute in
+between it reads just the newest samples (from ten minutes before the last
+one it has). Either way it sends the views only what changed
+(`src/history-change.js`), and they append new samples to their charts
+rather than redrawing them. A frame that has just opened gets the whole
+history in the engine's snapshot.
+
 **Settings** keep their three state namespaces (`portfolio-tracker`,
-`markets`, `watchlist`) with the same ids and versions, saved together in
-Finance's Atmos state so every frame sees every change. An imported balance
+`markets`, `watchlist`) with the same ids and versions, in Finance's Atmos
+state so every frame sees every change. Each field is its own key there
+(`ns:<namespace>:<field>`, the version at `nsv:<namespace>`), and a frame
+writes only the fields it changed, so two widgets saving at once keep both
+changes. Finance 1.0.3 moved the earlier layout (all of it in one
+`namespaces` key, left in place for an earlier Finance) on its first start. An imported balance
 font is kept in the frames' localStorage instead (too big for state). Chart
 and per-source history are in the frames' IndexedDB (`finance-assets`), with
 the same `portfolio-tracker:`-prefixed keys as before.
