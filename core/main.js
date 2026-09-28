@@ -126,7 +126,12 @@ function _appPageCsp() {
   const crypto = require('crypto');
   const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
   const importMap = html.match(/<script type="importmap">([\s\S]*?)<\/script>/);
-  const importMapHash = importMap ? `'sha256-${crypto.createHash('sha256').update(importMap[1]).digest('base64')}'` : '';
+  // The browser hashes the script's text after the HTML parser has turned
+  // CR and CRLF into LF, so the file's own line endings must not reach the
+  // hash: a checkout with Windows endings would otherwise block the import
+  // map, and with it every system service (0.14.0's installer did).
+  const importMapText = importMap ? importMap[1].replace(/\r\n?/g, '\n') : '';
+  const importMapHash = importMap ? `'sha256-${crypto.createHash('sha256').update(importMapText).digest('base64')}'` : '';
   const hosts = new Set();
   for (const entry of _catalog.list('services').filter(item => item.tier === 'system')) {
     for (const host of entry.manifest?.permissions?.network || []) {
