@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('atmosCore', {
     takeDataCleanup: ()                    => ipcRenderer.invoke('extensions:take-data-cleanup'),
     setup:         ()                      => ipcRenderer.invoke('extensions:setup'),
     finishSetup:   chosen                  => ipcRenderer.invoke('extensions:finish-setup', chosen),
+    openAtmosDownload: ()                  => ipcRenderer.invoke('extensions:open-atmos-download'),
     onUpgradeDownloaded: callback => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('extensions:upgrade-downloaded', listener);

@@ -123,6 +123,9 @@ designed so that you can safely install things you did not write.
 - **Signed packages.** Official extensions are signed packages. Atmos
   checks every file against the signature when it starts and refuses to
   load one that has been changed.
+- **A locked-down core.** The Atmos window itself runs only Atmos's own
+  code: its Content-Security-Policy refuses injected scripts, it is
+  sandboxed, and developer tools are off in installed copies.
 
 ---
 
@@ -232,6 +235,11 @@ that use it; some also have main-process code.
 Download `Atmos Setup <version>.exe` from the
 [Releases](../../releases) page and run it. Atmos keeps your settings in
 `%APPDATA%\atmos`; uninstalling leaves them.
+
+When a newer Atmos is out, Atmos says so on the Extensions button at the
+bottom of the sidebar and in Settings → Extensions, with a link to this
+page: run the new installer over the old one, and your settings and
+extensions stay.
 
 ## Development
 

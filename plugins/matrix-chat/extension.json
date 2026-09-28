@@ -5,6 +5,7 @@
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
+  "exports": {},
   "displayName": "Matrix Chat",
   "description": "Chat on Matrix, with encryption, rooms in the sidebar and notifications.",
   "requires": {

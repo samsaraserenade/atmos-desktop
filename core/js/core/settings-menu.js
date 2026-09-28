@@ -520,8 +520,7 @@ function _renderHome() {
     <div class="sm-home">
       <div class="sm-home-info">
         <div class="sm-home-title">
-          <img src="${wordmarkSrc}" alt="${APP_NAME}"
-               onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+          <img src="${wordmarkSrc}" alt="${APP_NAME}">
           <div class="sm-home-title-fallback">${APP_NAME}</div>
         </div>
         <div class="sm-home-version">${_appVersion ? `Version ${_appVersion}` : 'Version —'}</div>
@@ -536,6 +535,12 @@ function _renderHome() {
   // below) -- keep repainting it in place via the same pub/sub so a theme
   // change elsewhere doesn't require leaving and re-entering this page.
   const wordmarkImg = _listEl.querySelector('.sm-home-title img');
+  // Without the image, the text fallback. (A listener, not an onerror
+  // attribute: the page's Content-Security-Policy refuses inline handlers.)
+  wordmarkImg?.addEventListener('error', () => {
+    wordmarkImg.style.display = 'none';
+    if (wordmarkImg.nextElementSibling) wordmarkImg.nextElementSibling.style.display = 'block';
+  });
   _pageCleanups.push(onAppearanceChange(() => {
     if (wordmarkImg) wordmarkImg.src = getAppTheme() === 'atmos-light' ? 'assets/blacktitle.png' : 'assets/title.png';
   }));
@@ -1050,7 +1055,7 @@ let _managerSubscribed = false;
 
 function _managerAttentionCount() {
   const summary = _manager?.summary;
-  return summary ? (summary.updates || 0) + (summary.pending || 0) + (summary.problems?.length || 0) : 0;
+  return summary ? (summary.atmosUpdate ? 1 : 0) + (summary.updates || 0) + (summary.pending || 0) + (summary.problems?.length || 0) : 0;
 }
 
 function _setManager(payload) {
@@ -1236,6 +1241,20 @@ function _renderExtensionManagerPage() {
     </div>
     ${_managerErrorHtml('check')}`);
 
+  // A newer Atmos: the version from a source's signed index, the download
+  // page from Core's own settings (the main process opens it).
+  if (summary.atmosUpdate) {
+    const { version, current, download } = summary.atmosUpdate;
+    sections.push(`<div class="sm-manager-heading">Atmos</div><div class="sm-card-group">`);
+    sections.push(_managerRow({
+      key: 'atmos',
+      name: `Atmos ${_escape(version)} is available`,
+      detail: `You have ${_escape(current || 'an older version')}. Download the new installer and run it; your settings and extensions stay.`,
+      actions: download ? _button('download-atmos', 'Download', { key: 'atmos', primary: true, busyLabel: 'Opening…' }) : '',
+    }));
+    sections.push('</div>');
+  }
+
   if (summary.problems.length) {
     sections.push(`<div class="sm-manager-heading">Needs attention</div>`);
     for (const problem of summary.problems) {
@@ -1367,6 +1386,7 @@ function _renderExtensionManagerPage() {
     const [kind, id] = (key || '').split(':');
     if (action === 'restart') return window.atmosCore?.restartAtmos?.();
     if (action === 'check') return _managerRequest('check', api => api.checkForUpdates());
+    if (action === 'download-atmos') return _managerRequest('atmos', api => api.openAtmosDownload());
     if (action === 'install') return _managerRequest(key, api => api.install(kind, id));
     if (action === 'install-optional') {
       const target = button.closest('[data-target]')?.dataset.target || '';

@@ -239,32 +239,33 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
 
     // The background layer's Audio service: this extension's own channel
     // ("invokes": ["service:audio"]). Every frame of the extension hears it.
-    'audio.load': (source, options) => {
+    // deps.audio.channel() waits for the Audio service if it hasn't started yet.
+    'audio.load': async (source, options) => {
       requireTarget(AUDIO, 'play audio through');
       const { id = null, position = 0, play = false } = options && typeof options === 'object' ? options : {};
-      return deps.audio.channel().load(audioSource(source), {
+      return (await deps.audio.channel()).load(audioSource(source), {
         id: id == null ? null : String(id).slice(0, 500),
         position: Math.max(0, Number(position) || 0),
         play: play === true,
       });
     },
-    'audio.play': () => { requireTarget(AUDIO, 'play audio through'); return deps.audio.channel().play(); },
-    'audio.pause': () => { requireTarget(AUDIO, 'play audio through'); deps.audio.channel().pause(); },
-    'audio.seek': seconds => {
+    'audio.play': async () => { requireTarget(AUDIO, 'play audio through'); return (await deps.audio.channel()).play(); },
+    'audio.pause': async () => { requireTarget(AUDIO, 'play audio through'); (await deps.audio.channel()).pause(); },
+    'audio.seek': async seconds => {
       requireTarget(AUDIO, 'play audio through');
       if (!Number.isFinite(seconds)) throw new BridgeError('audio.seek(seconds)', 'TypeError');
-      deps.audio.channel().seek(seconds);
+      (await deps.audio.channel()).seek(seconds);
     },
-    'audio.volume': value => {
+    'audio.volume': async value => {
       requireTarget(AUDIO, 'play audio through');
       if (!Number.isFinite(value)) throw new BridgeError('audio.setVolume(0–1)', 'TypeError');
-      deps.audio.channel().setVolume(value);
+      (await deps.audio.channel()).setVolume(value);
     },
-    'audio.stop': () => { requireTarget(AUDIO, 'play audio through'); deps.audio.channel().stop(); },
-    'audio.state': () => { requireTarget(AUDIO, 'play audio through'); return deps.audio.channel().state(); },
-    'audio.subscribe': () => {
+    'audio.stop': async () => { requireTarget(AUDIO, 'play audio through'); (await deps.audio.channel()).stop(); },
+    'audio.state': async () => { requireTarget(AUDIO, 'play audio through'); return (await deps.audio.channel()).state(); },
+    'audio.subscribe': async () => {
       requireTarget(AUDIO, 'play audio through');
-      deps.audio.watch();
+      await deps.audio.watch();
     },
 
     'contextMenu.open': (x, y, items) => {

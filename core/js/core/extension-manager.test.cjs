@@ -51,11 +51,11 @@ function world(t) {
   }
 
   /** One "start of Atmos": apply pending changes, then catalog + trust + manager. */
-  function start({ seed = false } = {}) {
+  function start({ seed = false, appVersion = null } = {}) {
     let entries = [];
     const installedRoot = kind => root('installed', kind);
     const manager = createExtensionManager({
-      userData, installedRoot, trustedKeys, installed: () => entries, warn() {},
+      userData, installedRoot, trustedKeys, installed: () => entries, warn() {}, appVersion,
       ...(seed ? { seedSources: [{ location: source }] } : { extraSources: [source] }),
     });
     const applied = manager.applyPending();
@@ -80,7 +80,14 @@ function world(t) {
     fs.writeFileSync(indexFile, JSON.stringify(signIndex({ ...body, generated }, official.privateKey)));
   }
 
-  return { dir, source, userData, publish, bundle, start, root, resign, stranger: crypto.generateKeyPairSync('ed25519') };
+  /** Re-sign the source's index with body changes (a "core" entry, say). */
+  function resignWith(changes) {
+    const indexFile = path.join(source, 'index.json');
+    const { keyId: _k, signature: _s, ...body } = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+    fs.writeFileSync(indexFile, JSON.stringify(signIndex({ ...body, ...changes }, official.privateKey)));
+  }
+
+  return { dir, source, userData, publish, bundle, start, root, resign, resignWith, stranger: crypto.generateKeyPairSync('ed25519') };
 }
 
 test('install stages a verified package and applies it at the next start, dependencies first', async t => {
@@ -421,4 +428,37 @@ test('a source can\'t be rolled back to an index older than one already seen', a
   assert.equal((await s.manager.checkForUpdates()).sources[0].ok, true);
   w.resign('2026-10-01T12:00:00.000Z');
   assert.equal((await s.manager.checkForUpdates()).sources[0].ok, false);
+});
+
+test('a signed index naming a newer Atmos offers it; an older, equal or malformed one does not', async t => {
+  const w = world(t);
+  w.publish('plugin', 'sounds', '1.0.0');
+
+  // No "core" entry (an index from before this was added): nothing offered.
+  let status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
+  assert.deepEqual(status.core, { current: '0.12.0', available: null });
+
+  w.resignWith({ core: { version: '0.13.0' } });
+  status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
+  assert.deepEqual(status.core, { current: '0.12.0', available: '0.13.0' });
+  assert.equal(status.packages.length, 1, 'the packages are read as before');
+
+  for (const [version, app] of [['0.12.0', '0.12.0'], ['0.11.0', '0.12.0'], ['not a version', '0.12.0'], ['0.13.0', null]]) {
+    w.resignWith({ core: { version } });
+    status = await w.start({ appVersion: app }).manager.checkForUpdates();
+    assert.equal(status.core.available, null, `index ${version}, Atmos ${app}`);
+  }
+});
+
+test('"core" is covered by the index signature', async t => {
+  const w = world(t);
+  w.publish('plugin', 'sounds', '1.0.0');
+  w.resignWith({ core: { version: '0.13.0' } });
+  const indexFile = path.join(w.source, 'index.json');
+  const index = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+  index.core.version = '9.9.9';
+  fs.writeFileSync(indexFile, JSON.stringify(index));
+  const status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
+  assert.equal(status.core.available, null);
+  assert.equal(status.sources[0].ok, false);
 });

@@ -73,7 +73,33 @@ const frameLoaded = (page, id) => page.frames().some(f => f.url().includes(`ext=
   r.run1BootFrames = { hello: frameLoaded(s.page, 'hello-third'), sneaky: frameLoaded(s.page, 'sneaky-main') };
   r.sneakyMainRan = fs.existsSync(marker);
   // An extension waiting for approval has none of its files served, even to the page.
-  r.pendingFiles = await s.page.evaluate(() => fetch('atmos-ext://plugin-hello-third/plugins/hello-third/boot.js').then(res => res.status, () => 'error'));
+  // Asked of Atmos's protocol handler directly: the page's own policy
+  // refuses to fetch atmos-ext:// at all now.
+  r.pendingFiles = await s.app.evaluate(({ session }) => session.defaultSession.fetch('atmos-ext://plugin-hello-third/plugins/hello-third/boot.js').then(res => res.status, () => 'error'));
+  // The Atmos page's own lock-down: its Content-Security-Policy runs no
+  // injected inline script and no eval, the window is sandboxed, and
+  // settings changes come only from the page (Core's main process checks).
+  const errorsBeforeLockdown = s.errors.length;
+  r.pageLockdown = {
+    inlineScript: await s.page.evaluate(async () => {
+      const el = document.createElement('script');
+      el.textContent = 'window.__injected = true;';
+      document.head.appendChild(el);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return window.__injected === true ? 'ran' : 'blocked';
+    }),
+    // A string timer is compiled by the page, like eval (an eval() typed
+    // here would run through DevTools, which page policies don't cover).
+    stringTimer: await s.page.evaluate(async () => {
+      try { setTimeout('window.__timerRan = true', 0); } catch (e) { return e.name; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return window.__timerRan === true ? 'ran' : 'blocked';
+    }),
+    sandboxed: await s.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith('atmos-app://local/index.html'))?.webContents.getLastWebPreferences().sandbox === true),
+  };
+  // The two refusals just caused are the point of the check, not errors.
+  s.errors.splice(errorsBeforeLockdown, s.errors.length - errorsBeforeLockdown,
+    ...s.errors.slice(errorsBeforeLockdown).filter(message => !/Content Security Policy/.test(message)));
   // Hardening.
   r.windowOpen = await s.page.evaluate(() => String(window.open('https://example.com/')));
   r.windowCount = s.app.windows().length;

@@ -319,3 +319,25 @@ test('menus: a frame closes only its own open menu', async t => {
   assert.equal((await request('contextMenu.close')).error, undefined);
   assert.equal(closed, 1);
 });
+
+test('audio: a call made before the Audio service has started waits for it', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  // Core creates frames before its boot hooks start Audio: channel() then
+  // resolves a moment later (extension-frame-host.js _whenCapability).
+  let start;
+  const started = new Promise(resolve => { start = resolve; });
+  const calls = [];
+  const channel = { play: () => { calls.push('play'); return true; }, state: () => ({ playing: true }) };
+  const { request } = harness(createExtensionBridge, {
+    extension: { permissions: { invokes: ['service:audio'] } },
+    deps: { audio: { channel: () => started.then(() => channel), watch: async () => { await started; calls.push('watch'); } } },
+  });
+  const play = request('audio.play');
+  const subscribe = request('audio.subscribe');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(calls, [], 'nothing reaches the channel before Audio starts');
+  start();
+  assert.equal((await play).result, true);
+  assert.equal((await subscribe).error, undefined);
+  assert.deepEqual(calls.sort(), ['play', 'watch']);
+});

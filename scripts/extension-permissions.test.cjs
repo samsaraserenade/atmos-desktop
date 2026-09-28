@@ -28,6 +28,25 @@ test('bundled extensions have a tier and declare their permissions', () => {
   }
 });
 
+// A manifest without "exports" shares everything with official extensions
+// (so packages from before 0.12 kept working). A bundled extension that has
+// anything to share (main-process code or a boot frame) says what,
+// even if it's nothing ("exports": {}).
+test('bundled extensions with main-process code or a boot frame declare "exports"', () => {
+  const problems = [];
+  for (const relative of extensions) {
+    if (relative.startsWith(path.join('core', 'system'))) continue;
+    const dir = path.join(repo, relative);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'extension.json'), 'utf8'));
+    const hasBoot = fs.existsSync(path.join(dir, 'boot.js')) || !!manifest.contributes?.boot;
+    const hasMain = fs.existsSync(path.join(dir, 'main.cjs'));
+    if ((hasBoot || hasMain) && (manifest.exports === undefined || manifest.exports === null)) {
+      problems.push(`${relative}: has ${hasMain ? 'main.cjs' : 'a boot frame'} but no "exports" (add "exports": {} to share nothing)`);
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
 // Every bundled extension is a package: a version, a publisher, and every
 // service it calls listed as a dependency whose range the repo's copy meets.
 // A released extension's required dependencies are released too.

@@ -474,6 +474,7 @@ export function describeExtensionAttention(summary) {
       ? `${summary.problems[0].name} didn't load`
       : `${summary.problems.length} extensions didn't load`);
   }
+  if (summary?.atmosUpdate) lines.push(`Atmos ${summary.atmosUpdate.version} is available`);
   if (summary?.updates) lines.push(`${summary.updates} update${summary.updates === 1 ? '' : 's'} available`);
   if (summary?.pending) lines.push('Restart to apply changes');
   return lines;

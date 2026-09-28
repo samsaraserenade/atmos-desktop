@@ -11,7 +11,9 @@
  * core/trusted-keys.json, and zip it to <out>/<id>-<version>.atmos.
  * Then write <out>/index.json listing every .atmos in <out>, signed with the
  * same key: <out> is a source Atmos can install from (a folder, or the same
- * files on a web server).
+ * files on a web server). The index also names the Atmos version of the
+ * tree it packed ("core": { "version" }, from its package.json), so an
+ * older Atmos reading it says "Atmos X is available".
  *
  *   ids      plugin or service ids; default: the released ones in release.json.
  *            --all packs every extension except system ones (they are part of Core).
@@ -188,7 +190,7 @@ async function main() {
     for (const { out } of written) fs.rmSync(out, { force: true });
     fail(`${problems.join('; ')}. Existing installs only update to a higher version: bump "version" in extension.json (or --same-version). Nothing was written.`);
   }
-  const index = buildIndex(args.out, privateKey);
+  const index = buildIndex(args.out, privateKey, 'Atmos', { core: coreOf(args.from) });
   console.log(`  ${path.relative(process.cwd(), path.join(args.out, 'index.json'))}  ${index.packages.length} packages, signed`);
   if (untrusted) console.log('pack: packed with --untrusted: Atmos will refuse these packages unless it trusts the key (--trusted-keys, unpackaged).');
 }
@@ -250,7 +252,22 @@ async function compareWithPrevious(args, written) {
  * package without downloading it (kind, id, version, compatibility,
  * dependencies) and to check it once downloaded (size, SHA-256).
  */
-function buildIndex(dir, privateKey, name = 'Atmos') {
+/** { version } of the Atmos in `root` (its package.json), or null. */
+function coreOf(root) {
+  try {
+    const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version || '') ? { version } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write <dir>/index.json for the .atmos files in <dir>, signed. `core`
+ * ({ version }) is the newest Atmos, for "Atmos X is available"; Atmos 0.12
+ * and older ignore it.
+ */
+function buildIndex(dir, privateKey, name = 'Atmos', { core = null } = {}) {
   const packages = [];
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith(PACKAGE_EXTENSION)).sort()) {
     const buffer = fs.readFileSync(path.join(dir, file));
@@ -274,11 +291,11 @@ function buildIndex(dir, privateKey, name = 'Atmos') {
     for (const key of Object.keys(item)) if (item[key] === null || item[key] === undefined) delete item[key];
     packages.push(item);
   }
-  const index = signIndex({ format: 1, name, generated: new Date().toISOString(), packages }, privateKey);
+  const index = signIndex({ format: 1, name, generated: new Date().toISOString(), ...(core ? { core } : {}), packages }, privateKey);
   fs.writeFileSync(path.join(dir, 'index.json'), `${JSON.stringify(index, null, 1)}\n`);
   return index;
 }
 
-module.exports = { globToRegExp, bundleFilters, copyBundled, buildIndex };
+module.exports = { globToRegExp, bundleFilters, copyBundled, buildIndex, coreOf };
 
 if (require.main === module) main().catch(error => fail(error.message));

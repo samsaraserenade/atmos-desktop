@@ -5,6 +5,7 @@
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
+  "exports": {},
   "displayName": "Finance",
   "description": "Your portfolio from your own portfolio server, with a watchlist and market charts.",
   "requires": {

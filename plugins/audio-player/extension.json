@@ -5,6 +5,7 @@
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
+  "exports": {},
   "displayName": "Audio Player",
   "description": "A music player for your own library, in a drawer at the bottom of the screen.",
   "requires": {

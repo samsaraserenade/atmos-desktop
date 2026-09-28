@@ -105,10 +105,12 @@ function readIndexEntry(item) {
  *        source on GitHub). None: no first-run setup (running from source).
  * @param {(url: string) => Promise<Buffer>} [options.fetchUrl]  https downloads
  * @param {() => Array} [options.installed]        catalog entries of both kinds, with trust
+ * @param {string} [options.appVersion]  this Atmos's version: a signed index's
+ *        "core" entry newer than it is offered as "Atmos X is available"
  */
 function createExtensionManager({
   userData, installedRoot, trustedKeys, builtInSourceFiles = [], extraSources = [], seedSources = [], setupSources = seedSources,
-  fetchUrl = null, installed = () => [], warn = message => console.warn(message),
+  fetchUrl = null, installed = () => [], warn = message => console.warn(message), appVersion = null,
 }) {
   const files = {
     seen: path.join(userData, 'extension-index-seen.json'),
@@ -122,7 +124,7 @@ function createExtensionManager({
     staging: path.join(userData, 'extension-staging'),
     previous: path.join(userData, 'extension-previous'),
   };
-  let lastCheck = { checkedAt: null, sources: [], packages: [] };
+  let lastCheck = { checkedAt: null, sources: [], packages: [], core: null };
 
   // ── Sources ────────────────────────────────────────────────────────────
 
@@ -201,7 +203,11 @@ function createExtensionManager({
     checkFreshness(source.location, index.generated);
     const packages = index.packages.map(readIndexEntry).filter(Boolean)
       .map(item => ({ ...item, source: source.location }));
-    return { name: typeof index.name === 'string' ? index.name : null, packages };
+    // The newest Atmos, as the signed index states it ("core": { "version" }).
+    // Only the version is taken from it: where to download Atmos is Core's
+    // own setting, never a URL from a source.
+    const core = isValidVersion(index.core?.version) ? { version: index.core.version } : null;
+    return { name: typeof index.name === 'string' ? index.name : null, packages, core };
   }
 
   /**
@@ -260,16 +266,18 @@ function createExtensionManager({
   async function checkForUpdates() {
     const results = [];
     const packages = [];
+    let core = null;
     for (const source of sources()) {
       try {
         const read = await readSource(source);
         packages.push(...read.packages);
+        if (read.core && (!core || compareVersions(read.core.version, core.version) > 0)) core = read.core;
         results.push({ ...source, ok: true, name: source.name || read.name, packages: read.packages.length, error: null });
       } catch (error) {
         results.push({ ...source, ok: false, packages: 0, error: error.code === 'ENOENT' ? 'Not found' : error.message });
       }
     }
-    lastCheck = { checkedAt: new Date().toISOString(), sources: results, packages };
+    lastCheck = { checkedAt: new Date().toISOString(), sources: results, packages, core };
     return status();
   }
 
@@ -350,6 +358,13 @@ function createExtensionManager({
       optional: optionalOffers(best, present, pending),
       applied: appliedRecords(),
       updates: packages.filter(item => item.action === 'update' && !item.pending).length,
+      // "Atmos X is available": the newest version a source's signed index
+      // names, when it is newer than this one.
+      core: {
+        current: appVersion,
+        available: lastCheck.core && isValidVersion(appVersion) && compareVersions(lastCheck.core.version, appVersion) > 0
+          ? lastCheck.core.version : null,
+      },
     };
   }
 
@@ -647,7 +662,7 @@ function createExtensionManager({
   async function installFromSeed(wanted = null) {
     const packages = await seedPackages();
     const saved = lastCheck;
-    lastCheck = { checkedAt: new Date().toISOString(), sources: [], packages };
+    lastCheck = { checkedAt: new Date().toISOString(), sources: [], packages, core: null };
     const changes = [];
     try {
       const present = installedByRef();

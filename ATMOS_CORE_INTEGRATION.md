@@ -786,7 +786,9 @@ manifest shares it. That covers four things: the IPC handlers its
 - A manifest with no `"exports"` block at all shares everything with
   system and official extensions that declare it in `invokes`, and nothing
   with community ones (so that packages from before 0.12 kept working).
-  Add a block, even an empty `{}`, to keep things private.
+  Add a block, even an empty `{}`, to keep things private. Every bundled
+  extension with a `main.cjs` or a boot frame has one (`npm run
+  test:permissions` checks it).
 - Another extension reaches a shared name only if it also declares the
   owner in `permissions.invokes`.
 - Libraries' modules (`library()`) and the Wallpaper and Audio calls are
@@ -815,6 +817,13 @@ is declared.
 
 ### What is enforced
 
+- **The Atmos page** (`atmos-app://local`), which holds the preload
+  bridges and checks every SDK call, runs only Atmos's own files. Its
+  Content-Security-Policy allows no inline script (only the import map,
+  by its hash) and no `eval`; it reaches only the hosts the system
+  services declare. The window is sandboxed, DevTools (F12) open only when
+  running from source or started with `--devtools`, and the main process accepts settings changes
+  (approving, switching on and off, installing) only from the page.
 - **Main-process context** — Electron objects, IPC, capabilities and resource
   providers are handed out only as declared (section 6).
 - **Browser permissions** — each origin is granted only what its
@@ -918,6 +927,13 @@ url>` (or `ATMOS_EXTENSION_SOURCE`) adds one for the session.
   points can't bring back an old, genuinely signed index that hides
   updates. Publishing therefore always means a newer index: re-run
   `pack:extensions`, and don't mark an older release "latest" again.
+- **"Atmos X is available."** `pack:extensions` also writes the Atmos
+  version of the tree it packs into the signed index (`"core": {
+  "version" }`). An older Atmos that reads it says so in the footer and
+  at the top of this page, with a Download button. Only the version comes
+  from the index: the page Download opens is Core's own setting
+  (`"download"` in `core/extension-sources.json`). Atmos 0.12 and older
+  ignore the entry.
 - **Install / Update** downloads the package and any missing or too-old
   required dependency (never more bytes than the index gives as its size),
   checks size and hash against the index, unpacks it
@@ -1042,7 +1058,7 @@ lists what). Those calls remain for now and will be removed in a later
 version; new extensions have no use for them.
 
 **Sharing.** An extension with no `"exports"` block (every package from
-before 0.12, and some bundled ones still) shares everything with official
+before 0.12) shares everything with official
 extensions, and nothing with community ones (section 7).
 
 **Storage.**

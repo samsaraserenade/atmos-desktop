@@ -27,7 +27,7 @@ import { registerBootHook } from './boot-registry.js';
 import { onAppearanceChange, appearanceState, getAppFont } from './appearance.js';
 import { onSemanticColorChange } from './semantic-colors.js';
 import { checkExtensionCompatibility } from './capabilities.js';
-import { getCapability } from './renderer-capabilities.js';
+import { getCapability, onCapabilityChange } from './renderer-capabilities.js';
 import { createExtensionBridge } from './extension-bridge.js';
 import { armFileDrop, disarmFileDrop } from './extension-drop-overlay.js';
 import { createPanelDrawer } from './panel-drawer.js';
@@ -315,7 +315,7 @@ const _deps = {
   appFontData: _appFontData,
   wallpaper: {
     async set(file) {
-      const wallpaper = getCapability('visual.wallpaper');
+      const wallpaper = await _whenCapability('visual.wallpaper', 'Wallpaper');
       if (!wallpaper?.setWallpaper) throw new Error('the Wallpaper service is not running');
       const named = file instanceof File ? file : new File([file], 'wallpaper', { type: file.type });
       await wallpaper.setWallpaper(named);
@@ -386,13 +386,33 @@ async function _wallpaperSummary() {
   };
 }
 
+/**
+ * A system service's capability, waiting for it to start if need be. Frames
+ * are created before Core runs its boot hooks (which start Audio and
+ * Wallpaper), so a frame's first call can arrive a moment early; it waits
+ * rather than failing. Rejects after `timeout` ms with "the X service is
+ * not running".
+ */
+function _whenCapability(name, label, timeout = 10000) {
+  const now = getCapability(name);
+  if (now) return Promise.resolve(now);
+  return new Promise((resolve, reject) => {
+    let off = () => {};
+    const timer = setTimeout(() => { off(); reject(new Error(`the ${label} service is not running`)); }, timeout);
+    off = onCapabilityChange(name, value => {
+      if (!value) return;
+      clearTimeout(timer);
+      queueMicrotask(() => off());
+      resolve(value);
+    }, { immediate: false });
+  });
+}
+
 // Audio channels whose changes are already being sent to the owner's frames.
 const _audioWatched = new Set();
 
-function _audioChannel(extension) {
-  const audio = getCapability('media.audio');
-  if (!audio) throw new Error('the Audio service is not running');
-  return audio.channel(key(extension));
+async function _audioChannel(extension) {
+  return (await _whenCapability('media.audio', 'Audio')).channel(key(extension));
 }
 
 /** Every record of every store in one of the Atmos page's own databases. */
@@ -501,11 +521,16 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
     },
     audio: {
       channel: () => _audioChannel(extension),
-      watch() {
+      async watch() {
         const k = key(extension);
         if (_audioWatched.has(k)) return;
-        _audioChannel(extension).subscribe(value => _broadcast(k, 'audio', value));
         _audioWatched.add(k);
+        try {
+          (await _audioChannel(extension)).subscribe(value => _broadcast(k, 'audio', value));
+        } catch (error) {
+          _audioWatched.delete(k);
+          throw error;
+        }
       },
     },
     setSurfaceMenu(items) { record.menuItems = items; },

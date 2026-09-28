@@ -111,6 +111,49 @@ async function _readServableFile(filePath) {
   }
 }
 
+/**
+ * The Atmos page's Content-Security-Policy. The page holds the preload
+ * bridges and checks every extension's SDK calls, so it runs only Atmos's
+ * own files: no inline scripts (only the import map, by its hash), no
+ * eval, no plugins. Frames are atmos-ext://; images and media also come
+ * from blobs, data URLs and atmos-resource://; the network reaches only
+ * what the system services declare (Location's geocoding). Styles may be
+ * inline (Core sets element styles throughout). Built once, on first use.
+ */
+let _appPageCspValue = null;
+function _appPageCsp() {
+  if (_appPageCspValue) return _appPageCspValue;
+  const crypto = require('crypto');
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const importMap = html.match(/<script type="importmap">([\s\S]*?)<\/script>/);
+  const importMapHash = importMap ? `'sha256-${crypto.createHash('sha256').update(importMap[1]).digest('base64')}'` : '';
+  const hosts = new Set();
+  for (const entry of _catalog.list('services').filter(item => item.tier === 'system')) {
+    for (const host of entry.manifest?.permissions?.network || []) {
+      if (typeof host === 'string' && /^(\*\.)?[a-z0-9.-]+$/i.test(host)) hosts.add(`https://${host}`);
+    }
+  }
+  _appPageCspValue = [
+    "default-src 'self'",
+    `script-src 'self' ${importMapHash}`.trim(),
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: atmos-ext: atmos-resource:",
+    "media-src 'self' data: blob: atmos-resource:",
+    "font-src 'self' data: blob:",
+    `connect-src 'self' data: blob: atmos-resource: ${[...hosts].join(' ')}`.trim(),
+    // Frames are atmos-ext:// only; the main process's navigation guard
+    // (will-frame-navigate) refuses anything else. http(s) is listed so
+    // that guard, not this policy, blocks a frame navigating itself away:
+    // the frame then stays as it was instead of turning into an error page.
+    'frame-src atmos-ext: https: http:',
+    "worker-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join('; ');
+  return _appPageCspValue;
+}
+
 /** Serves atmos-app://local/<path> by reading straight out of the app
  *  bundle directory (__dirname) — same files loadFile('index.html') used
  *  to read directly, just fronted by a scheme with a fixed origin instead
@@ -139,10 +182,9 @@ function _registerAtmosAppProtocol() {
       }
 
       const buf = await fs.promises.readFile(filePath);
-      return new Response(buf, {
-        status: 200,
-        headers: { 'Content-Type': _mimeFor(filePath) },
-      });
+      const headers = { 'Content-Type': _mimeFor(filePath) };
+      if (rel === '/index.html') headers['Content-Security-Policy'] = _appPageCsp();
+      return new Response(buf, { status: 200, headers });
     } catch (e) {
       console.error('[main] atmos-app protocol error:', e.message, request.url);
       return new Response('Not found', { status: 404 });
@@ -244,7 +286,9 @@ function createWindow() {
     webPreferences: {
       nodeIntegration:  false,
       contextIsolation: true,
-      sandbox:          false,
+      // The preload needs only Electron's renderer modules (contextBridge,
+      // ipcRenderer, webUtils), which a sandboxed preload has.
+      sandbox:          true,
       preload:          preloadPath,
     }
   });
@@ -281,7 +325,10 @@ function createWindow() {
   });
 
   win.webContents.on('before-input-event', (event, input) => {
-    if (input.key === 'F12' && input.type === 'keyDown') {
+    // DevTools only when running from source, or started with --devtools:
+    // otherwise, in an installed Atmos, they'd be a console on the page
+    // that holds every bridge.
+    if (input.key === 'F12' && input.type === 'keyDown' && (!app.isPackaged || process.argv.includes('--devtools'))) {
       win.webContents.isDevToolsOpened()
         ? win.webContents.closeDevTools()
         : win.webContents.openDevTools({ mode: 'detach' });
@@ -601,7 +648,22 @@ const _manager = createExtensionManager({
   installed: () => [..._catalog.list('plugins'), ..._catalog.list('services')].map(entry => ({
     ...entry, loadable: _trust?.get(entry)?.loadable !== false, active: _isActive(entry),
   })),
+  appVersion: app.getVersion(),
 });
+
+/**
+ * Where "Atmos X is available" sends you: Core's own setting
+ * (core/extension-sources.json "download"), never an address from a
+ * source's index. Only https.
+ */
+function _atmosDownloadUrl() {
+  try {
+    const url = JSON.parse(fs.readFileSync(_BUILT_IN_SOURCES_FILE, 'utf8')).download;
+    return typeof url === 'string' && /^https:\/\//i.test(url) ? url : null;
+  } catch {
+    return null;
+  }
+}
 
 // The system services (Wallpaper, Audio, Location) are part of Atmos itself:
 // core/system/<id>, loaded by Core like the rest of its code.
@@ -701,7 +763,10 @@ function _managerSummary(status = _manager.status()) {
     else if (deps && !deps.ok && trust?.loadable) problems.push({ kind: entry.kind, id: entry.id, name, reason: deps.problems[0] });
     else if (_moveProblems.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _moveProblems.get(refOf(entry)) });
   }
-  return { updates: status.updates, pending: status.pending.length, problems, checkedAt: status.checkedAt };
+  return {
+    updates: status.updates, pending: status.pending.length, problems, checkedAt: status.checkedAt,
+    atmosUpdate: status.core?.available ? { version: status.core.available, current: status.core.current, download: _atmosDownloadUrl() !== null } : null,
+  };
 }
 
 function _broadcastManager(status = _manager.status()) {
@@ -770,6 +835,12 @@ _managerHandler('cancel', (kind, id) => _broadcastManager(_manager.cancel(kind, 
 _managerHandler('add-source', async location => { _manager.addSource(location); return _checkForUpdates(); });
 _managerHandler('remove-source', async location => { _manager.removeSource(location); return _checkForUpdates(); });
 _managerHandler('take-data-cleanup', () => _dataCleanup.splice(0));
+_managerHandler('open-atmos-download', async () => {
+  const url = _atmosDownloadUrl();
+  if (!url) throw new Error('No download page is set for Atmos');
+  await shell.openExternal(url);
+  return true;
+});
 // First run: the plugins that come with Atmos, to choose from.
 _managerHandler('setup', async () => {
   // upgradeDownloaded: the page may start after the download finished.
@@ -1008,7 +1079,8 @@ ipcMain.handle('services:list', async () => {
   }
 });
 
-ipcMain.handle('extensions:set-enabled', async (_, kind, id, enabled) => {
+ipcMain.handle('extensions:set-enabled', async (event, kind, id, enabled) => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (entry?.tier === 'system' && enabled === false) throw new Error(`'${id}' is a system extension and cannot be disabled`);
   return _extensionPreferences.setEnabled(kind, id, enabled);
@@ -1016,19 +1088,22 @@ ipcMain.handle('extensions:set-enabled', async (_, kind, id, enabled) => {
 
 // Third-party approval: the renderer passes the fingerprint it showed the
 // user; approval is refused if the files changed since. Takes effect on restart.
-ipcMain.handle('extensions:approve', async (_, kind, id, fingerprint) => {
+ipcMain.handle('extensions:approve', async (event, kind, id, fingerprint) => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   const folder = kind === 'plugin' ? 'plugins' : 'services';
   return _trust.approve(folder, _catalog.find(folder, id), fingerprint);
 });
 
-ipcMain.handle('extensions:revoke', async (_, kind, id) => {
+ipcMain.handle('extensions:revoke', async (event, kind, id) => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (!entry || entry.tier !== 'third-party') throw new Error('Only community extensions have approvals');
   _trust.revoke(entry);
   return { restartRequired: true };
 });
 
-ipcMain.handle('extensions:restart', () => {
+ipcMain.handle('extensions:restart', event => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   // quit() (not exit()) closes windows normally, so the renderer's unload
   // handlers flush pending saves and the window state is written.
   app.relaunch();
@@ -1070,7 +1145,8 @@ ipcMain.handle('extensions:notify', (event, kind, id, options) => {
   return true;
 });
 
-ipcMain.handle('extensions:open-root', async (_, kind) => {
+ipcMain.handle('extensions:open-root', async (event, kind) => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   if (kind === 'plugins') return shell.openPath(_installedRoot('plugins'));
   if (kind === 'services' || kind === 'service') return shell.openPath(_installedRoot('services'));
   return 'Unsupported extension kind';
