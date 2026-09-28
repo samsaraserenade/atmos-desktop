@@ -970,13 +970,13 @@ function _describeSharing(entry) {
 
 /**
  * Checked by extension-host.cjs before every main.cjs IPC handler runs. Only
- * the Atmos page (never a frame) can call; `caller` is null for the page's
- * own code (Core and the system services), or the framed extension Core's
- * bridge made the call for. Returns a refusal, or null.
+ * the Atmos page (never a frame) can call, and only on behalf of a framed
+ * extension (`caller`, stamped by Core's bridge): the page's own code never
+ * invokes a main.cjs handler. Returns a refusal, or null.
  */
 function _authorizeInvoke(event, caller, { kind, id, name }) {
   if (!_fromAtmosPage(event)) return 'Not allowed';
-  if (caller === null) return null;
+  if (typeof caller !== 'string') return 'Not allowed';
   const target = `${kind}:${id}`;
   if (caller === target) return null;
   const entry = _entryOf(caller);

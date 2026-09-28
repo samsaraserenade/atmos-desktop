@@ -20,9 +20,6 @@ export function getPriceColors() {
 }
 
 /** The SDK applies new appearance variables before calling listeners. */
-export function onSemanticColorChange(listener) {
-  return atmos.appearance.onChange(() => listener(getSemanticColors()));
-}
 export function onPriceColorChange(listener) {
   return atmos.appearance.onChange(() => listener(getPriceColors()));
 }
@@ -37,7 +34,3 @@ export function colorForChange(change, flatColor = getSemanticColors().neutral) 
   const colors = getSemanticColors();
   return direction === 'up' ? colors.positive : direction === 'down' ? colors.negative : flatColor;
 }
-
-// Frames can't change Atmos's colours; kept so callers don't need to know.
-export function setPriceColorUp() {}
-export function setPriceColorDown() {}

@@ -16,7 +16,7 @@ test('declares a framed extension that keeps its surfaces\' ids', () => {
   assert.equal(panel.legacyId, 'portfolio-tracker');
   assert.equal(panel.shortcut, ']');
   assert.equal(panel.shortcutToggles, true);
-  assert.deepEqual(sidebar.map(item => item.legacyId), ['portfolio-balance-ticker', 'portfolio-balance', 'portfolio-connections', 'portfolio-positions', 'portfolio-allocation', 'portfolio-futures', 'markets']);
+  assert.deepEqual(sidebar.map(item => item.legacyId), ['portfolio-balance-ticker', 'portfolio-balance', 'portfolio-connections', 'portfolio-positions', 'portfolio-allocation', 'portfolio-futures']);
   for (const item of [panel, ...sidebar, boot]) assert.ok(fs.existsSync(path.join(root, item.entry)), item.entry);
   for (const item of [panel, ...sidebar]) assert.ok(fs.existsSync(path.join(root, item.icon)), item.icon);
   assert.deepEqual(manifest.legacyStorage.state, ['portfolio-tracker', 'markets', 'watchlist', 'currency']);
@@ -109,6 +109,5 @@ test('framed sidebar controls use body UI or Core header menus, never legacy hea
   assert.match(markets, /body\.innerHTML = '[^']*futures-balances[^']*futures-direction-bar/);
   assert.match(markets, /context\.listen\(body, 'contextmenu',[\s\S]*?openSpotVisibilityMenu/);
   assert.match(markets, /atmos\.contextMenu\.open[\s\S]*?type: 'toggle'[\s\S]*?label: 'Included in portfolio'/);
-  assert.match(markets, /body\.innerHTML = '[^']*markets-watchlist-input[^']*watchlist-rows/);
   assert.match(widgetHost, /atmos\.surface\.setMenu\(items\)/);
 });

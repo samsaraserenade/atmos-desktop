@@ -1,8 +1,12 @@
 # Location service
 
-The user's location, for Atmos itself. DOM-free core logic plus a section in
-Settings → Appearance for choosing a location. Extensions can't read it yet:
-the SDK has no location call.
+The user's location, chosen once in Settings → Appearance (detect, or a
+place search) and kept by Core. Extensions can't read it yet: the SDK has no
+location call. The plan is a read-only `atmos.location` (`get()` and
+`onChange()`, with Detect staying in Settings) so a weather, map or
+sunrise widget asks the user once, through Atmos, instead of each asking
+for the browser's geolocation permission itself. That is on the SDK 1.0
+list; the module below is what it would wrap.
 
 Part of Core (`core/system/location`): Core loads it itself
 (`core/js/core/system-services.js`). It is always on, and is never

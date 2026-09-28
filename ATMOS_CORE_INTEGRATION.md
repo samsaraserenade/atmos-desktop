@@ -111,8 +111,10 @@ origin (`atmos-ext://…`); `main.cjs` is CommonJS because it runs in
 Electron's main process. Relative imports, `new URL('./x.css',
 import.meta.url)`, fonts and images work as on the web. WebAssembly needs
 `"wasm"` in `permissions.browser`. Declared network hosts are open to
-`fetch()`, WebSockets, images and media, but scripts, stylesheets and fonts
-load only from the extension's own files. Folders named `data`, `tests`,
+`fetch()`, WebSockets, images and media, but scripts load only from the
+extension's own files and the library services it declares in `invokes`,
+and stylesheets and fonts only from its own files (fonts also as data
+URLs). Folders named `data`, `tests`,
 `backups` and `_to_delete`, and anything whose name starts with `.`, are
 never served to a frame.
 
@@ -621,8 +623,11 @@ anything that must be shared is a service.
    caches that die with the document are fine.
 5. **Runs with the consumer's permissions.** A network host the library
    contacts must be declared by the consumer (and by the library, for the
-   audit); a framed consumer also declares `"invokes": ["service:<id>"]` to
-   import it.
+   audit); the same goes for a browser permission it needs. What a
+   library declares is for the audit and Settings only: its `network` is
+   not added to any frame's policy, and its `browser` entries are granted
+   to the Atmos page, not to the frames that run its code. A framed
+   consumer also declares `"invokes": ["service:<id>"]` to import it.
 
 **A service with a library.** An extension may be both: a service side in
 `main.cjs` that owns the privileged work, and library modules that are its
@@ -789,7 +794,7 @@ manifest shares it. That covers four things: the IPC handlers its
 - `"official"` shares it with system and official extensions, and
   `"all"` with community extensions too.
 - What isn't listed is the extension's own: its frames and its `main.cjs`
-  reach it as before, and so does the Atmos page.
+  reach it as before. (The Atmos page itself never invokes a handler.)
 - A manifest with no `"exports"` block at all shares everything with
   system and official extensions that declare it in `invokes`, and nothing
   with community ones (so that packages from before 0.12 kept working).

@@ -220,7 +220,7 @@ function _onKeydown(event) {
   _select(_selectedIndex + delta);
 }
 
-export function openTaskView() {
+function openTaskView() {
   if (!_overlay || _isOpen() || _plugins().length === 0) return;
   _returnFocus = document.activeElement;
   _render();
@@ -230,7 +230,7 @@ export function openTaskView() {
   requestAnimationFrame(() => _select(_selectedIndex));
 }
 
-export function closeTaskView() {
+function closeTaskView() {
   if (!_overlay || !_isOpen()) return;
   _overlay.classList.remove('open');
   _overlay.setAttribute('aria-hidden', 'true');

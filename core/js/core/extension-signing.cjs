@@ -223,13 +223,11 @@ module.exports = {
   signIndex,
   checkIndexSignature,
   SIGNATURE_FILE,
-  TRUSTED_KEYS_FORMAT,
   canonicalJson,
   keyIdFor,
   trustedKeyEntry,
   loadTrustedKeys,
   signExtension,
-  readSignature,
   checkSignature,
   verifyExtension,
 };

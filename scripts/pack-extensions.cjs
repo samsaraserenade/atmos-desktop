@@ -296,6 +296,6 @@ function buildIndex(dir, privateKey, name = 'Atmos', { core = null } = {}) {
   return index;
 }
 
-module.exports = { globToRegExp, bundleFilters, copyBundled, buildIndex, coreOf };
+module.exports = { bundleFilters, copyBundled, buildIndex };
 
 if (require.main === module) main().catch(error => fail(error.message));

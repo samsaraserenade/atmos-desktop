@@ -14,19 +14,23 @@ const DEFAULTS = {
   chartLineColorDown: '#f87171',
   timeAxisVisible: true,
   priceAxisVisible: true,
-  samsaraOverlayEnabled: true,
-  samsaraMaEnabled: true,
+  // The chart starts bare: no overlay, no pane. Everything below is
+  // switched on from the toolbar's Indicators menu (src/sidebar-settings.js).
+  // The five moving averages stay individually on so that switching the
+  // averages on shows all of them.
+  samsaraOverlayEnabled: false,
+  samsaraMaEnabled: false,
   samsaraMa1Enabled: true,
   samsaraMa2Enabled: true,
   samsaraMa3Enabled: true,
   samsaraMa4Enabled: true,
   samsaraMa5Enabled: true,
   samsaraMaOpacity: 58,
-  samsaraRsiEnabled: true,
-  samsaraSessionsEnabled: true,
-  samsaraCandleColoringEnabled: true,
+  samsaraRsiEnabled: false,
+  samsaraSessionsEnabled: false,
+  samsaraCandleColoringEnabled: false,
   samsaraCandleColorBasis: 'session',
-  cashInvestedPaneVisible: true,
+  cashInvestedPaneVisible: false,
   cashInvestedPaneHeight: 56,
   portfolioChartSettings: null,
   chartVisible: false,
@@ -85,19 +89,13 @@ const DEFAULTS = {
   // Finance Visuals (see balance.js's setFlowVisible). Same 24h holdings-
   // history fetch as moversVisible above; see src/daily-attribution.js.
   flowVisible: true,
-  // Per-section collapsed state for the three mini-lists below the tiles
-  // (Today's Movers, Portfolio Change, All-Time) — each header is its own
-  // click target (see balance.js's _mountMiniList), independent from the
-  // *Visible flags above (those hide a section entirely; these just fold
-  // its rows away while keeping the header as a one-click way back).
-  moversCollapsed: false,
-  flowCollapsed: false,
-  athCollapsed: false,
+  // Which Day / Week / Total tile is selected: the lists below the tiles
+  // show that period (see balance.js's mountPerformanceSection).
+  performancePeriod: '1d',
   // Which Futures cards have been manually collapsed (see markets/
   // sidebar.js's renderFuturesRows/click handler) -- keyed the same way
   // as the card cache itself, `${connectionId}:${coin}`, so it survives
-  // an app restart the same way moversCollapsed/flowCollapsed/athCollapsed
-  // above do for their own sections. A position that's since closed just
+  // an app restart. A position that's since closed just
   // leaves a harmless stale key here; a reopened one starts collapsed
   // again if its key happens to match, same as any of the other
   // *Collapsed flags would.
@@ -126,9 +124,23 @@ function objectCopy(value) {
 }
 
 let balanceFontStateNeedsSave = false;
+let indicatorDefaultsReset = false;
+
+// The chart-indicator fields that version 2 turned off by default (see
+// DEFAULTS). Saved state from version 1 carries every field, so the old
+// "on" values are dropped once rather than kept as if chosen.
+const INDICATOR_FIELDS = ['samsaraOverlayEnabled', 'samsaraMaEnabled', 'samsaraRsiEnabled',
+  'samsaraSessionsEnabled', 'samsaraCandleColoringEnabled', 'cashInvestedPaneVisible'];
 
 export const portfolioState = registerStateNamespace('portfolio-tracker', {
-  version: 1,
+  version: 2,
+  migrate(data, fromVersion) {
+    if (fromVersion < 2) {
+      for (const key of INDICATOR_FIELDS) delete data[key];
+      indicatorDefaultsReset = true;
+    }
+    return data;
+  },
   // An imported font is kept beside Atmos state, not in it (src/host/persist.js).
   large: ['customBalanceFonts'],
   defaults: DEFAULTS,
@@ -168,4 +180,4 @@ export const portfolioState = registerStateNamespace('portfolio-tracker', {
 
 // Hydration kept only the selected imported font (or fell back to Bebas):
 // save that, so the extra saved fonts don't come back on the next start.
-if (balanceFontStateNeedsSave) onStateLoaded(save);
+if (balanceFontStateNeedsSave || indicatorDefaultsReset) onStateLoaded(save);

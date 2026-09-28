@@ -144,51 +144,26 @@
 .pt-composition-coverage { margin-top: 5px; padding: 0 14px; text-align: right; }
 .pt-composition-empty { padding: 4px 14px 1px; text-align: center; }
 
-/* Today's Movers + the market-vs-flow breakdown (see balance.js's
-   _renderMovers/_renderFlow) — both share this same compact row look,
-   matching the Day/Week/Total tiles' own text sizing so the whole
-   Performance section reads as one family of numbers. */
+/* The blocks below the Day / Week / Total tiles (Movers, Change, All-Time;
+   see balance.js's mountPerformanceSection): a small left-aligned heading
+   in the tiles' own type, then rows. Which blocks show follows the
+   selected tile, so there is nothing to fold away. */
+.pt-perf-card { cursor: pointer; }
+.pt-perf-card.is-active { box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), .42); }
+.pt-perf-card.is-active > div:first-child { color: rgb(var(--ink-rgb)); }
+.pt-perf-card:not(.is-active) > div { opacity: .78; }
+.pt-perf-card:focus-visible { outline: 1px solid rgba(var(--ink-rgb), .5); outline-offset: 1px; }
 .pt-mini-list-head {
-  display: flex;
-  align-items: center;
-  position: relative;
-  gap: 6px;
-  padding: 2px 0;
-  color: rgba(var(--ink-rgb), .52);
-  font-size: .62rem;
+  padding: 0 0 4px;
+  color: rgba(var(--ink-rgb), .42);
+  font-size: .6rem;
   font-weight: 600;
-  letter-spacing: .06em;
-  cursor: pointer;
-  user-select: none;
+  letter-spacing: .08em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.pt-mini-list-head:hover { color: rgba(var(--ink-rgb), .72); }
-/* flex:1 + text-align:center (rather than justify-content:center on the
-   head) centers the label across the FULL header width regardless of the
-   chevron's own width, since the chevron is taken out of flow below and
-   would otherwise pull an evenly-split center off to the left. */
-.pt-mini-list-head-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
-.pt-mini-list-chevron {
-  position: absolute;
-  right: 0;
-  flex-shrink: 0;
-  font-size: .55rem;
-  transition: transform .12s ease;
-  transform: rotate(0deg);
-}
-/* Collapsed = header's own aria-expanded goes false -- driven from
-   _mountMiniList's applyCollapsed(), not a separate class, so the arrow
-   and the row-hiding below can never fall out of sync with each other. */
-.pt-mini-list-head[aria-expanded="false"] .pt-mini-list-chevron { transform: rotate(-90deg); }
-.pt-mini-list-rows {
-  display: flex;
-  flex-direction: column;
-  /* Doubles the header-to-content gap (was just the head's own 2px
-     bottom padding plus a row's 4px top padding, ~6px effective) without
-     touching either of those, so the spacing between individual rows
-     inside the list is unaffected -- only the gap before the first one. */
-  margin-top: 6px;
-}
-.pt-mini-list-collapsed > .pt-mini-list-rows { display: none; }
+.pt-mini-list-rows { display: flex; flex-direction: column; }
 .pt-mini-list-row {
   display: flex;
   align-items: center;
@@ -215,24 +190,13 @@
    transform is applied per-block instead of baked into the shared row. */
 #tc-balance-movers .pt-mini-list-row-symbol { text-transform: uppercase; }
 .pt-mini-list-row-values {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   flex-shrink: 0;
   font-size: .7rem;
   font-weight: 600;
   letter-spacing: .01em;
   white-space: nowrap;
 }
-
-/* Movers splits into two side-by-side columns (winners left, losers
-   right) instead of one stacked list -- see balance.js's _renderMovers.
-   minmax(0,1fr) keeps a long symbol/value from forcing either column
-   wider than half the available width. */
-#tc-balance-movers .pt-movers-rows {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  column-gap: 12px;
-}
-.pt-movers-col {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
+.pt-mini-list-row-secondary { color: rgba(var(--ink-rgb), .38); font-size: .62rem; font-weight: 500; }

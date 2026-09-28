@@ -10,7 +10,6 @@ const { webUtils } = require('electron');
 // ── Context bridge ────────────────────────────────────────────────────────────
 
 contextBridge.exposeInMainWorld('atmosCore', {
-  isElectron:       true,
   getAppVersion:    ()                   => ipcRenderer.invoke('app:version'),
   listPlugins:      ()                   => ipcRenderer.invoke('plugins:list'),
   listServices:     ()                   => ipcRenderer.invoke('services:list'),
@@ -46,7 +45,8 @@ contextBridge.exposeInMainWorld('atmosCore', {
   openExtensionRoot: kind                => ipcRenderer.invoke('extensions:open-root', kind),
   // A framed extension's invoke(), made by Core's bridge on its behalf:
   // `caller` ("plugin:<id>") is who asked, which the main process checks
-  // against what the target shares ("exports.ipc").
+  // against what the target shares ("exports.ipc"). The page's own code
+  // never invokes a main.cjs handler.
   invokeExtensionAs: (caller, kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, String(caller), ...args),
   showExtensionNotification: (kind, id, options) => ipcRenderer.invoke('extensions:notify', kind, id, options),
   onExtensionNotificationClick: callback => {
@@ -87,15 +87,12 @@ contextBridge.exposeInMainWorld('atmosCore', {
 });
 
 contextBridge.exposeInMainWorld('atmos', {
-  // The Atmos page's own calls (caller null: Core and the system services).
-  extensionInvoke: (kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, null, ...args),
   extensionOn: (kind, id, name, callback) => {
     const channel = `atmos-extension:${kind}:${id}:${name}`;
     const listener = (_event, ...args) => callback(...args);
     ipcRenderer.on(channel, listener);
     return () => ipcRenderer.removeListener(channel, listener);
   },
-  resourceUrl: (provider, resourcePath = '') => 'atmos-resource://' + encodeURIComponent(provider) + '/' + resourcePath.split('/').map(encodeURIComponent).join('/'),
   getPathForFile: webUtils ? file => webUtils.getPathForFile(file) : undefined,
 });
 

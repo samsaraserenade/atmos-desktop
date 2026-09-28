@@ -348,9 +348,9 @@ function frameDocument() {
 }
 
 module.exports = {
-  SCHEME, FIRST_PARTY_HOST, SURFACES, UNSERVED_DIRS, IMPORT_MAP_HASH,
-  isLibrary, isIsolated, resolveRuntime, frameHost, frameOrigin, extensionPath,
+  SCHEME, FIRST_PARTY_HOST, IMPORT_MAP_HASH,
+  isLibrary, resolveRuntime, frameHost, frameOrigin, extensionPath,
   sharedOriginCleanupPatterns, sharedOriginMove, moveDocument, moveCsp, storageHostScript,
   frameCsp, framePermissionsPolicy, describeContributions, frameDocument,
-  safeRelative, plainLabel, networkSources,
+  safeRelative,
 };

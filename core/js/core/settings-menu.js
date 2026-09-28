@@ -34,6 +34,7 @@
  */
 
 import { getRegisteredSections, setSectionEnabled } from './sidebar-registry.js';
+import { escapeHtml } from './escape-html.js';
 import {
   PANEL_LAYOUTS, listPanelPlugins, getPanelLayout, getPanelSections,
   setPanelLayout, assignPanelPlugin,
@@ -182,7 +183,6 @@ function _loadVersion() {
   return _versionPromise;
 }
 
-const _HOME_NAV_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5L12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/></svg>`;
 
 // The settings window is laid out for 1080p–1440p. On a larger window (a
 // 4K screen at 100% Windows scaling, say) it grows with it: 1 up to
@@ -436,7 +436,7 @@ function _renderPickerOffline(reason) {
     <div class="sm-onboarding sm-picker">
       <div class="sm-onboarding-kicker">Welcome to Atmos</div>
       <h1>Choose your extensions.</h1>
-      <p>Atmos downloads its extensions, and the list couldn't be reached (${_escape(reason)}). Check your connection and try again, or start with none and add them later in Settings → Extensions.</p>
+      <p>Atmos downloads its extensions, and the list couldn't be reached (${escapeHtml(reason)}). Check your connection and try again, or start with none and add them later in Settings → Extensions.</p>
       <div class="sm-onboarding-actions">
         <button type="button" data-picker="retry">Try again</button>
         <button type="button" class="secondary" data-picker="skip">Start with none</button>
@@ -462,10 +462,10 @@ function _renderPicker(plugins) {
       <div class="sm-picker-list">
         ${plugins.map(item => `
           <label class="sm-card sm-picker-item">
-            <input type="checkbox" value="${_escape(`${item.kind}:${item.id}`)}">
+            <input type="checkbox" value="${escapeHtml(`${item.kind}:${item.id}`)}">
             <span class="sm-card-text">
-              <span class="sm-card-name">${_escape(item.displayName || item.id)}</span>
-              <span class="sm-card-detail">${_escape(item.description || '')}</span>
+              <span class="sm-card-name">${escapeHtml(item.displayName || item.id)}</span>
+              <span class="sm-card-detail">${escapeHtml(item.description || '')}</span>
               ${_needsHtml({ dependencies: item.dependencies })}
             </span>
           </label>`).join('')}
@@ -615,7 +615,7 @@ function _applyView() {
 /** An on/off switch; only the switch itself toggles (not the whole card). */
 function _toggleHtml(checked, label) {
   return `<label class="sm-toggle" title="${checked ? 'On' : 'Off'}">
-    <input type="checkbox" ${checked ? 'checked' : ''} aria-label="${_escape(label)}">
+    <input type="checkbox" ${checked ? 'checked' : ''} aria-label="${escapeHtml(label)}">
     <span class="sm-toggle-track"><span class="sm-toggle-thumb"></span></span>
   </label>`;
 }
@@ -649,7 +649,7 @@ function _renderSidebarPage() {
     groups.get(owner).push(widget);
   }
   for (const [owner, items] of groups) {
-    _listEl.insertAdjacentHTML('beforeend', `<div class="sm-manager-subheading">${_escape(owner)}<span>${items.length}</span></div>`);
+    _listEl.insertAdjacentHTML('beforeend', `<div class="sm-manager-subheading">${escapeHtml(owner)}<span>${items.length}</span></div>`);
     const group = document.createElement('div');
     group.className = 'sm-card-group';
     for (const { id, icon, label, enabled } of items) {
@@ -660,7 +660,7 @@ function _renderSidebarPage() {
         <div class="sm-card-main">
           <div class="sm-icon">${icon || _FALLBACK_ICON}</div>
           <div class="sm-card-text">
-            <div class="sm-card-name">${_escape(label || id)}</div>
+            <div class="sm-card-name">${escapeHtml(label || id)}</div>
           </div>
           ${_toggleHtml(enabled, `Show ${label || id}`)}
         </div>`;
@@ -706,7 +706,7 @@ function _renderPanelsPage() {
   for (const section of sections) {
     const row = document.createElement('label');
     row.className = 'sm-panel-section';
-    row.innerHTML = `<span class="sm-panel-section-name">${_escape(section.label)}</span>`;
+    row.innerHTML = `<span class="sm-panel-section-name">${escapeHtml(section.label)}</span>`;
     const select = document.createElement('select');
     select.className = 'sm-panel-select';
     if (section.id !== 'main' || activeLayout === 'freeform') select.add(new Option('Empty', ''));
@@ -726,11 +726,6 @@ function _renderPanelsPage() {
   }
 }
 
-function _escape(value) {
-  return String(value ?? '').replace(/[&<>"']/g, character => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[character]);
-}
 
 function _extensionLabel(extension) {
   const declared = extension.manifest?.displayName || extension.manifest?.name;
@@ -777,7 +772,7 @@ const _SANDBOX_WARNING = 'Community extensions run in their own sandboxed frame:
 function _permissionList(lines, highlight = []) {
   const added = new Set(highlight);
   return `<ul class="sm-permission-list">${(lines || []).map(line => (
-    `<li${added.has(line) ? ' class="sm-permission-new"' : ''}>${_escape(line)}${added.has(line) ? ' <span>new</span>' : ''}</li>`
+    `<li${added.has(line) ? ' class="sm-permission-new"' : ''}>${escapeHtml(line)}${added.has(line) ? ' <span>new</span>' : ''}</li>`
   )).join('')}</ul>`;
 }
 
@@ -790,17 +785,17 @@ function _sharingHtml(extension) {
 
 /** Version, signer and dependencies, shown in the row's details. */
 function _packageDetailsHtml(extension) {
-  const names = list => list.map(item => _escape(item.name)).join(', ');
+  const names = list => list.map(item => escapeHtml(item.name)).join(', ');
   const required = (extension.dependencies || []).filter(dep => !dep.optional);
   const optional = (extension.dependencies || []).filter(dep => dep.optional);
   const lines = [];
-  if (extension.version) lines.push(`Version ${_escape(extension.version)}${extension.publisher ? ` · ${_escape(extension.publisher)}` : ''}`);
+  if (extension.version) lines.push(`Version ${escapeHtml(extension.version)}${extension.publisher ? ` · ${escapeHtml(extension.publisher)}` : ''}`);
   if (extension.tier === 'first-party') {
     lines.push(extension.source === 'installed' ? 'Signed package, checked against its signature'
       : extension.status === 'verified' ? 'Bundled with Atmos, checked' : 'Bundled with Atmos (running from source)');
   }
   if (required.length) lines.push(`Needs ${names(required)}`);
-  if (optional.length) lines.push(`Works better with ${names(optional)}${(extension.optionalMissing || []).length ? ` (not loaded: ${extension.optionalMissing.map(_escape).join(', ')})` : ''}`);
+  if (optional.length) lines.push(`Works better with ${names(optional)}${(extension.optionalMissing || []).length ? ` (not loaded: ${extension.optionalMissing.map(escapeHtml).join(', ')})` : ''}`);
   if ((extension.usedBy || []).length) lines.push(`Used by ${names(extension.usedBy)}`);
   return lines.length ? `<ul class="sm-permission-list sm-package-details">${lines.map(line => `<li>${line}</li>`).join('')}</ul>` : '';
 }
@@ -814,18 +809,18 @@ function _extensionTrustHtml(extension) {
   }
   if (extension.tier !== 'third-party' && status === 'tampered') {
     const repair = extension.source === 'installed' ? 'Remove it and install it again.' : 'Reinstall Atmos to repair it.';
-    return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${_escape(extension.statusReason)}. ${repair}</div>`;
+    return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${escapeHtml(extension.statusReason)}. ${repair}</div>`;
   }
   if (extension.enabled && (extension.dependencyProblems || []).length && !_UNTRUSTED.has(status)) {
-    return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${extension.dependencyProblems.map(_escape).join('. ')}.</div>`;
+    return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${extension.dependencyProblems.map(escapeHtml).join('. ')}.</div>`;
   }
   if (status === 'blocked') {
-    return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${_escape(extension.statusReason)}.</div>`;
+    return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${escapeHtml(extension.statusReason)}.</div>`;
   }
   if ((status === 'pending' || status === 'changed') && extension.enabled) {
     const title = status === 'pending'
       ? 'This extension asks to:'
-      : `${_escape(extension.statusReason)}. Review it again. It asks to:`;
+      : `${escapeHtml(extension.statusReason)}. Review it again. It asks to:`;
     return `
       <div class="sm-trust-note sm-trust-review">
         <div>${title}</div>
@@ -840,7 +835,7 @@ function _extensionTrustHtml(extension) {
       </div>`;
   }
   const fellBack = extension.fellBackFrom
-    ? `<div class="sm-trust-note sm-trust-alert">Version ${_escape(extension.fellBackFrom.version || '')} couldn't load, so ${_escape(extension.version || 'the bundled version')} is running instead. ${_escape(extension.fellBackFrom.reason || extension.fellBackFrom.status)}.</div>`
+    ? `<div class="sm-trust-note sm-trust-alert">Version ${escapeHtml(extension.fellBackFrom.version || '')} couldn't load, so ${escapeHtml(extension.version || 'the bundled version')} is running instead. ${escapeHtml(extension.fellBackFrom.reason || extension.fellBackFrom.status)}.</div>`
     : '';
   return `${fellBack}
     <details class="sm-permissions">
@@ -870,7 +865,7 @@ function _renderExtensionsPage() {
     return;
   }
   if (!filtered.length) {
-    _listEl.innerHTML = `<div id="settings-menu-empty">No matches for "${_escape(_searchEl.value.trim())}".</div>`;
+    _listEl.innerHTML = `<div id="settings-menu-empty">No matches for "${escapeHtml(_searchEl.value.trim())}".</div>`;
     return;
   }
 
@@ -902,8 +897,8 @@ function _renderExtensionsPage() {
       <div class="sm-card-main">
         <div class="sm-icon">${_FALLBACK_ICON}</div>
         <div class="sm-card-text">
-          <div class="sm-card-name">${_escape(label)} <span class="sm-tier-badge" data-tier="${_escape(extension.tier || 'third-party')}">${tierLabel}</span></div>
-          <div class="sm-card-detail">${_escape(extension.id)}${extension.version ? ` ${_escape(extension.version)}` : ''} · ${_escape(_extensionStatusText(extension))}</div>
+          <div class="sm-card-name">${escapeHtml(label)} <span class="sm-tier-badge" data-tier="${escapeHtml(extension.tier || 'third-party')}">${tierLabel}</span></div>
+          <div class="sm-card-detail">${escapeHtml(extension.id)}${extension.version ? ` ${escapeHtml(extension.version)}` : ''} · ${escapeHtml(_extensionStatusText(extension))}</div>
         </div>
         ${system ? '' : _toggleHtml(extension.enabled, `Enable ${label}`)}
       </div>
@@ -1114,7 +1109,7 @@ function _formatWhen(iso) {
 }
 
 function _managerErrorHtml(key) {
-  return _managerError?.key === key ? `<div class="sm-trust-error">${_escape(_managerError.message)}</div>` : '';
+  return _managerError?.key === key ? `<div class="sm-trust-error">${escapeHtml(_managerError.message)}</div>` : '';
 }
 
 
@@ -1124,7 +1119,7 @@ function _managerErrorHtml(key) {
  * `dependencies` is [{ name, optional }]; `usedBy` is [{ name }].
  */
 function _needsHtml({ dependencies = [], usedBy = [] } = {}) {
-  const chips = (items, extra = '') => items.map(item => `<span class="sm-manager-chip${extra}">${_escape(item.name)}</span>`).join('');
+  const chips = (items, extra = '') => items.map(item => `<span class="sm-manager-chip${extra}">${escapeHtml(item.name)}</span>`).join('');
   // System services (Audio, Wallpaper, Location) are always there: not worth a chip.
   const required = dependencies.filter(dep => !dep.optional && !dep.system);
   const optional = dependencies.filter(dep => dep.optional && !dep.system);
@@ -1149,7 +1144,7 @@ function _groupByKind(items, render) {
 
 function _managerRow({ key, name, detail, actions = '', extra = '', needs = '' }) {
   return `
-    <div class="sm-card sm-manager-row" data-key="${_escape(key)}">
+    <div class="sm-card sm-manager-row" data-key="${escapeHtml(key)}">
       <div class="sm-card-main sm-manager-main">
         <div class="sm-icon">${_FALLBACK_ICON}</div>
         <div class="sm-card-text">
@@ -1166,7 +1161,7 @@ function _managerRow({ key, name, detail, actions = '', extra = '', needs = '' }
 
 function _button(action, label, { key, primary = false, busyLabel = null } = {}) {
   const busy = key && _managerBusy.has(key);
-  return `<button type="button" class="${primary ? 'sm-restart-button' : 'sm-trust-secondary'}" data-manager-action="${action}"${busy ? ' disabled' : ''}>${_escape(busy && busyLabel ? busyLabel : label)}</button>`;
+  return `<button type="button" class="${primary ? 'sm-restart-button' : 'sm-trust-secondary'}" data-manager-action="${action}"${busy ? ' disabled' : ''}>${escapeHtml(busy && busyLabel ? busyLabel : label)}</button>`;
 }
 
 /**
@@ -1179,8 +1174,8 @@ function _optionalOffersHtml(key) {
     const target = `${offer.kind}:${offer.id}`;
     const busy = _managerBusy.has(target);
     return `
-      <div class="sm-trust-note sm-manager-optional" data-target="${_escape(target)}">
-        <span>Optional: ${_escape(offer.displayName || offer.id)} ${_escape(offer.version)}${offer.description ? ` · ${_escape(offer.description)}` : ''}</span>
+      <div class="sm-trust-note sm-manager-optional" data-target="${escapeHtml(target)}">
+        <span>Optional: ${escapeHtml(offer.displayName || offer.id)} ${escapeHtml(offer.version)}${offer.description ? ` · ${escapeHtml(offer.description)}` : ''}</span>
         <button type="button" class="sm-trust-secondary" data-manager-action="install-optional"${busy ? ' disabled' : ''}>${busy ? 'Downloading…' : 'Install'}</button>
         ${_managerErrorHtml(target)}
       </div>`;
@@ -1232,7 +1227,7 @@ function _renderExtensionManagerPage() {
   // Header: when the sources were last checked, and restart when changes wait.
   sections.push(`
     <div class="sm-extension-toolbar">
-      <span>${status.checkedAt ? `Checked ${_escape(_formatWhen(status.checkedAt))}` : 'Not checked yet'}. Updates are only downloaded when you press Update.</span>
+      <span>${status.checkedAt ? `Checked ${escapeHtml(_formatWhen(status.checkedAt))}` : 'Not checked yet'}. Updates are only downloaded when you press Update.</span>
       <span class="sm-manager-actions">
         ${status.pending.length ? '<button type="button" class="sm-restart-button" data-manager-action="restart">Restart to apply</button>' : ''}
         ${_button('check', 'Check for updates', { key: 'check', busyLabel: 'Checking…' })}
@@ -1248,8 +1243,8 @@ function _renderExtensionManagerPage() {
     sections.push(`<div class="sm-manager-heading">Atmos</div><div class="sm-card-group">`);
     sections.push(_managerRow({
       key: 'atmos',
-      name: `Atmos ${_escape(version)} is available`,
-      detail: `You have ${_escape(current || 'an older version')}. Download the new installer and run it; your settings and extensions stay.`,
+      name: `Atmos ${escapeHtml(version)} is available`,
+      detail: `You have ${escapeHtml(current || 'an older version')}. Download the new installer and run it; your settings and extensions stay.`,
       actions: download ? _button('download-atmos', 'Download', { key: 'atmos', primary: true, busyLabel: 'Opening…' }) : '',
     }));
     sections.push('</div>');
@@ -1258,13 +1253,13 @@ function _renderExtensionManagerPage() {
   if (summary.problems.length) {
     sections.push(`<div class="sm-manager-heading">Needs attention</div>`);
     for (const problem of summary.problems) {
-      sections.push(`<div class="sm-trust-note sm-trust-alert sm-manager-problem">${_escape(problem.name)}: ${_escape(problem.reason)}</div>`);
+      sections.push(`<div class="sm-trust-note sm-trust-alert sm-manager-problem">${escapeHtml(problem.name)}: ${escapeHtml(problem.reason)}</div>`);
     }
   }
 
   const failed = (status.applied || []).filter(record => record.failed);
   for (const record of failed) {
-    sections.push(`<div class="sm-trust-note sm-trust-alert sm-manager-problem">The update of ${_escape(record.id)} to ${_escape(record.version)} couldn't load${record.running ? `; ${_escape(record.running.version || '')} is running instead` : ''}.</div>`);
+    sections.push(`<div class="sm-trust-note sm-trust-alert sm-manager-problem">The update of ${escapeHtml(record.id)} to ${escapeHtml(record.version)} couldn't load${record.running ? `; ${escapeHtml(record.running.version || '')} is running instead` : ''}.</div>`);
   }
 
   if (status.pending.length) {
@@ -1276,8 +1271,8 @@ function _renderExtensionManagerPage() {
         : `${change.reason === 'update' ? 'Update to' : change.reason === 'dependency' ? 'Install (needed by another extension)' : change.reason === 'recommended' ? 'Install (comes with another extension)' : 'Install'} ${change.version}`;
       sections.push(_managerRow({
         key,
-        name: _escape(change.displayName || change.id),
-        detail: `${_escape(what)}${change.error ? ` · failed last time: ${_escape(change.error)}` : ''}`,
+        name: escapeHtml(change.displayName || change.id),
+        detail: `${escapeHtml(what)}${change.error ? ` · failed last time: ${escapeHtml(change.error)}` : ''}`,
         actions: _button('cancel', 'Cancel', { key }),
         extra: change.action === 'install' ? _optionalOffersHtml(key) : '',
       }));
@@ -1292,8 +1287,8 @@ function _renderExtensionManagerPage() {
       const key = `${item.kind}:${item.id}`;
       return _managerRow({
         key,
-        name: _escape(item.displayName || item.id),
-        detail: `${_escape(item.installedVersion)} → ${_escape(item.version)} · ${_escape(_formatSize(item.size))}`,
+        name: escapeHtml(item.displayName || item.id),
+        detail: `${escapeHtml(item.installedVersion)} → ${escapeHtml(item.version)} · ${escapeHtml(_formatSize(item.size))}`,
         actions: _button('install', 'Update', { key, primary: true, busyLabel: 'Downloading…' }),
       });
     }));
@@ -1307,8 +1302,8 @@ function _renderExtensionManagerPage() {
       const replaces = item.installedTier === 'third-party' ? ' · replaces the community copy' : '';
       return _managerRow({
         key,
-        name: `${_escape(item.displayName || item.id)} <span class="sm-tier-badge" data-tier="first-party">Official</span>`,
-        detail: `${_escape(item.version)} · ${_escape(_formatSize(item.size))}${item.description ? ` · ${_escape(item.description)}` : ''}${replaces}`,
+        name: `${escapeHtml(item.displayName || item.id)} <span class="sm-tier-badge" data-tier="first-party">Official</span>`,
+        detail: `${escapeHtml(item.version)} · ${escapeHtml(_formatSize(item.size))}${item.description ? ` · ${escapeHtml(item.description)}` : ''}${replaces}`,
         needs: _needsHtml({ dependencies: item.dependencies }),
         actions: _button('install', 'Install', { key, primary: true, busyLabel: 'Downloading…' }),
         extra: _optionalOffersHtml(key),
@@ -1325,19 +1320,19 @@ function _renderExtensionManagerPage() {
       const bundled = extension.bundledFallback === true;
       return _managerRow({
         key,
-        name: `${_escape(_extensionLabel(extension))} <span class="sm-tier-badge" data-tier="${_escape(extension.tier)}">${_TIER_LABELS[extension.tier] || ''}</span>`,
-        detail: `${extension.version ? _escape(extension.version) : ''}${extension.manifest?.description ? ` · ${_escape(extension.manifest.description)}` : ''}`,
+        name: `${escapeHtml(_extensionLabel(extension))} <span class="sm-tier-badge" data-tier="${escapeHtml(extension.tier)}">${_TIER_LABELS[extension.tier] || ''}</span>`,
+        detail: `${extension.version ? escapeHtml(extension.version) : ''}${extension.manifest?.description ? ` · ${escapeHtml(extension.manifest.description)}` : ''}`,
         needs: _needsHtml({ dependencies: extension.dependencies, usedBy: extension.usedBy }),
         actions: confirming ? '' : _button('ask-remove', 'Remove', { key }),
         extra: confirming ? `
           <div class="sm-trust-note sm-trust-review sm-manager-confirm">
-            <div>Remove ${_escape(_extensionLabel(extension))} when Atmos restarts?${bundled ? ' The version that comes with Atmos is used again.' : ''}</div>
-            <label class="sm-manager-choice"><input type="radio" name="remove-data-${_escape(key)}" value="keep" checked> Keep its settings and data</label>
-            <label class="sm-manager-choice"><input type="radio" name="remove-data-${_escape(key)}" value="delete"> Delete its settings and data</label>
+            <div>Remove ${escapeHtml(_extensionLabel(extension))} when Atmos restarts?${bundled ? ' The version that comes with Atmos is used again.' : ''}</div>
+            <label class="sm-manager-choice"><input type="radio" name="remove-data-${escapeHtml(key)}" value="keep" checked> Keep its settings and data</label>
+            <label class="sm-manager-choice"><input type="radio" name="remove-data-${escapeHtml(key)}" value="delete"> Delete its settings and data</label>
             ${(() => {
               const unused = _leftUnused(extension, installedExtensions, pendingByKey);
               return unused.length ? `<div class="sm-manager-also">Nothing else uses these; remove them too:</div>
-                ${unused.map(item => `<label class="sm-manager-choice"><input type="checkbox" data-also-remove="${_escape(`${item.kind}:${item.id}`)}" checked> ${_escape(_extensionLabel(item))}</label>`).join('')}` : '';
+                ${unused.map(item => `<label class="sm-manager-choice"><input type="checkbox" data-also-remove="${escapeHtml(`${item.kind}:${item.id}`)}" checked> ${escapeHtml(_extensionLabel(item))}</label>`).join('')}` : '';
             })()}
             <div class="sm-trust-actions">
               ${_button('remove', 'Remove', { key, primary: true })}
@@ -1357,9 +1352,9 @@ function _renderExtensionManagerPage() {
     const state = source.ok === null || source.ok === undefined ? 'not checked yet'
       : source.ok ? `${source.packages} package${source.packages === 1 ? '' : 's'}` : source.error;
     sections.push(`
-      <div class="sm-manager-source${source.ok === false ? ' sm-trust-alert' : ''}" data-location="${_escape(source.location)}">
-        <span class="sm-manager-source-name">${_escape(source.name ? `${source.name} · ` : '')}${_escape(source.location)}</span>
-        <span class="sm-manager-source-state">${_escape(state)}${source.origin === 'built-in' ? ' · built in' : source.origin === 'session' ? ' · this session' : ''}</span>
+      <div class="sm-manager-source${source.ok === false ? ' sm-trust-alert' : ''}" data-location="${escapeHtml(source.location)}">
+        <span class="sm-manager-source-name">${escapeHtml(source.name ? `${source.name} · ` : '')}${escapeHtml(source.location)}</span>
+        <span class="sm-manager-source-state">${escapeHtml(state)}${source.origin === 'built-in' ? ' · built in' : source.origin === 'session' ? ' · this session' : ''}</span>
         ${source.origin === 'user' ? '<button type="button" class="sm-trust-secondary" data-manager-action="remove-source">Remove</button>' : ''}
       </div>`);
   }

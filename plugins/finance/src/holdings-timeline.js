@@ -47,12 +47,6 @@ export async function loadHoldingsTimeline({ from, to }) {
   return promise;
 }
 
-/** Drop the cached range — e.g. if a caller wants to force a fresh fetch. */
-export function resetHoldingsTimeline() {
-  _cache = null;
-  _pending = null;
-}
-
 /**
  * The poll nearest to (at or before) `timestamp`, falling back to the
  * earliest cached poll when `timestamp` predates everything fetched.

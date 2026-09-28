@@ -5,7 +5,7 @@ import { hasMarketData } from '../src/host/market-data.js';
 import { save } from '../src/host/persist.js';
 import { watchlistState } from './persist.js';
 import { portfolioState } from '../persist.js';
-import { tickerData, onUpdate, addTicker, removeTicker, updateTickerActive, heldSymbols, accountShareFor, holdingValueFor } from './src/watchlist-data.js';
+import { tickerData, onUpdate, updateTickerActive, heldSymbols, accountShareFor, holdingValueFor } from './src/watchlist-data.js';
 import { queueMarketQuery } from './src/session.js';
 import { mountCompositionBar } from '../src/balance.js';
 import { getPortfolioComposition, getFuturesBalances, getFuturesPositions, getFuturesDirectionSplit, getSpotScopePositions } from '../src/totals.js';
@@ -15,13 +15,11 @@ import { renderDirectionMarkup } from '../src/composition.js';
 
 import { colorForChange, onPriceColorChange } from '../src/host/semantic-colors.js';
 
-const icon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 18V9m5 9V5m5 13v-7m5 7V3"/><path d="M3 21h18"/></svg>';
 const positionsIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M16.5 12h.01"/></svg>';
 const futuresIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></svg>';
 const styleUrl = new URL('./styles.css', import.meta.url).href;
 const CHART_MODE_EVENT = 'atmos:chart-mode';
 let positionsRowsHost = null;
-let marketsRowsHost = null;
 let futuresRowsHost = null;
 let spotTotalEl = null;
 let futuresBalancesEl = null;
@@ -31,7 +29,6 @@ let _lastFuturesDirectionKey = null;
 // symbol -> row entry, one cache per host, so renderRows() can patch
 // existing rows instead of rebuilding the whole list every render.
 const positionsRowCache = new Map();
-const marketsRowCache = new Map();
 const futuresRowCache = new Map();
 let positionsEmptyEl = null;
 let futuresEmptyEl = null;
@@ -437,35 +434,27 @@ function hexToRgba(hex, alpha) {
 // today's % move, colored by direction. The ticker stays centered
 // between them; the $ value and price labels are plain flex children
 // sitting at the row's outer edges, above both bars.
-function createRowEntry(symbol, isHeld) {
+function createRowEntry(symbol) {
   const row = document.createElement('div');
-  row.className = isHeld ? 'watchlist-row' : 'watchlist-row watchlist-row-market';
+  row.className = 'watchlist-row';
   row.dataset.symbol = symbol;
 
-  // A held position isn't something you "remove" from a watchlist — it's
-  // your actual money, so only it gets a stake bar/value; a plain
-  // watch-only row has nothing to show there. isHeld is fixed per host
-  // (Positions rows are always held, Markets rows never are), so this
-  // never needs to be added/removed later by updateRowEntry.
-  let allocBar = null, valueEl = null;
-  if (isHeld) {
-    allocBar = document.createElement('span');
-    allocBar.className = 'watchlist-row-alloc-bar';
-    row.append(allocBar);
-  }
+  // Every row here is a held position (the watch-only list moved into the
+  // panel's ticker picker), so each gets a stake bar and a value.
+  const allocBar = document.createElement('span');
+  allocBar.className = 'watchlist-row-alloc-bar';
+  row.append(allocBar);
 
   const changeBar = document.createElement('span');
   changeBar.className = 'watchlist-row-change-bar';
   row.append(changeBar);
 
-  if (isHeld) {
-    valueEl = document.createElement('span');
-    valueEl.className = 'watchlist-row-value';
-    row.append(valueEl);
-  }
+  const valueEl = document.createElement('span');
+  valueEl.className = 'watchlist-row-value';
+  row.append(valueEl);
 
   const symbolEl = document.createElement('span');
-  symbolEl.className = `watchlist-row-symbol${isHeld ? ' is-held' : ''}`;
+  symbolEl.className = 'watchlist-row-symbol is-held';
   symbolEl.textContent = symbol.slice(0, 5);
   row.append(symbolEl);
 
@@ -473,45 +462,23 @@ function createRowEntry(symbol, isHeld) {
   priceEl.className = 'watchlist-row-price';
   row.append(priceEl);
 
-  // Same reasoning as before: only a plain watch-only row gets a remove
-  // control, and isHeld is fixed per host so this never needs to be
-  // added/removed later by updateRowEntry.
-  let removeEl = null;
-  if (!isHeld) {
-    row.insertBefore(priceEl, symbolEl);
-    removeEl = document.createElement('span');
-    removeEl.className = 'watchlist-row-change';
-    row.append(removeEl);
-    const bar = document.createElement('span');
-    bar.className = 'watchlist-row-remove-bar';
-    bar.setAttribute('aria-hidden', 'true');
-    row.append(bar);
-    row.tabIndex = 0;
-    row.setAttribute('role', 'button');
-    row.setAttribute('aria-label', hasMarketData() ? `${symbol}: click to open chart, hold to remove` : `${symbol}: hold to remove`);
-    row.title = hasMarketData() ? 'Click to open chart · hold to remove' : 'Hold to remove';
-  }
-
-  return { row, allocBar, symbolEl, valueEl, changeBar, priceEl, removeEl };
+  return { row, allocBar, symbolEl, valueEl, changeBar, priceEl };
 }
 
-function updateRowEntry(entry, symbol, isHeld) {
+function updateRowEntry(entry, symbol) {
   const data = tickerData[symbol];
 
-  // Stake bar: same "% painted as a bar" language as before — sized to
-  // the account share, in a low-opacity white-on-dark tone. Only held
-  // rows have one.
-  if (isHeld) {
-    const share = accountShareFor(symbol);
-    // Full 0-100% of the row -- no cap. The change bar (see below) has
-    // its own separate, much smaller cap instead.
-    entry.allocBar.style.width = share != null ? `${Math.max(0, Math.min(100, share * 100))}%` : '0%';
-    const holdingValue = holdingValueFor(symbol);
-    entry.valueEl.textContent = holdingValue != null ? formatHoldingValue(holdingValue) : '';
-    entry.valueEl.title = share == null ? '' : `${formatShare(share)} of your account`;
-  }
+  // Stake bar: the account share painted as a bar, in a low-opacity
+  // white-on-dark tone.
+  const share = accountShareFor(symbol);
+  // Full 0-100% of the row -- no cap. The change bar (see below) has
+  // its own separate, much smaller cap instead.
+  entry.allocBar.style.width = share != null ? `${Math.max(0, Math.min(100, share * 100))}%` : '0%';
+  const holdingValue = holdingValueFor(symbol);
+  entry.valueEl.textContent = holdingValue != null ? formatHoldingValue(holdingValue) : '';
+  entry.valueEl.title = share == null ? '' : `${formatShare(share)} of your account`;
 
-  entry.symbolEl.title = isHeld ? `${symbol} · your position` : symbol;
+  entry.symbolEl.title = `${symbol} · your position`;
 
   entry.priceEl.textContent = data ? formatPrice(data.price) : '…';
 
@@ -538,12 +505,6 @@ function updateRowEntry(entry, symbol, isHeld) {
   }
   entry.priceEl.title = data && change != null ? `${symbol} · ${formatChange(change)} today` : symbol;
 
-  if (entry.removeEl) {
-    entry.removeEl.textContent = change == null ? '…' : formatChange(change);
-    entry.removeEl.title = '24-hour change';
-    entry.removeEl.style.color = change == null ? '' : colorForChange(change);
-    entry.row.style.setProperty('--remove-color', hexToRgba(colorForChange(-1), .3));
-  }
 }
 
 // Patches `host` to show exactly `symbolList`, in that order, reusing any
@@ -551,7 +512,7 @@ function updateRowEntry(entry, symbol, isHeld) {
 // Reordering moves existing nodes (insertBefore/appendChild relocate,
 // they don't clone) instead of rebuilding the list, so a sort-mode flip
 // or a single price tick only touches the rows that actually need it.
-function renderRows(host, cache, symbolList, isHeld) {
+function renderRows(host, cache, symbolList) {
   if (!host?.isConnected) return;
   const seen = new Set();
   let previousRow = null;
@@ -559,10 +520,10 @@ function renderRows(host, cache, symbolList, isHeld) {
     seen.add(symbol);
     let entry = cache.get(symbol);
     if (!entry) {
-      entry = createRowEntry(symbol, isHeld);
+      entry = createRowEntry(symbol);
       cache.set(symbol, entry);
     }
-    updateRowEntry(entry, symbol, isHeld);
+    updateRowEntry(entry, symbol);
     const targetNext = previousRow ? previousRow.nextSibling : host.firstChild;
     if (targetNext !== entry.row) host.insertBefore(entry.row, targetNext);
     previousRow = entry.row;
@@ -600,7 +561,7 @@ export function renderPositionRows() {
     return;
   }
   if (positionsEmptyEl?.isConnected) positionsEmptyEl.remove();
-  renderRows(positionsRowsHost, positionsRowCache, heldList, true);
+  renderRows(positionsRowsHost, positionsRowCache, heldList);
   const scopeBySymbol = new Map(getSpotScopePositions().map(position => [position.symbol, position]));
   for (const [symbol, entry] of positionsRowCache) {
     const scope = scopeBySymbol.get(symbol);
@@ -636,12 +597,6 @@ function openSpotVisibilityMenu(event, symbol) {
   ]).catch(error => console.error('[finance] Spot visibility menu:', error));
 }
 
-export function renderTickerRows() {
-  if (!marketsRowsHost?.isConnected) return;
-  const held = new Set(heldSymbols());
-  const watchList = watchlistState.tickers.filter(symbol => !held.has(symbol)).sort(byChange);
-  renderRows(marketsRowsHost, marketsRowCache, watchList, false);
-}
 
 function spotSortMenuItems() {
   return [{
@@ -824,98 +779,3 @@ registerSection('portfolio-futures', {
   },
 });
 
-registerSection('markets', {
-  order: 10,
-  icon,
-  label: 'Watchlist',
-  defaultEnabled: true,
-  mount(body, context) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = styleUrl;
-    document.head.appendChild(link);
-    context.onCleanup(() => link.remove());
-    body.innerHTML = '<div class="watchlist-body-add"><input id="markets-watchlist-input" type="text" class="watchlist-input" placeholder="Add ticker (BTC, ETH…)" maxlength="10" autocomplete="off" aria-label="Add ticker symbol"></div><div class="watchlist-rows"></div>';
-    marketsRowsHost = body.querySelector('.watchlist-rows');
-    let hold = null;
-    let suppressClickUntil = 0;
-    function cancelHold() {
-      if (!hold) return;
-      clearTimeout(hold.timer);
-      hold.row.classList.remove('is-removing');
-      hold = null;
-    }
-    function startHold(row, pointerId = null, key = null) {
-      cancelHold();
-      row.classList.add('is-removing');
-      hold = { row, pointerId, key, timer: setTimeout(() => {
-        if (!row.isConnected || document.hidden) { cancelHold(); return; }
-        const symbol = row.dataset.symbol;
-        suppressClickUntil = Date.now() + 700;
-        cancelHold();
-        removeTicker(symbol);
-      }, 1000) };
-    }
-    context.onCleanup(cancelHold);
-    context.listen(body, 'pointerdown', event => {
-      const row = event.target.closest('.watchlist-row-market');
-      if (!row || !body.contains(row) || event.button !== 0 || !event.isPrimary) return;
-      startHold(row, event.pointerId);
-    });
-    context.listen(window, 'pointerup', cancelHold);
-    context.listen(window, 'pointercancel', cancelHold);
-    context.listen(window, 'blur', cancelHold);
-    context.listen(document, 'visibilitychange', cancelHold);
-    context.listen(window, 'pointermove', event => {
-      if (!hold || hold.pointerId !== event.pointerId) return;
-      const rect = hold.row.getBoundingClientRect();
-      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) cancelHold();
-    });
-    context.listen(body, 'contextmenu', event => {
-      if (hold) { event.preventDefault(); cancelHold(); }
-    });
-    context.listen(body, 'keydown', event => {
-      const row = event.target.closest('.watchlist-row-market');
-      if (!row) return;
-      if (event.key === 'Escape') { cancelHold(); return; }
-      if (event.key !== ' ' && event.key !== 'Enter') return;
-      event.preventDefault();
-      if (!event.repeat) startHold(row, null, event.key);
-    });
-    context.listen(body, 'keyup', event => {
-      if (!hold || event.key !== hold.key) return;
-      event.preventDefault();
-      const symbol = hold.row.dataset.symbol;
-      cancelHold();
-      openTicker(symbol);
-    });
-    context.listen(body, 'focusout', cancelHold);
-    context.onCleanup(() => { if (marketsRowsHost?.closest('.fin-section-body') === body) marketsRowsHost = null; });
-    context.onCleanup(() => clearRowCache(marketsRowCache));
-    context.onCleanup(onUpdate(renderTickerRows));
-    context.onCleanup(onPriceColorChange(renderTickerRows));
-
-    context.listen(body, 'click', event => {
-      const row = event.target.closest('.watchlist-row');
-      if (!row || !body.contains(row)) return;
-      event.stopPropagation();
-      if (Date.now() >= suppressClickUntil) openTicker(row.dataset.symbol);
-    });
-
-    const input = body.querySelector('#markets-watchlist-input');
-    if (input) context.listen(input, 'keydown', async event => {
-      event.stopPropagation();
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      const symbol = event.currentTarget.value.trim().toUpperCase();
-      const added = await addTicker(symbol);
-      if (context.signal.aborted || !event.currentTarget.isConnected) return;
-      if (added) event.currentTarget.value = '';
-      else if (symbol) {
-        event.currentTarget.classList.add('err');
-        context.setTimeout(() => event.currentTarget?.classList.remove('err'), 700);
-      }
-    });
-    renderTickerRows();
-  },
-});

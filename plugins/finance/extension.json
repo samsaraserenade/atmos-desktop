@@ -1,7 +1,7 @@
 {
   "apiVersion": 3,
   "tier": "first-party",
-  "version": "1.0.4",
+  "version": "1.0.9",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -67,14 +67,6 @@
         "label": "Futures",
         "icon": "icons/portfolio-futures.svg",
         "order": 1
-      },
-      {
-        "id": "watchlist",
-        "entry": "frame-widget-watchlist.js",
-        "legacyId": "markets",
-        "label": "Watchlist",
-        "icon": "icons/markets.svg",
-        "order": 10
       }
     ],
     "boot": {

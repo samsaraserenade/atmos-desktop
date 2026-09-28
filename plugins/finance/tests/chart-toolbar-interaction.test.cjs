@@ -4,11 +4,16 @@ const vm = require('node:vm');
 const source = fs.readFileSync(`${__dirname}/../panel.js`, 'utf8');
 
 class Element {
-  constructor() { this.style = {}; this.children = []; this.attributes = {}; this.handlers = {}; this.hidden = false; this.value = ''; this.nodes = new Map(); this.classList = { toggle() {}, add() {}, remove() {} }; }
+  constructor() { this.style = {}; this.children = []; this.attributes = {}; this.handlers = {}; this.hidden = false; this.value = ''; this.nodes = new Map(); this.dataset = {}; this.className = ''; this.parent = null; this.classList = { toggle() {}, add() {}, remove() {} }; }
   setAttribute(key, value) { this.attributes[key] = value; }
-  append(...nodes) { this.children.push(...nodes); }
+  append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
   appendChild(node) { this.append(node); }
-  replaceChildren() { this.children = []; }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  matches(selector) {
+    if (selector === '[role="option"]') return this.attributes.role === 'option';
+    return selector.startsWith('.') && this.className.split(' ').includes(selector.slice(1));
+  }
+  closest(selector) { for (let node = this; node; node = node.parent) if (node.matches(selector)) return node; return null; }
   querySelector(selector) {
     if (!this.nodes.has(selector)) this.nodes.set(selector, new Element());
     return this.nodes.get(selector);
@@ -17,14 +22,18 @@ class Element {
   setPointerCapture() {}
 }
 const document = new Element();
+const window = new Element();
+window.innerHeight = 800;
 document.createElement = () => new Element();
 const context = { listen(el, event, fn) { el.handlers[event] = fn; }, onCleanup() {} };
 const handles = [];
 let collapsed = false, saves = 0;
-const sandbox = vm.createContext({ document, context, console, portfolioState: {},
+const sandbox = vm.createContext({ document, window, context, console, portfolioState: {},
   workspace: { classList: { contains: () => collapsed, toggle: (_, value) => { collapsed = value; } }, querySelectorAll: () => handles },
   save: () => saves++, onStateLoaded: () => {},
   watchlistState: { tickers: ['BTC', 'ETH'] }, tickerData: {}, onTickerUpdate: () => () => {}, getServiceFileUrl: async () => null, hasMarketData: () => true,
+  heldSymbols: () => [], accountShareFor: () => null, addTicker: async () => true, removeTicker() {},
+  getTotal: () => ({ value: 1234.5, symbol: '£', ready: true, liveCount: 1, pendingCount: 0 }), masked: format => format,
   colorForChange: () => 'rgba(255,255,255,.55)', onPriceColorChange: () => () => {},
   KNOWN_EXCHANGES: ['binance', 'bybit', 'kraken', 'coinbase'],
   parseMarketQuery: query => {
@@ -56,17 +65,23 @@ const selections = [[], []];
 const pickers = selections.map((selected, index) => sandbox.createTickerPicker(context, () => `Chart ${index}`, query => selected.push(query)).tickerPicker);
 const button = pickers[1].children[0], panel = pickers[1].children[1];
 button.handlers.click();
+// Rows are delegated from the list: Portfolio, then the Watchlist heading, BTC, ETH.
 const list = panel.querySelector('.finance-ticker-picker-list');
-list.children[2].handlers.click();
+const clickRow = index => list.handlers.click({ target: list.children[index] });
+assert.equal(list.children[3].dataset.symbol, 'ETH');
+assert.equal(list.children[0].querySelector('.finance-ticker-picker-portfolio-total').textContent, '£1,234.50', 'the Portfolio card carries the live total');
+clickRow(3);
 assert.deepEqual(selections, [[], ['ETHUSDT']]);
 button.handlers.click();
-list.children[0].handlers.click();
+clickRow(0);
 assert.deepEqual(selections[1], ['ETHUSDT', null]);
 button.handlers.click();
 const search = panel.querySelector('.finance-ticker-picker-search');
 search.value = 'SOLUSDT';
 search.handlers.input();
-list.children[1].handlers.click();
+// A symbol on no list: a heading, then "Look up" and "Watch".
+assert.equal(list.children.length, 3);
+clickRow(1);
 assert.equal(selections[1].at(-1), 'SOLUSDT');
 
 // Exchange chips: All by default; a pick applies to tickers chosen next, and
@@ -82,7 +97,7 @@ assert.equal(chips.children[4].attributes['aria-pressed'], 'true');
 assert.equal(chips.children[0].attributes['aria-pressed'], 'false');
 search.value = '';
 search.handlers.input();
-list.children[2].handlers.click();
+clickRow(3);
 assert.equal(selections[1].at(-1), 'ETHUSDT coinbase');
 
 const marketSelections = [];

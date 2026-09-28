@@ -1,16 +1,16 @@
 # Markets (Finance module)
 
 Markets was merged into the Finance plugin and is no longer installed on its
-own. The root Finance entry points import these modules. `markets` is a live market chart plus the existing Watchlist
-sidebar experience, backed by the shared `market-data` read model. The charting service powers interactive candles,
+own. The root Finance entry points import these modules. `markets` is a live market chart plus the watchlist,
+backed by the shared `market-data` read model. The charting service powers interactive candles,
 Heiken Ashi, line view, OHLC bucketing, pan/zoom, and the Samsara indicator.
 The panel intentionally contains only the chart and a hover-revealed bottom
 toolbar for ticker, view, timeframe, indicator, and fit controls.
 
 ## Entry points
 
-- `sidebar.js` owns the single Markets accordion, rendering the saved Watchlist
-  and opening a ticker's chart when its row is selected.
+- `sidebar.js` owns the Spot and Futures accordions (held positions); a
+  Spot row opens its ticker's chart in the panel.
 - `panel.js` owns the chart, bottom controls, ticker picker, and the market
   subscription for both toolbar data sources: Stream paints the raw trade
   tape as a line, History paints exchange candles seeded from REST backfill.
@@ -23,10 +23,13 @@ toolbar for ticker, view, timeframe, indicator, and fit controls.
 - Watchlist polling runs in Finance's engine frame (`frame-engine.js`); the
   panel and widgets show what it publishes.
 - `src/watchlist-data.js` owns watchlist fetching and mutations.
-- `watchlist.js` is the compatibility API consumed by Finance's portfolio code.
 
-The toolbar ticker dropdown is populated from the Watchlist and accepts a typed
-symbol with Enter.
+The watchlist itself lives in the panel's ticker picker (`../panel.js`,
+`createTickerPicker`): a sheet fitted into the panel's bottom-left corner
+with search, the exchanges, Portfolio, your holdings (with account share)
+and the watched symbols. A typed symbol can be looked up or added to the
+watchlist; a watched row is removed with its × (or Delete). Enter opens the
+first match.
 
 Example queries include `BTC`, `ETHUSDT`, and `SOL 5m candles`.
 

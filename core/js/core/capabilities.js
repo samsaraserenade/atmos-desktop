@@ -54,8 +54,3 @@ export function checkExtensionCompatibility(manifest = {}, label = 'extension') 
   }
   return { compatible: reasons.length === 0, label, reasons };
 }
-
-export function assertCapabilities(requirements, label = 'extension') {
-  const result = checkExtensionCompatibility({ requires: requirements }, label);
-  if (!result.compatible) throw new Error(`${label} is incompatible: ${result.reasons.join('; ')}`);
-}

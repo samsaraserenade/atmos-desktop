@@ -127,7 +127,7 @@ function describePermissions(permissions, { hasMain = false } = {}) {
 // level says who else may use it: "official" (system and official
 // extensions) or "all" (community extensions too). Another extension also
 // has to declare the target in "permissions.invokes". An extension always
-// reaches everything of its own, and the Atmos page (Core) everything.
+// reaches everything of its own; the Atmos page never invokes handlers itself.
 //
 // An extension with no "exports" block at all (made before Atmos 0.12)
 // shares everything with official extensions, as before, and nothing with
@@ -191,6 +191,5 @@ function reachOf(caller, target) {
 }
 
 module.exports = {
-  BASELINE_BROWSER, BROWSER_PERMISSIONS, CONTEXT_ELECTRON, KEYS, EXPORT_KINDS,
-  normalizePermissions, describePermissions, normalizeExports, levelAllows, reachOf, reaches,
+  BASELINE_BROWSER, CONTEXT_ELECTRON, normalizePermissions, describePermissions, normalizeExports, levelAllows, reachOf, reaches,
 };

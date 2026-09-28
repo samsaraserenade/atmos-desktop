@@ -20,10 +20,6 @@ export async function getConnection() {
   return (await invoke('vps:status')) || { configured: false };
 }
 
-export async function isVpsConfigured() {
-  return !!(await getConnection()).configured;
-}
-
 /** request: { code } (a pairing code) or { baseUrl, token }. */
 export const testServer = request => invoke('vps:test', request);
 export const connectServer = request => invoke('vps:connect', request);

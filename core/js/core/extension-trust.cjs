@@ -32,6 +32,7 @@ const path = require('path');
 const { normalizePermissions, describePermissions, normalizeExports } = require('./extension-permissions.cjs');
 const { createHasher, readIntegrityList, compareFiles } = require('./extension-integrity.cjs');
 const { verifyExtension, SIGNATURE_FILE } = require('./extension-signing.cjs');
+const { readJson, writeJson } = require('./json-files.cjs');
 
 const LOADABLE = new Set(['verified', 'unverified', 'approved']);
 // Permissions only a main.cjs can use; third-party extensions cannot have one.
@@ -39,16 +40,6 @@ const MAIN_PROCESS_KEYS = ['node', 'electron', 'ipc', 'provides', 'uses', 'resou
 
 function isLoadable(status) {
   return LOADABLE.has(status);
-}
-
-function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(value, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
 }
 
 /** Permissions requested now that the approved set did not include, as readable lines. */
@@ -254,4 +245,4 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
   return { assess, assessAll, get, approve, revoke };
 }
 
-module.exports = { createExtensionTrust, isLoadable, MAIN_PROCESS_KEYS };
+module.exports = { createExtensionTrust };

@@ -113,7 +113,7 @@ test('the library audit catches entry points, foreign imports, Atmos globals and
     "import { save } from 'atmos-core/persist.js';",
     "import other from '../other/x.js';",
     "import { ok } from './ok.js';",
-    'window.atmos.extensionInvoke();',
+    'window.atmos.getPathForFile();',
     "localStorage.setItem('k', 'v');",
   ].join('\n'));
   fs.writeFileSync(path.join(lib, 'ok.js'), 'export const ok = 1;');

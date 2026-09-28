@@ -46,9 +46,10 @@
  */
 
 import { registerCoreStateNamespace, scheduleSave, onStateLoaded } from '../persist.js';
+import { escapeHtml } from './escape-html.js';
 import { getSemanticColors, setSemanticColor, onSemanticColorChange } from './semantic-colors.js';
 
-export const APP_FONTS = Object.freeze([
+const APP_FONTS = Object.freeze([
   { id: 'default',   label: 'System Default', stack: `'Segoe UI',Roboto,Helvetica,sans-serif` },
   { id: 'arial',      label: 'Arial',          stack: `Arial,'Segoe UI',sans-serif` },
   { id: 'verdana',    label: 'Verdana',        stack: `Verdana,'Segoe UI',sans-serif` },
@@ -66,7 +67,7 @@ const DEFAULT_APP_FONT_ID = 'default';
 // and hover-overlay declarations across Core and plugins; surface stands in
 // for the much smaller set of actual opaque/translucent panel and menu
 // backgrounds (#settings-drawer, #ctx-menu, plugins' dropdown surfaces).
-export const APP_THEMES = Object.freeze([
+const APP_THEMES = Object.freeze([
   { id: 'atmos-dark',  label: 'Atmos Dark',  ink: '255,255,255', surface: '22,22,24' },
   { id: 'amoled',      label: 'AMOLED Black', ink: '255,255,255', surface: '0,0,0' },
   { id: 'atmos-light', label: 'Atmos Light', ink: '15,15,18',    surface: '255,255,255' },
@@ -196,7 +197,7 @@ function _registerAllCustomFonts() {
 
 /** Built-ins plus whatever's been imported, in the shape both the picker
  *  and applyAppearance() expect. */
-export function getAllAppFonts() {
+function getAllAppFonts() {
   const custom = (appearanceState.customFonts ?? []).map(font => ({
     id: font.id,
     label: font.label,
@@ -291,37 +292,37 @@ export function setAppTheme(id) {
   applyAppearance();
 }
 
-export function setSidebarShadowVisible(visible) {
+function setSidebarShadowVisible(visible) {
   appearanceState.sidebarShadowVisible = Boolean(visible);
   scheduleSave();
   applyAppearance();
 }
 
-export function setShellBlur(value) {
+function setShellBlur(value) {
   appearanceState.shellBlur = normalizeShellBlur(value);
   scheduleSave();
   applyAppearance();
 }
 
-export function setShellOpacity(value) {
+function setShellOpacity(value) {
   appearanceState.shellOpacity = normalizeShellOpacity(value);
   scheduleSave();
   applyAppearance();
 }
 
-export function setDefaultPanelBlur(value) {
+function setDefaultPanelBlur(value) {
   appearanceState.defaultPanelBlur = normalizePanelBlur(value);
   scheduleSave();
   applyAppearance();
 }
 
-export function setDefaultPanelOpacity(value) {
+function setDefaultPanelOpacity(value) {
   appearanceState.defaultPanelOpacity = normalizePanelOpacity(value);
   scheduleSave();
   applyAppearance();
 }
 
-export function setPanelAppearanceOverride(id, values) {
+function setPanelAppearanceOverride(id, values) {
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
     throw new TypeError('appearance: panel id must contain lowercase letters, numbers, and hyphens');
   }
@@ -337,7 +338,7 @@ export function setPanelAppearanceOverride(id, values) {
   applyAppearance();
 }
 
-export function clearPanelAppearanceOverride(id) {
+function clearPanelAppearanceOverride(id) {
   if (!appearanceState.panelOverrides?.[id]) return;
   delete appearanceState.panelOverrides[id];
   scheduleSave();
@@ -394,7 +395,7 @@ export async function importAppFont(file) {
 
 /** Removes a previously imported font. Falls back to System Default if it
  *  was the active app font. */
-export function removeAppFont(id) {
+function removeAppFont(id) {
   const existing = appearanceState.customFonts ?? [];
   if (!existing.some(font => font.id === id)) return;
   appearanceState.customFonts = existing.filter(font => font.id !== id);
@@ -419,11 +420,6 @@ onStateLoaded(applyAppearance);
 // plugin's "Appearance" section, before the Settings menu became the
 // better fit).
 
-function _escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
-}
 
 /* The Appearance page is built from a few shared pieces (styles in
  * index.html under "Appearance page"): titled sections (.sa-section), rows
@@ -434,21 +430,21 @@ function _escapeHtml(value) {
 
 /** A row: label (with an optional hint under it) and its control. */
 function _row(label, controlHtml, hint = '') {
-  const hintHtml = hint ? `<small>${_escapeHtml(hint)}</small>` : '';
-  return `<div class="sa-row"><span class="sa-label">${_escapeHtml(label)}${hintHtml}</span><span class="sa-control">${controlHtml}</span></div>`;
+  const hintHtml = hint ? `<small>${escapeHtml(hint)}</small>` : '';
+  return `<div class="sa-row"><span class="sa-label">${escapeHtml(label)}${hintHtml}</span><span class="sa-control">${controlHtml}</span></div>`;
 }
 
 /** A slider row: the value is written into the <output> by the sync code. */
 function _sliderRow(label, id, min, max, hint = '') {
-  return _row(label, `<span class="sa-slider"><input id="${id}" class="crange" type="range" min="${min}" max="${max}" step="1" aria-label="${_escapeHtml(label)}"><output id="${id}-value" for="${id}"></output></span>`, hint);
+  return _row(label, `<span class="sa-slider"><input id="${id}" class="crange" type="range" min="${min}" max="${max}" step="1" aria-label="${escapeHtml(label)}"><output id="${id}-value" for="${id}"></output></span>`, hint);
 }
 
 function _toggle(id, label) {
-  return `<label class="sm-toggle"><input id="${id}" type="checkbox" aria-label="${_escapeHtml(label)}"><span class="sm-toggle-track"><span class="sm-toggle-thumb"></span></span></label>`;
+  return `<label class="sm-toggle"><input id="${id}" type="checkbox" aria-label="${escapeHtml(label)}"><span class="sm-toggle-track"><span class="sm-toggle-thumb"></span></span></label>`;
 }
 
 function _section(title, bodyHtml) {
-  return `<section class="sa-section"><div class="sa-heading">${_escapeHtml(title)}</div>${bodyHtml}</section>`;
+  return `<section class="sa-section"><div class="sa-heading">${escapeHtml(title)}</div>${bodyHtml}</section>`;
 }
 
 /** Registers `fn` to re-run whenever persisted state (re)loads, and wires
@@ -518,7 +514,7 @@ export function mountAppearanceControls(body, context, panels = []) {
   // Theme
   const themeSelect = body.querySelector('#app-theme-select');
   themeSelect.innerHTML = APP_THEMES
-    .map(theme => `<option value="${_escapeHtml(theme.id)}">${_escapeHtml(theme.label)}</option>`)
+    .map(theme => `<option value="${escapeHtml(theme.id)}">${escapeHtml(theme.label)}</option>`)
     .join('');
   themeSelect.value = getAppTheme();
   context.listen(themeSelect, 'change', () => setAppTheme(themeSelect.value));
@@ -585,7 +581,7 @@ export function mountAppearanceControls(body, context, panels = []) {
   // and shows the remove button only for an imported (custom-) font.
   const renderOptions = () => {
     select.innerHTML = getAllAppFonts()
-      .map(font => `<option value="${_escapeHtml(font.id)}">${_escapeHtml(font.label)}</option>`)
+      .map(font => `<option value="${escapeHtml(font.id)}">${escapeHtml(font.label)}</option>`)
       .join('');
     select.value = appearanceState.fontFamily || DEFAULT_APP_FONT_ID;
     removeBtn.hidden = !select.value.startsWith('custom-');
@@ -644,7 +640,7 @@ export function mountPanelAppearanceOverrides(body, context, panels = []) {
   for (const target of targets) {
     const row = document.createElement('div');
     row.className = 'sa-panel-override';
-    const name = _escapeHtml(target.label || target.id);
+    const name = escapeHtml(target.label || target.id);
     row.innerHTML = `
       ${_row(`${target.label || target.id} Panel`, `<label class="sa-inline-toggle">Custom <label class="sm-toggle"><input type="checkbox" data-panel-override aria-label="Custom glass for ${name}"><span class="sm-toggle-track"><span class="sm-toggle-thumb"></span></span></label></label>`, 'Uses the panel defaults')}
       <div class="sa-nested" data-panel-controls>

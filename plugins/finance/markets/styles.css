@@ -75,15 +75,10 @@
   color:rgba(var(--ink-rgb),.82); font:600 .68rem/1.2 var(--app-font-family, Inter, "Segoe UI", Roboto, sans-serif);
   font-variant-numeric:tabular-nums; white-space:nowrap;
 }
-.watchlist-body-add { display:flex; align-items:center; padding:6px 14px; border-bottom:1px solid rgba(var(--ink-rgb),.06); }
-.watchlist-input {
   width:100%; padding:4px 7px; border:1px solid rgba(var(--ink-rgb),.1); border-radius:5px;
   outline:none; color:rgb(var(--ink-rgb)); background:rgba(var(--ink-rgb),.05); text-transform:uppercase;
   font:inherit; font-size:.65rem; letter-spacing:.08em; transition:border-color .15s,width .2s;
 }
-.watchlist-input::placeholder { color:rgba(var(--ink-rgb),.2); text-transform:none; letter-spacing:normal; }
-.watchlist-input:focus { border-color:rgba(var(--ink-rgb),.28); background:rgba(var(--ink-rgb),.07); }
-.watchlist-input.err { border-color:#f87171; }
 .watchlist-rows { padding:0; }
 .watchlist-row { position:relative; display:flex; align-items:center; gap:8px; height:28px; min-height:28px; padding:0 14px; border-bottom:1px solid rgba(var(--ink-rgb),.04); cursor:pointer; transition:background .08s; }
 .watchlist-row:last-child { border-bottom:0; }
@@ -110,17 +105,12 @@
    them -- see the combined rule below. */
 .watchlist-row-alloc-bar { position:absolute; left:0; top:0; bottom:0; width:0; background:rgba(var(--ink-rgb),.07); pointer-events:none; z-index:0; transition:width .15s ease; }
 .watchlist-row-change-bar { position:absolute; right:0; top:0; bottom:0; width:0; background:transparent; pointer-events:none; z-index:0; transition:width .15s ease, background .15s ease; }
-.watchlist-row-symbol, .watchlist-row-value, .watchlist-row-price, .watchlist-row-remove { position:relative; z-index:1; }
+.watchlist-row-symbol, .watchlist-row-value, .watchlist-row-price { position:relative; z-index:1; }
 .watchlist-row-value,
 .watchlist-row-price { flex-shrink:0; min-width:52px; font:.65rem monospace; letter-spacing:.02em; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .watchlist-row-value { text-align:left; color:rgba(var(--ink-rgb),.8); }
 .watchlist-row-price { text-align:right; color:rgba(var(--ink-rgb),.7); }
-.watchlist-row-market { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); user-select:none; -webkit-user-select:none; touch-action:pan-y; }
-.watchlist-row-market .watchlist-row-price { min-width:0; text-align:left; color:rgba(var(--ink-rgb),.8); }
 .watchlist-row-change { position:relative; z-index:1; min-width:0; text-align:right; font:.65rem monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.watchlist-row-remove-bar { position:absolute; inset:0; z-index:0; pointer-events:none; background:var(--remove-color); transform:scaleX(0); transform-origin:left; }
-.watchlist-row-market.is-removing .watchlist-row-remove-bar { transform:scaleX(1); transition:transform 1000ms linear; }
-.watchlist-row-market:focus-visible { outline:1px solid rgba(var(--ink-rgb),.5); outline-offset:-1px; }
 /* Positions and Markets are separate accordions now (see markets/sidebar.js),
    so there's no in-list seam to style — just an empty-state line for
    Positions when you don't hold anything yet. */

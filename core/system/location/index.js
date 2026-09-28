@@ -7,8 +7,8 @@
  * (open-meteo geocoding), and reverse geocoding (Nominatim).
  *
  * This module is DOM-free and feature-agnostic: it doesn't know weather,
- * maps, or a sun tracker exist. Consumers (any plugin) either call its
- * functions directly, or listen for the events it emits:
+ * maps, or a sun tracker exist. Core's own code (Settings) calls it; a
+ * read-only `atmos.location` for extensions is planned to wrap it. Events:
  *
  *   onLocationChange()  → { mode, lat, lon, label }   (fires on every update)
  *   onLocationError()   → { code, message }           (detect() failures)

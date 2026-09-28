@@ -28,12 +28,12 @@
  * index that hides updates.
  */
 
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { readPackage, isSafeName, PACKAGE_EXTENSION } = require('./extension-package.cjs');
 const { verifyExtension, checkIndexSignature } = require('./extension-signing.cjs');
-const { createHasher } = require('./extension-integrity.cjs');
+const { createHasher, sha256 } = require('./extension-integrity.cjs');
+const { readJson, writeJson } = require('./json-files.cjs');
 const { compareVersions, isValidVersion, satisfies } = require('./extension-version.cjs');
 const { normalizeDependencies } = require('./extension-dependencies.cjs');
 const { checkCompatibility } = require('./extension-host.cjs');
@@ -42,20 +42,6 @@ const KIND_FOLDER = { plugin: 'plugins', service: 'services' };
 const VALID_ID = /^[a-z0-9][a-z0-9-]*$/;
 const MAX_INDEX_BYTES = 4 * 1024 * 1024;
 const MAX_PACKAGE_BYTES = 1024 * 1024 * 1024;
-
-function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(value, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
-}
-
-function sha256(buffer) {
-  return crypto.createHash('sha256').update(buffer).digest('hex');
-}
 
 /** Move a folder, copying when a rename can't (another volume). */
 function moveFolder(from, to) {
@@ -692,4 +678,4 @@ function createExtensionManager({
   };
 }
 
-module.exports = { createExtensionManager, readIndexEntry };
+module.exports = { createExtensionManager };

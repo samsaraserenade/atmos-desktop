@@ -16,11 +16,11 @@ Finance runs in sandboxed frames, in an origin of its own (`"isolation": "origin
 
 ```text
 finance/
-├── extension.json          # frames: panel, seven widgets, engine; legacyStorage
+├── extension.json          # frames: panel, six widgets, engine; legacyStorage
 ├── main.cjs                # Main process: VPS, cached network fetches
 ├── frame-engine.js         # Background frame: reads the VPS, polls prices and rates, publishes
 ├── frame-panel.js          # The Finance panel (portfolio and markets charts)
-├── frame-widget-*.js       # Balance, Performance, Portfolio Connections, Spot, Allocation, Futures, Watchlist
+├── frame-widget-*.js       # Balance, Performance, Portfolio Connections, Spot, Allocation, Futures
 ├── panel.js, sidebar.js    # Finance's panel and widgets (run inside those frames)
 ├── persist.js              # Versioned state namespaces and legacy migration
 ├── icons/                  # Panel and widget icons
@@ -114,12 +114,25 @@ VWAP/VWMA are deliberately omitted because portfolio snapshots do not contain
 traded volume; labeling an unweighted portfolio average as VWAP would be
 mathematically misleading.
 
-The Portfolio Tracker sidebar places a live allocation donut beneath the
-balance summary, showing each reported asset's percentage of the current
-portfolio. A long tail is combined into `Other` to keep the legend readable.
-An invested/cash bar beneath the donut uses the `holdings` the VPS reports
-for each source and lists every valued asset. Fiat and common stablecoins are
-treated as cash; a source without a breakdown is shown as unitemised coverage. Asset rows below US$1 are hidden as visual dust while
+The sidebar's **Performance** widget shows the change over a day, a week
+and all time as three tiles; the selected tile decides what the lists below
+show. Day and Week list the movers (each held asset's own change over the
+period, ranked by the size of the move) and split the period's change into
+market movement, deposits and withdrawals, from the VPS's per-symbol
+holdings history. Total shows the all-time high and low. Choosing the
+selected tile again flips every tile between percentages and amounts.
+
+The **watchlist** lives in the chart's ticker picker (the dropdown at the
+left of the toolbar), with your holdings above it: search or type a symbol
+to look it up or watch it, remove a watched symbol from its row.
+
+The **Allocation** widget shows where the capital is: by dApp, protocol
+type, exchange, chain, wallet or stable/invested (chosen from the widget's
+header menu), for all capital or spot or perps only, or as net directional
+exposure. An invested/cash bar in the Spot widget uses the `holdings` the
+VPS reports for each source and lists every valued asset. Fiat and common
+stablecoins are treated as cash; a source without a breakdown is shown as
+unitemised coverage. Asset rows below US$1 are hidden as visual dust while
 remaining included in totals and the invested/cash ratio.
 
 Run the chart regression check with:

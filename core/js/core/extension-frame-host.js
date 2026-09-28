@@ -94,7 +94,7 @@ const ICON_ATTRS = new Set([
 const _iconCache = new Map();
 
 /** A frame's menu icon as safe SVG markup ('' when it isn't a plain SVG). */
-export function sanitizeMenuIcon(markup) {
+function sanitizeMenuIcon(markup) {
   if (typeof markup !== 'string' || !markup.trim().startsWith('<svg') || markup.length > 4000) return '';
   if (_iconCache.has(markup)) return _iconCache.get(markup);
   let out = '';

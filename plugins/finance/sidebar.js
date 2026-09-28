@@ -25,7 +25,7 @@ import { portfolioState } from './persist.js';
 import { mountPortfolioConnections } from './src/sidebar-settings.js';
 import { initCurrencyService, currencyMenuItem } from './src/totals.js';
 import { privacyMenuItem } from './src/privacy.js';
-import { mountAllocationWidget } from './src/allocation-widget.js';
+import { mountAllocationWidget, allocationMenuItems } from './src/allocation-widget.js';
 
 // Sidebar sections can mount as soon as they register, before this plugin's
 // boot hook runs. Resolve the shared Currency service first so every sidebar
@@ -135,5 +135,6 @@ registerSection('portfolio-allocation', {
   icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v9h9"/></svg>',
   label: 'Allocation',
   defaultEnabled: true,
+  contextMenuItems: allocationMenuItems,
   mount: mountAllocationWidget,
 });

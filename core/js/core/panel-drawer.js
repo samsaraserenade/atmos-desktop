@@ -22,7 +22,7 @@
  * be tested on its own; extension-frame-host.js wires it to a frame.
  */
 
-export const BAR_PLACEMENTS = Object.freeze(['top', 'bottom']);
+const BAR_PLACEMENTS = Object.freeze(['top', 'bottom']);
 
 const FRICTION   = 0.93;  // high friction — gentle, controlled movement
 const SPRING_K   = 0.12;  // soft spring

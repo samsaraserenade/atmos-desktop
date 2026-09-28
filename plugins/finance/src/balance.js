@@ -60,9 +60,9 @@ let _balanceTextEl   = null;   // amount wrapper in the summary row
 let _balanceAmountEl = null;
 let _performanceEl   = null;
 let _performanceCards = new Map();
-let _athEl            = null;   // "All-Time High/Low" list, below Flow
-let _moversEl         = null;   // "Today's Movers" list, below the tiles
-let _flowEl           = null;   // market-vs-flow breakdown, below Movers
+let _athEl            = null;   // "All-Time" block, shown for the Total tile
+let _moversEl         = null;   // "Movers" block for the Day / Week tile
+let _flowEl           = null;   // market-vs-flow breakdown for the Day / Week tile
 let _balanceVisible  = true;
 let _miniChartSvgEl  = null;
 let _compositionEl   = null;
@@ -316,20 +316,25 @@ export function removeBalanceFont(id) {
 // holdings-history fetch (see holdings-timeline.js) shared between Movers
 // and the flow split, since both just need "what did I hold ~24h ago".
 
-const DAILY_ATTRIBUTION_RANGE_MS = 24 * 60 * 60_000;
-// Fetched further back than the 24h window itself so a missed poll right
-// at the boundary still resolves to something close to "yesterday",
-// rather than falling through to nearestSnapshot()'s earliest-available
-// fallback and silently comparing against whenever tracking began.
-const DAILY_ATTRIBUTION_LOOKBACK_BUFFER_MS = 6 * 60 * 60_000;
-// If the closest poll we can find is further from 24h ago than this,
-// there's a real gap (a new install, a VPS outage) -- better to hide the
-// feature than label a stale comparison "today".
-const DAILY_ATTRIBUTION_STALE_TOLERANCE_MS = 36 * 60 * 60_000;
-const DAILY_ATTRIBUTION_REFRESH_MS = 5 * 60_000;
-const MAX_MOVERS_PER_SIDE = 5; // top N winners + top N losers, each its own column
+const HOUR_MS = 60 * 60_000;
+// The Day and Week tiles each compare today's holdings with a poll from
+// that long ago. `lookback` fetches a little further back than the window
+// itself so a missed poll right at the boundary still resolves to something
+// close to "yesterday" (or "last week"), rather than falling through to
+// nearestSnapshot()'s earliest-available fallback and silently comparing
+// against whenever tracking began. `ahead` bounds the fetch on the near
+// side, so a week's comparison reads a few hours of polls, not seven days
+// of them. If the closest poll is further from the target than `tolerance`
+// there's a real gap (a new install, a VPS outage): better to show nothing
+// than label a stale comparison "today".
+const PERIOD_ATTRIBUTION = Object.freeze({
+  '1d': { range: 24 * HOUR_MS, lookback: 6 * HOUR_MS, ahead: 0, tolerance: 36 * HOUR_MS, label: '24H' },
+  '1w': { range: 7 * 24 * HOUR_MS, lookback: 12 * HOUR_MS, ahead: 6 * HOUR_MS, tolerance: 3 * 24 * HOUR_MS, label: '7D' },
+});
+const ATTRIBUTION_REFRESH_MS = 5 * 60_000;
+const MAX_MOVERS = 6; // one list, ranked by the size of the $ move
 
-let _dailyAttribution = null; // { movers, flow, flowConfident } | null
+const _attribution = { '1d': null, '1w': null }; // period → { movers, flow, flowConfident } | null
 let _lastAthRenderKey = null;
 let _lastMoversRenderKey = null;
 let _lastFlowRenderKey = null;
@@ -390,7 +395,7 @@ function _computeAth() {
 
 function _renderAth() {
   if (!_athEl) return;
-  if (portfolioState.athVisible === false) { _athEl.style.display = 'none'; return; }
+  if (portfolioState.athVisible === false || _activePeriod() !== 'total') { _athEl.style.display = 'none'; return; }
   let i = _history.length - 1;
   while (i >= 0 && _isHidden(_history[i])) i--;
   const last = i >= 0 ? _history[i] : null;
@@ -441,25 +446,29 @@ function _renderAth() {
   _athEl.querySelector('.pt-ath-rows').replaceChildren(highRow, lowRow);
 }
 
-async function _refreshDailyAttribution() {
+/** Which tile is selected: '1d', '1w' or 'total'. */
+function _activePeriod() {
+  return CHANGE_RANGES.some(option => option.id === portfolioState.performancePeriod) ? portfolioState.performancePeriod : '1d';
+}
+
+async function _refreshAttribution(period = _activePeriod()) {
+  const spec = PERIOD_ATTRIBUTION[period];
+  if (!spec) return;
   try {
     const now = Date.now();
-    const dayAgo = now - DAILY_ATTRIBUTION_RANGE_MS;
-    const cache = await loadHoldingsTimeline({
-      from: dayAgo - DAILY_ATTRIBUTION_LOOKBACK_BUFFER_MS,
-      to: now,
-    });
-    const snapshot = nearestSnapshot(cache, dayAgo);
-    if (!snapshot || Math.abs(dayAgo - snapshot.ts) > DAILY_ATTRIBUTION_STALE_TOLERANCE_MS) {
-      _dailyAttribution = null;
+    const target = now - spec.range;
+    const cache = await loadHoldingsTimeline({ from: target - spec.lookback, to: spec.ahead ? target + spec.ahead : now });
+    const snapshot = nearestSnapshot(cache, target);
+    if (!snapshot || Math.abs(target - snapshot.ts) > spec.tolerance) {
+      _attribution[period] = null;
     } else {
       const previous = compositionFromHoldingsSnapshot(snapshot.holdings);
       const current = compositionSnapshot();
-      _dailyAttribution = computeDailyAttribution(current, previous);
+      _attribution[period] = computeDailyAttribution(current, previous);
     }
   } catch (error) {
-    console.warn('[portfolio-tracker] daily attribution unavailable:', error.message);
-    _dailyAttribution = null;
+    console.warn(`[portfolio-tracker] ${spec.label} attribution unavailable:`, error.message);
+    _attribution[period] = null;
   }
   _renderMovers();
   _renderFlow();
@@ -479,74 +488,30 @@ function _buildMiniListRow(labelText, valueEl) {
   return row;
 }
 
-// Builds one of the three mini-lists below the tiles (Movers, Flow,
-// All-Time) as a clickable header + a rows container that the header
-// folds away. `stateKey` is a persist.js boolean field (moversCollapsed /
-// flowCollapsed / athCollapsed) -- undefined reads as "expanded" so no
-// migration is needed for anyone who already has this section mounted.
-// Collapsing is independent from each section's own *Visible toggle in
-// Finance Visuals: that hides the section outright (see _renderMovers/
-// _renderFlow/_renderAth's `el.style.display = show ? '' : 'none'`), this
-// just folds its rows away while the header stays put as a way back in.
-function _mountMiniList(context, id, headText, rowsClassName, stateKey) {
+// One block below the tiles (Movers, Change, All-Time): a small left-aligned
+// heading and its rows. Which blocks show follows the selected tile: Day and
+// Week show movers and the change split for that period, Total shows the
+// all-time high and low. Each block also has its own *Visible toggle in the
+// widget's header menu, which hides it outright.
+function _mountBlock(id, rowsClassName) {
   const el = document.createElement('div');
   el.id = id;
-
+  el.className = 'pt-mini-list';
   const head = document.createElement('div');
   head.className = 'pt-mini-list-head';
-  head.setAttribute('role', 'button');
-  head.tabIndex = 0;
-
-  const labelEl = document.createElement('span');
-  labelEl.className = 'pt-mini-list-head-label';
-  labelEl.textContent = headText;
-
-  const chevron = document.createElement('span');
-  chevron.className = 'pt-mini-list-chevron';
-  chevron.textContent = '▾';
-
-  head.append(labelEl, chevron);
-
   const rows = document.createElement('div');
   rows.className = `${rowsClassName} pt-mini-list-rows`;
-
   el.append(head, rows);
-
-  const applyCollapsed = () => {
-    const collapsed = portfolioState[stateKey] === true;
-    el.classList.toggle('pt-mini-list-collapsed', collapsed);
-    head.setAttribute('aria-expanded', String(!collapsed));
-  };
-  applyCollapsed();
-  const stopCollapseSync = onStateLoaded(applyCollapsed);
-  if (typeof stopCollapseSync === 'function') context.onCleanup(stopCollapseSync);
-
-  const toggleCollapsed = event => {
-    if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    portfolioState[stateKey] = portfolioState[stateKey] !== true;
-    save();
-    applyCollapsed();
-  };
-  head.addEventListener('click', toggleCollapsed);
-  head.addEventListener('keydown', toggleCollapsed);
-  context.onCleanup(() => {
-    head.removeEventListener('click', toggleCollapsed);
-    head.removeEventListener('keydown', toggleCollapsed);
-  });
-
-  return { el, rows };
+  return { el, head };
 }
 
 function _renderMovers() {
   if (!_moversEl) return;
-  // Already sorted by |valueChange| descending (see daily-attribution.js),
-  // so filtering by sign keeps each side's own correct ranking without
-  // needing to re-sort here.
-  const movers = _dailyAttribution?.movers ?? [];
-  const winners = movers.filter(m => m.valueChange >= 0).slice(0, MAX_MOVERS_PER_SIDE);
-  const losers = movers.filter(m => m.valueChange < 0).slice(0, MAX_MOVERS_PER_SIDE);
-  const show = portfolioState.moversVisible !== false && (winners.length > 0 || losers.length > 0);
+  const period = _activePeriod();
+  const spec = PERIOD_ATTRIBUTION[period];
+  // Already sorted by |valueChange| descending (see daily-attribution.js).
+  const movers = spec ? (_attribution[period]?.movers ?? []).slice(0, MAX_MOVERS) : [];
+  const show = portfolioState.moversVisible !== false && movers.length > 0;
   _moversEl.style.display = show ? '' : 'none';
   if (!show) return;
   const { symbol } = compositionSnapshot();
@@ -556,42 +521,41 @@ function _renderMovers() {
   // list too instead of only the tiles/ATH -- and so calling this every
   // updateBalanceDisplay() pass (including the once-per-frame path during
   // fullscreen scrubbing) is a cheap no-op on frames where neither moved.
-  const keyOf = list => list.map(m => `${m.symbol}:${m.valueChange}:${m.percentChange}`).join(',');
-  const renderKey = `${symbol}|${up}|${down}|${keyOf(winners)}|${keyOf(losers)}`;
+  const renderKey = `${period}|${symbol}|${up}|${down}|${movers.map(m => `${m.symbol}:${m.valueChange}:${m.percentChange}`).join(',')}`;
   if (renderKey === _lastMoversRenderKey) return;
   _lastMoversRenderKey = renderKey;
+  _moversEl.querySelector('.pt-mini-list-head').textContent = `MOVERS · ${spec.label}`;
 
-  const buildMoverRow = mover => {
+  const rows = movers.map(mover => {
     const isUp = mover.valueChange >= 0;
+    const amountText = `${isUp ? '+' : '-'}${symbol}${_deltaFmt.format(Math.abs(mover.valueChange))}`;
+    const pctText = _moverPercentText(mover.percentChange);
     const values = document.createElement('span');
     values.className = 'pt-mini-list-row-values';
-    values.style.color = _hexToRgba(isUp ? up : down, 0.85);
-    values.textContent = `${isUp ? '+' : '-'}${symbol}${_deltaFmt.format(Math.abs(mover.valueChange))}`;
+    if (pctText) {
+      const pct = document.createElement('span');
+      pct.className = 'pt-mini-list-row-secondary';
+      pct.textContent = pctText;
+      values.append(pct);
+    }
+    const amount = document.createElement('span');
+    amount.style.color = _hexToRgba(isUp ? up : down, 0.85);
+    amount.textContent = amountText;
+    values.append(amount);
     const row = _buildMiniListRow(mover.symbol, values);
-    const pctText = _moverPercentText(mover.percentChange);
-    row.title = `${mover.symbol} · ${isUp ? '+' : '-'}${symbol}${_deltaFmt.format(Math.abs(mover.valueChange))}${pctText ? ` (${pctText})` : ''} over the last 24h`;
+    row.title = `${mover.symbol} · ${amountText}${pctText ? ` (${pctText})` : ''} over the last ${spec.label.toLowerCase()}`;
     return row;
-  };
-
-  // Two side-by-side columns (winners left, losers right) instead of one
-  // stacked list -- fits the top 5 of each in about the vertical space a
-  // single mixed-list column used to take for its top 4.
-  const winnersCol = document.createElement('div');
-  winnersCol.className = 'pt-movers-col';
-  winnersCol.append(...winners.map(buildMoverRow));
-
-  const losersCol = document.createElement('div');
-  losersCol.className = 'pt-movers-col';
-  losersCol.append(...losers.map(buildMoverRow));
-
-  const rows = _moversEl.querySelector('.pt-movers-rows');
-  rows.replaceChildren(winnersCol, losersCol);
+  });
+  _moversEl.querySelector('.pt-movers-rows').replaceChildren(...rows);
 }
 
 function _renderFlow() {
   if (!_flowEl) return;
-  const flow = _dailyAttribution?.flow;
-  const show = portfolioState.flowVisible !== false && !!flow && _dailyAttribution.flowConfident;
+  const period = _activePeriod();
+  const spec = PERIOD_ATTRIBUTION[period];
+  const attribution = spec ? _attribution[period] : null;
+  const flow = attribution?.flow;
+  const show = portfolioState.flowVisible !== false && !!flow && attribution.flowConfident;
   _flowEl.style.display = show ? '' : 'none';
   if (!show) return;
   const { symbol } = compositionSnapshot();
@@ -603,12 +567,13 @@ function _renderFlow() {
   const contributorsTitle = contributors => contributors.length
     ? contributors.slice(0, 4).map(c => `${c.symbol} ${fmt(c.amount)}`).join(', ')
     : null;
-  const { depositContributors = [], withdrawalContributors = [] } = _dailyAttribution;
+  const { depositContributors = [], withdrawalContributors = [] } = attribution;
   // See _renderMovers' matching comment -- same reasoning, same cheap-noop
   // goal once this is called from updateBalanceDisplay() below.
-  const renderKey = `${symbol}|${up}|${down}|${flow.market}|${flow.deposits}|${flow.withdrawals}|${flow.net}`;
+  const renderKey = `${period}|${symbol}|${up}|${down}|${flow.market}|${flow.deposits}|${flow.withdrawals}|${flow.net}`;
   if (renderKey === _lastFlowRenderKey) return;
   _lastFlowRenderKey = renderKey;
+  _flowEl.querySelector('.pt-mini-list-head').textContent = `CHANGE · ${spec.label}`;
   const rows = _flowEl.querySelector('.pt-flow-rows');
   rows.replaceChildren(
     ...[
@@ -866,8 +831,6 @@ export function mountPerformanceSection(bodyEl, context) {
   // and $ together, same as the invested/cash bar below.
   _performanceEl = document.createElement('div');
   _performanceEl.id = 'tc-balance-performance';
-  _performanceEl.setAttribute('role', 'button');
-  _performanceEl.tabIndex = 0;
   _performanceEl.style.cssText = [
     'display:grid', 'grid-template-columns:repeat(3,minmax(0,1fr))',
     'column-gap:6px',
@@ -892,7 +855,11 @@ export function mountPerformanceSection(bodyEl, context) {
   _performanceCards.clear();
   for (const option of CHANGE_RANGES) {
     const card = document.createElement('div');
+    card.className = 'pt-perf-card';
+    card.dataset.period = option.id;
     card.style.cssText = PERF_CARD_STYLE;
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
     const headerEl = document.createElement('div');
     headerEl.style.cssText = PERF_HEADER_STYLE;
     headerEl.textContent = option.label;
@@ -904,33 +871,41 @@ export function mountPerformanceSection(bodyEl, context) {
     _performanceCards.set(option.id, { card, valueEl, renderKey: null });
   }
 
-  // The tiles' own DOM is stable (only text/color changes on flip, no
-  // innerHTML replacement), so the listener can live directly on it
-  // rather than delegating from an outer host the way the composition
-  // bar's does. Click, or Enter/Space since this is a role="button".
+  // A tile selects its period: the lists below show that period's movers
+  // and change (Day, Week) or the all-time high and low (Total). Choosing
+  // the tile that is already selected flips every tile between % and $.
+  // The tiles' own DOM is stable (only text/color changes, no innerHTML
+  // replacement), so the listener can live on the row itself.
   const performanceEl = _performanceEl;
-  const flipPerformanceMode = event => {
+  const onTile = event => {
     if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+    const card = event.target.closest('[data-period]');
+    if (!card) return;
     event.preventDefault();
-    portfolioState.performanceShowAmount = !portfolioState.performanceShowAmount;
+    if (card.dataset.period === _activePeriod()) {
+      portfolioState.performanceShowAmount = !portfolioState.performanceShowAmount;
+    } else {
+      portfolioState.performancePeriod = card.dataset.period;
+      _lastMoversRenderKey = _lastFlowRenderKey = _lastAthRenderKey = null;
+      if (PERIOD_ATTRIBUTION[card.dataset.period] && !_attribution[card.dataset.period]) void _refreshAttribution(card.dataset.period);
+    }
     save();
     for (const refs of _performanceCards.values()) refs.renderKey = null;
-    _renderPerformance();
+    updateBalanceDisplay();
   };
-  performanceEl.addEventListener('click', flipPerformanceMode);
-  performanceEl.addEventListener('keydown', flipPerformanceMode);
+  performanceEl.addEventListener('click', onTile);
+  performanceEl.addEventListener('keydown', onTile);
   context.onCleanup(() => {
-    performanceEl.removeEventListener('click', flipPerformanceMode);
-    performanceEl.removeEventListener('keydown', flipPerformanceMode);
+    performanceEl.removeEventListener('click', onTile);
+    performanceEl.removeEventListener('keydown', onTile);
   });
 
-  ({ el: _moversEl } = _mountMiniList(context, 'tc-balance-movers', "TODAY'S MOVERS", 'pt-movers-rows', 'moversCollapsed'));
-  _moversEl.style.display = 'none'; // shown once _refreshDailyAttribution() has something to show
-
-  ({ el: _flowEl } = _mountMiniList(context, 'tc-balance-flow', 'PORTFOLIO CHANGE · 24H', 'pt-flow-rows', 'flowCollapsed'));
+  ({ el: _moversEl } = _mountBlock('tc-balance-movers', 'pt-movers-rows'));
+  _moversEl.style.display = 'none'; // shown once _refreshAttribution() has something to show
+  ({ el: _flowEl } = _mountBlock('tc-balance-flow', 'pt-flow-rows'));
   _flowEl.style.display = 'none';
-
-  ({ el: _athEl } = _mountMiniList(context, 'tc-balance-ath', 'ALL-TIME', 'pt-ath-rows', 'athCollapsed'));
+  ({ el: _athEl } = _mountBlock('tc-balance-ath', 'pt-ath-rows'));
+  _athEl.querySelector('.pt-mini-list-head').textContent = 'ALL-TIME';
   _athEl.style.display = 'none';
 
   wrap.appendChild(_performanceEl);
@@ -938,12 +913,11 @@ export function mountPerformanceSection(bodyEl, context) {
   wrap.appendChild(_flowEl);
   wrap.appendChild(_athEl);
 
-
-  // One shared on-demand fetch feeds both Movers and the flow split (see
-  // _refreshDailyAttribution) -- refreshed on a slow timer since "what did
-  // I hold 24h ago" doesn't need to be any fresher than that.
-  _refreshDailyAttribution();
-  context.setInterval(_refreshDailyAttribution, DAILY_ATTRIBUTION_REFRESH_MS);
+  // One on-demand fetch per period feeds both Movers and the change split
+  // (see _refreshAttribution) -- refreshed on a slow timer since "what did
+  // I hold a day (or a week) ago" doesn't need to be any fresher than that.
+  void _refreshAttribution();
+  context.setInterval(() => void _refreshAttribution(), ATTRIBUTION_REFRESH_MS);
 
   updateBalanceDisplay();
 }
@@ -1171,10 +1145,13 @@ function _renderPerformance() {
   const { up, down } = _getColors();
   const { symbol } = compositionSnapshot();
   const showAmount = !!portfolioState.performanceShowAmount;
-  _performanceEl.setAttribute('aria-pressed', String(showAmount));
+  const activePeriod = _activePeriod();
   for (const { id, label } of CHANGE_RANGES) {
     const refs = _performanceCards.get(id);
     if (!refs) continue;
+    const active = id === activePeriod;
+    refs.card.classList.toggle('is-active', active);
+    refs.card.setAttribute('aria-pressed', String(active));
     const change = _periodChange(id);
     const available = Number.isFinite(change?.percent);
     const amountAvailable = Number.isFinite(change?.amount);
@@ -1200,7 +1177,7 @@ function _renderPerformance() {
     const renderKey = `${text}|${valueColor}|${bgColor}|${borderColor}`;
     if (renderKey === refs.renderKey) continue;
     refs.renderKey = renderKey;
-    refs.valueEl.title = `${label} portfolio change: ${signedPercentText}${signedAmountText !== '—' ? ` (${signedAmountText})` : ''} — click to show ${showAmount ? 'percentage' : 'amount'}`;
+    refs.card.title = `${label} portfolio change: ${signedPercentText}${signedAmountText !== '—' ? ` (${signedAmountText})` : ''} — ${active ? `click to show ${showAmount ? 'percentage' : 'amount'}` : 'click to show this period below'}`;
     refs.valueEl.style.color = valueColor;
     refs.valueEl.textContent = text;
     refs.card.style.background = bgColor;

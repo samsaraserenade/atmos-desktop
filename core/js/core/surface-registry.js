@@ -49,10 +49,6 @@ export function unregisterSurface(id) {
   }
 }
 
-export function listSurfaces() {
-  return [...entries.entries()].map(([id, { def }]) => ({ id, layer: def.layer }));
-}
-
 window.addEventListener('beforeunload', () => {
   for (const id of [...entries.keys()]) unregisterSurface(id);
 });

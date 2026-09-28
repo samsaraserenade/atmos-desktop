@@ -24,11 +24,6 @@ import { renderConnections } from './connections-list.js';
 import { isEngine } from './host/frame.js';
 import { applyHistoryChange, composeHistoryChanges, diffHistoryTail } from './history-change.js';
 
-// Markets is part of Finance; share its module instance and watchlist state.
-let _watchlistModPromise = null;
-function _loadWatchlist() {
-  return _watchlistModPromise ??= import('../markets/watchlist.js');
-}
 const exchanges   = [];
 const _portfolios = new Map();
 let _remoteMode = false;
@@ -179,8 +174,6 @@ export function applyEngineState(snapshot) {
   notifyPortfolioUpdate();
   return snapshot.historyEpoch === _appliedHistoryEpoch && _appliedHistoryRevision >= snapshot.historyRevision;
 }
-/** View: the VPS history revision this frame has. */
-export function appliedHistoryRevision() { return _appliedHistoryRevision; }
 
 // ── Portfolio value history (for candlestick/time-series charting) ────────────
 //
@@ -372,10 +365,6 @@ export function setPortfolioData(id, data) {
   notifyPortfolioUpdate();
 }
 
-export function getPortfolioData(id) {
-  return _portfolios.get(id) ?? null;
-}
-
 export function getAllPortfolios() {
   return _portfolios;
 }
@@ -447,12 +436,6 @@ export function recordPortfolioHistoryFrame(ts = Date.now(), { settled = true } 
     _markPortfolioHistoryDirty(id, shifted ? 0 : arr.length - 1);
   }
   _schedulePortfolioHistorySave();
-}
-
-// Timestamped connector publications for one id, oldest first. Returns a
-// shallow array copy; snapshot payloads are read-only by convention.
-export function getPortfolioHistory(id) {
-  return (_history.get(id) ?? []).slice();
 }
 
 // Read-only-by-convention view used to reconstruct the aggregate chart.

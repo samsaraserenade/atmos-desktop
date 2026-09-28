@@ -32,11 +32,13 @@ import { installAltChartSync } from './src/alt-chart-sync.js';
 // ticker tracking, and pending-query mechanism the Markets sidebar accordion
 // (markets/sidebar.js) and Markets' own ticker input (markets/panel.js)
 // already use — no separate polling loop, no new state namespace.
-import { tickerData, onUpdate as onTickerUpdate, updateTickerActive } from './markets/src/watchlist-data.js';
+import { tickerData, onUpdate as onTickerUpdate, updateTickerActive, addTicker, removeTicker, heldSymbols, accountShareFor } from './markets/src/watchlist-data.js';
 import { watchlistState, marketQueryState, onQueryRemembered } from './markets/persist.js';
 import { chartLabel, parseMarketQuery, KNOWN_EXCHANGES } from './markets/src/query-engine.js';
 import { queueMarketQuery } from './markets/src/session.js';
 import { hasMarketData } from './src/host/market-data.js';
+import { getTotal } from './src/totals.js';
+import { masked } from './src/privacy.js';
 
 const CHART_MODE_EVENT = 'atmos:chart-mode';
 let marketsPanelPromise = null;
@@ -329,12 +331,18 @@ function mountChartPanel(contentEl, context) {
     const syncTickerPickerLabel = () => {
       tickerPickerLabel.textContent = getLabel();
     };
+    // The sheet: fitted into the panel's bottom-left corner, rising from the
+    // toolbar (its bottom edge is set on open from the toolbar's real top,
+    // so a taller dock still gets a flush fit). Search, the exchanges as
+    // plain-text toggles, then Portfolio, your holdings and the watchlist.
+    // This is also where the watchlist is kept now: a symbol is added from
+    // the search and removed from its row.
     const tickerPickerPanel = document.createElement('div');
     tickerPickerPanel.className = 'finance-ticker-picker-panel';
     tickerPickerPanel.hidden = true;
     tickerPickerPanel.setAttribute('role', 'listbox');
     tickerPickerPanel.setAttribute('aria-label', 'Switch chart');
-    tickerPickerPanel.innerHTML = `<input type="text" class="finance-ticker-picker-search" placeholder="Search or paste a ticker…" autocomplete="off" spellcheck="false" aria-label="Search tickers">
+    tickerPickerPanel.innerHTML = `<input type="text" class="finance-ticker-picker-search" placeholder="Search, or type a ticker to add…" autocomplete="off" spellcheck="false" aria-label="Search tickers">
       <div class="finance-exchange-picker" role="group" aria-label="Exchanges"></div>
       <div class="finance-ticker-picker-list"></div>`;
     tickerPicker.append(tickerPickerButton, tickerPickerPanel);
@@ -369,63 +377,147 @@ function mountChartPanel(contentEl, context) {
         exchangeRow.appendChild(button);
       }
     };
-  
+
     const formatTickerPrice = price => !Number.isFinite(price) ? '…'
       : price >= 1000 ? '$' + price.toLocaleString('en-US', { maximumFractionDigits: 0 })
       : price >= 1 ? '$' + price.toFixed(2) : '$' + price.toPrecision(4);
     const formatTickerChange = change => change == null ? '' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+    const formatShare = share => `${Math.round(share * 100)}%`;
+    const formatTotal = masked(total => `${total.symbol}${total.value.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
     // Core's shared semantic palette (positive/negative/neutral).
     const colorForTickerChange = colorForChange;
-  
+
     const closeTickerPicker = () => {
       if (tickerPickerPanel.hidden) return;
       tickerPickerPanel.hidden = true;
       tickerPickerButton.setAttribute('aria-expanded', 'false');
     };
-  
+
+    const heading = text => {
+      const el = document.createElement('div');
+      el.className = 'finance-ticker-picker-heading';
+      el.textContent = text;
+      return el;
+    };
+    const symbolRow = (symbol, { held = false, removable = false } = {}) => {
+      const data = tickerData[symbol];
+      const row = document.createElement('div');
+      row.className = `finance-ticker-picker-row${held ? ' is-held' : ''}`;
+      row.setAttribute('role', 'option');
+      row.tabIndex = 0;
+      row.dataset.symbol = symbol;
+      const share = held ? accountShareFor(symbol) : null;
+      row.innerHTML = `<span class="finance-ticker-picker-symbol"></span><span class="finance-ticker-picker-share"></span><span class="finance-ticker-picker-price"></span><span class="finance-ticker-picker-change"></span>`;
+      row.querySelector('.finance-ticker-picker-symbol').textContent = symbol;
+      row.querySelector('.finance-ticker-picker-share').textContent = share != null ? formatShare(share) : '';
+      row.querySelector('.finance-ticker-picker-price').textContent = formatTickerPrice(data?.price);
+      const changeEl = row.querySelector('.finance-ticker-picker-change');
+      changeEl.textContent = formatTickerChange(data?.change ?? null);
+      changeEl.style.color = colorForTickerChange(data?.change ?? null);
+      row.title = share != null ? `${symbol} · ${formatShare(share)} of your account` : symbol;
+      if (removable) {
+        row.dataset.removable = 'true';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'finance-ticker-picker-remove';
+        remove.title = `Remove ${symbol} from the watchlist`;
+        remove.setAttribute('aria-label', `Remove ${symbol} from the watchlist`);
+        remove.textContent = '×';
+        row.append(remove);
+      }
+      return row;
+    };
+    // Rows are rebuilt on every render, so their handlers are delegated
+    // from the list (below) rather than attached per row: `actions` maps an
+    // action row's id to what it does for the current render.
+    const actions = new Map();
+    const actionRow = (label, sub, run, className = '') => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `finance-ticker-picker-row finance-ticker-picker-action ${className}`.trim();
+      row.setAttribute('role', 'option');
+      row.dataset.action = String(actions.size);
+      actions.set(row.dataset.action, run);
+      row.innerHTML = '<span class="finance-ticker-picker-symbol"></span><span class="finance-ticker-picker-sub"></span>';
+      row.querySelector('.finance-ticker-picker-symbol').textContent = label;
+      row.querySelector('.finance-ticker-picker-sub').textContent = sub;
+      return row;
+    };
+    // The Portfolio entry: the balance chart is what the picker leaves for
+    // most of the time, so it is a card of its own above the lists, with the
+    // live total, rather than one more row.
+    const portfolioRow = () => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `finance-ticker-picker-row finance-ticker-picker-portfolio${getQuery() ? '' : ' is-current'}`;
+      row.setAttribute('role', 'option');
+      row.dataset.action = String(actions.size);
+      actions.set(row.dataset.action, () => { closeTickerPicker(); onSelect(null); });
+      const total = getTotal();
+      const holdings = heldSymbols().length;
+      const sources = total.liveCount + total.pendingCount;
+      const detail = [holdings ? `${holdings} holding${holdings === 1 ? '' : 's'}` : null,
+        sources ? `${sources} source${sources === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ') || 'Balance chart';
+      row.innerHTML = `<span class="finance-ticker-picker-portfolio-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 5-7 4 4"/></svg></span>
+        <span class="finance-ticker-picker-portfolio-text"><span class="finance-ticker-picker-symbol">Portfolio</span><span class="finance-ticker-picker-sub"></span></span>
+        <span class="finance-ticker-picker-portfolio-total"></span>`;
+      row.querySelector('.finance-ticker-picker-sub').textContent = detail;
+      row.querySelector('.finance-ticker-picker-portfolio-total').textContent = total.ready && sources ? formatTotal(total) : '';
+      row.title = 'Show the balance chart';
+      return row;
+    };
+    const openSymbol = symbol => { closeTickerPicker(); onSelect(withExchanges(`${symbol}USDT`)); };
+    context.listen(tickerList, 'click', event => {
+      const remove = event.target.closest('.finance-ticker-picker-remove');
+      const row = event.target.closest('[role="option"]');
+      if (!row) return;
+      if (remove) { removeTicker(row.dataset.symbol); tickerSearch.focus(); return; }
+      if (row.dataset.action) actions.get(row.dataset.action)?.();
+      else if (row.dataset.symbol) openSymbol(row.dataset.symbol);
+    });
+
     const renderTickerPicker = () => {
       if (tickerPickerPanel.hidden) return;
+      actions.clear();
       const query = tickerSearch.value.trim().toUpperCase();
-      tickerList.replaceChildren();
-      const portfolioRow = document.createElement('button');
-      portfolioRow.type = 'button';
-      portfolioRow.className = 'finance-ticker-picker-row finance-ticker-picker-portfolio';
-      portfolioRow.setAttribute('role', 'option');
-      portfolioRow.innerHTML = '<span class="finance-ticker-picker-symbol">Portfolio</span><span class="finance-ticker-picker-sub">Balance chart</span>';
-      context.listen(portfolioRow, 'click', () => { closeTickerPicker(); onSelect(null); });
-      tickerList.appendChild(portfolioRow);
-      const tickers = [...watchlistState.tickers]
-        .filter(symbol => !query || symbol.includes(query))
-        .sort((a, b) => (tickerData[b]?.change ?? -Infinity) - (tickerData[a]?.change ?? -Infinity));
-      for (const symbol of tickers) {
-        const data = tickerData[symbol];
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'finance-ticker-picker-row';
-        row.setAttribute('role', 'option');
-        row.innerHTML = `<span class="finance-ticker-picker-symbol">${symbol}</span><span class="finance-ticker-picker-price">${formatTickerPrice(data?.price)}</span><span class="finance-ticker-picker-change">${formatTickerChange(data?.change)}</span>`;
-        row.querySelector('.finance-ticker-picker-change').style.color = colorForTickerChange(data?.change ?? null);
-        context.listen(row, 'click', () => {
-          closeTickerPicker();
-          onSelect(withExchanges(`${symbol}USDT`));
-        });
-        tickerList.appendChild(row);
+      const matches = symbol => !query || symbol.includes(query);
+      const byChange = (a, b) => (tickerData[b]?.change ?? -Infinity) - (tickerData[a]?.change ?? -Infinity);
+      const held = heldSymbols().filter(matches).sort(byChange);
+      const heldSet = new Set(heldSymbols());
+      const watched = watchlistState.tickers.filter(symbol => !heldSet.has(symbol) && matches(symbol)).sort(byChange);
+      const known = new Set([...heldSet, ...watchlistState.tickers]);
+      const items = [];
+      if (!query) items.push(portfolioRow());
+      if (held.length) items.push(heading('Holdings'), ...held.map(symbol => symbolRow(symbol, { held: true })));
+      if (watched.length) items.push(heading('Watchlist'), ...watched.map(symbol => symbolRow(symbol, { removable: true })));
+      if (!query && !watched.length) {
+        const hint = document.createElement('div');
+        hint.className = 'finance-ticker-picker-hint';
+        hint.textContent = 'Type a ticker above to watch it here.';
+        items.push(heading('Watchlist'), hint);
       }
-      if (!tickers.length && query) {
-        const jump = document.createElement('button');
-        jump.type = 'button';
-        jump.className = 'finance-ticker-picker-row finance-ticker-picker-jump';
-        jump.setAttribute('role', 'option');
-        jump.innerHTML = `<span class="finance-ticker-picker-symbol">Look up “${query}”</span>`;
-        context.listen(jump, 'click', () => {
-          closeTickerPicker();
-          onSelect(withExchanges(/(?:USDT|USDC|USD)$/.test(query) ? query : `${query}USDT`));
-        });
-        tickerList.appendChild(jump);
+      if (query && !known.has(query)) {
+        const symbol = /(?:USDT|USDC|USD)$/.test(query) ? query : `${query}USDT`;
+        items.push(heading('Not on your lists'),
+          actionRow(`Look up ${query}`, 'Open its chart', () => { closeTickerPicker(); onSelect(withExchanges(symbol)); }),
+          actionRow(`Watch ${query}`, 'Add to the watchlist', async () => {
+            const added = await addTicker(query);
+            if (context.signal?.aborted) return;
+            if (added) { tickerSearch.value = ''; renderTickerPicker(); }
+            else { tickerSearch.classList.add('err'); context.setTimeout(() => tickerSearch.classList.remove('err'), 700); }
+          }));
       }
+      tickerList.replaceChildren(...items);
+    };
+    const fitToCorner = () => {
+      // Flush with the dock's top edge, whatever height the dock has.
+      const dock = tickerPicker.closest('.finance-portfolio-toolbar, .mq-toolbar');
+      const top = dock?.getBoundingClientRect().top;
+      tickerPickerPanel.style.bottom = Number.isFinite(top) ? `${Math.max(0, window.innerHeight - top)}px` : '';
     };
     const openTickerPicker = () => {
       if (!tickerPickerPanel.hidden) return;
+      fitToCorner();
       tickerPickerPanel.hidden = false;
       tickerPickerButton.setAttribute('aria-expanded', 'true');
       tickerSearch.value = '';
@@ -436,16 +528,29 @@ function mountChartPanel(contentEl, context) {
       tickerSearch.focus();
     };
     context.listen(tickerPickerButton, 'click', () => (tickerPickerPanel.hidden ? openTickerPicker() : closeTickerPicker()));
+    context.listen(window, 'resize', () => { if (!tickerPickerPanel.hidden) fitToCorner(); });
     context.listen(tickerSearch, 'input', renderTickerPicker);
     context.listen(tickerSearch, 'keydown', event => {
       event.stopPropagation();
       if (event.key === 'Escape') { closeTickerPicker(); tickerPickerButton.focus(); return; }
+      if (event.key === 'ArrowDown') { event.preventDefault(); tickerList.querySelector('[role="option"]')?.focus(); return; }
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      const target = tickerSearch.value.trim()
-        ? tickerList.querySelector('.finance-ticker-picker-row:not(.finance-ticker-picker-portfolio)')
-        : tickerList.querySelector('.finance-ticker-picker-portfolio');
-      target?.click();
+      // Enter: the first row that matches, else Portfolio when nothing was typed.
+      const first = tickerList.querySelector('.finance-ticker-picker-row:not(.finance-ticker-picker-portfolio)');
+      (tickerSearch.value.trim() ? first : tickerList.querySelector('.finance-ticker-picker-portfolio'))?.click();
+    });
+    context.listen(tickerList, 'keydown', event => {
+      const row = event.target.closest('[role="option"]');
+      if (row?.dataset.symbol && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openSymbol(row.dataset.symbol); return; }
+      if (row?.dataset.removable && (event.key === 'Delete' || event.key === 'Backspace')) { event.preventDefault(); removeTicker(row.dataset.symbol); return; }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Escape') return;
+      event.preventDefault();
+      if (event.key === 'Escape') { closeTickerPicker(); tickerPickerButton.focus(); return; }
+      const options = [...tickerList.querySelectorAll('[role="option"]')];
+      const index = options.indexOf(document.activeElement);
+      const next = options[index + (event.key === 'ArrowDown' ? 1 : -1)];
+      if (next) next.focus(); else if (event.key === 'ArrowUp') tickerSearch.focus();
     });
     context.listen(document, 'pointerdown', event => {
       if (tickerPickerPanel.hidden || tickerPicker.contains(event.target)) return;
@@ -454,7 +559,7 @@ function mountChartPanel(contentEl, context) {
     context.onCleanup(onTickerUpdate(() => { renderTickerPicker(); syncTickerPickerLabel(); }));
     context.onCleanup(onPriceColorChange(renderTickerPicker));
     renderTickerPicker();
-  
+
     syncTickerPickerLabel();
     // Without Market Data there are no market charts to switch to.
     if (!hasMarketData()) tickerPicker.hidden = true;

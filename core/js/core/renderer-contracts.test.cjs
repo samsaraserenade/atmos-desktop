@@ -327,7 +327,7 @@ test('shell and panel appearance settings remain independently scoped', () => {
 });
 
 test('panel appearance resolves persisted overrides independently from shell appearance', async () => {
-  const modules = tempModules(['persist.js', 'core/semantic-colors.js', 'core/appearance.js']);
+  const modules = tempModules(['persist.js', 'core/semantic-colors.js', 'core/escape-html.js', 'core/appearance.js']);
   const saved = new Map([['samsara_v4', JSON.stringify({
     coreState: {
       appearance: { version: 1, data: {

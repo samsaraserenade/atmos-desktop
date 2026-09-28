@@ -83,4 +83,4 @@ function scanTree(dir, terms) {
 
 function isNoreply(email) { return NOREPLY.test(email || ''); }
 
-module.exports = { forbiddenTerms, localTerms, scanTree, isNoreply };
+module.exports = { forbiddenTerms, scanTree, isNoreply };

@@ -5,5 +5,4 @@
  */
 const _sections = new Map();
 export function registerSection(id, def) { _sections.set(id, def); }
-export function unregisterSection(id) { _sections.delete(id); }
 export function getRegisteredSection(id) { return _sections.get(id) ?? null; }

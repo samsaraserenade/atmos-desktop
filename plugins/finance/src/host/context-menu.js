@@ -7,5 +7,3 @@ import { atmos } from './frame.js';
 export function openMenu(x, y, items, { onClose } = {}) {
   atmos.contextMenu.open(x, y, items).finally(() => onClose?.());
 }
-/** Atmos closes its menus itself when the pointer is used elsewhere. */
-export function closeOpenMenu() {}

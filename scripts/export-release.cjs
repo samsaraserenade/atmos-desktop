@@ -199,5 +199,5 @@ function pruneE2eReadme(text, left) {
   return out.join('\n');
 }
 
-module.exports = { exportTo, planExport, pruneE2eReadme, pruneGitignore, stripPrivate };
+module.exports = { exportTo };
 if (require.main === module) main();

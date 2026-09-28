@@ -182,26 +182,6 @@ body.drawer-open #titlebar { right:290px; }
 html[data-sidebar-position="left"] body.drawer-open #media-fullscreen,
 html[data-sidebar-position="left"] body.drawer-open #titlebar { left:290px; right:0; }
 html[data-sidebar-position="left"] body.drawer-open #media-fullscreen[data-panel-layout="freeform"] { left:0; }
-/* T212 settings panel */
-.t212-panel { padding:8px 12px 10px; display:flex; flex-direction:column; gap:7px; }
-.t212-field-inp { background:rgba(var(--ink-rgb),.06); border:1px solid rgba(var(--ink-rgb),.12); color:rgb(var(--ink-rgb)); border-radius:5px; padding:5px 9px; font-size:0.7rem; font-family:inherit; letter-spacing:.02em; width:100%; outline:none; }
-.t212-field-inp::placeholder { color:rgba(var(--ink-rgb),.25); }
-.t212-field-inp:focus { border-color:rgba(var(--ink-rgb),.28); }
-.t212-env-select { background:rgba(var(--ink-rgb),.06); border:1px solid rgba(var(--ink-rgb),.12); color:rgba(var(--ink-rgb),.8); border-radius:5px; padding:5px 9px; font-size:0.7rem; font-family:inherit; width:100%; outline:none; cursor:pointer; appearance:none; }
-.t212-env-select option { background:rgb(var(--surface-rgb)); color:rgb(var(--ink-rgb)); }
-.t212-save-btn { background:rgba(var(--ink-rgb),.1); border:1px solid rgba(var(--ink-rgb),.16); color:rgba(var(--ink-rgb),.8); border-radius:5px; padding:6px 0; font-size:0.65rem; letter-spacing:.1em; text-transform:uppercase; cursor:pointer; font-family:inherit; transition:background .1s,color .1s; width:100%; }
-.t212-save-btn:hover { background:rgba(var(--ink-rgb),.18); color:rgb(var(--ink-rgb)); }
-.t212-field-label { font-size:0.6rem; color:rgba(var(--ink-rgb),.3); letter-spacing:.1em; text-transform:uppercase; margin-bottom:2px; }
-.t212-active-row { display:flex; align-items:center; gap:8px; }
-.t212-active-key { font-size:0.65rem; color:rgba(var(--ink-rgb),.45); letter-spacing:.04em; flex:1; font-variant-numeric:tabular-nums; }
-.t212-active-env-badge { font-size:0.58rem; background:rgba(74,222,128,.12); color:#4ade80; border:1px solid rgba(74,222,128,.25); border-radius:3px; padding:1px 5px; letter-spacing:.06em; flex-shrink:0; }
-.t212-rm-btn { background:none; border:none; color:rgba(var(--ink-rgb),.2); cursor:pointer; font-size:0.65rem; padding:2px 5px; border-radius:3px; font-family:inherit; transition:color .1s; flex-shrink:0; }
-.t212-rm-btn:hover { color:#f87171; }
-.t212-hint { font-size:0.6rem; color:rgba(var(--ink-rgb),.22); letter-spacing:.04em; line-height:1.5; }
-.t212-status { font-size:0.62rem; letter-spacing:.04em; }
-.t212-status.ok  { color:#4ade80; }
-.t212-status.err { color:#f87171; }
-
 
 /* Shared frosted-glass menu chrome — used by Core's own workspace menu
    (#ctx-menu below) AND by every transient, per-target menu a plugin opens
@@ -297,8 +277,6 @@ html[data-sidebar-shadow="hidden"] #settings-drawer.open { box-shadow: none; }
 .fin-section-label:hover svg { opacity: .75; }
 /* label text takes all available space — pushes everything else to the right */
 .fin-section-name { flex: 1; }
-/* summary val — hidden; we rely on chevron only */
-.fin-section-val { display: none; }
 /* chevron — always rightmost, no auto-margin needed */
 .fin-section-chevron {
   width: 8px; height: 8px; flex-shrink: 0;
@@ -367,7 +345,6 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
   opacity: 1; pointer-events: all;
 }
 
-
 /* ── Settings ── modal overlay, distinct from the sidebar drawer above.
    Sidebar = always-there widgets; this = a proper settings app (left nav +
    content pane), opened on demand via the ctx menu's "Settings" item.
@@ -423,11 +400,6 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
   letter-spacing: .01em;
 }
 .sm-nav { display: flex; flex-direction: column; gap: 1px; }
-.sm-nav-group-label {
-  font-size: .55rem; letter-spacing: .12em; text-transform: uppercase;
-  color: rgba(var(--ink-rgb),.2); padding: 12px 10px 5px;
-}
-.sm-nav-group:first-child .sm-nav-group-label { padding-top: 0; }
 .sm-nav-item {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 10px; border-radius: 6px;
@@ -692,22 +664,6 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 }
 .sm-trust-secondary:hover { color: rgba(var(--ink-rgb),.85); background: rgba(var(--ink-rgb),.05); }
 .sm-trust-error { margin-top: 8px; color: rgb(248,113,113); }
-.sm-card-chevron {
-  width: 8px; height: 8px; flex-shrink: 0;
-  color: rgba(var(--ink-rgb),.2);
-  transition: transform .22s cubic-bezier(.22,1,.36,1), color .12s;
-}
-.sm-card.open .sm-card-chevron { transform: rotate(90deg); color: rgba(var(--ink-rgb),.4); }
-.sm-card.open .sm-card-name { color: rgb(var(--ink-rgb)); }
-.sm-card-body {
-  overflow: hidden; max-height: 0;
-  transition: max-height .28s cubic-bezier(.22,1,.36,1);
-}
-.sm-card.open .sm-card-body { max-height: 500px; }
-.sm-placeholder {
-  padding: 4px 12px 14px 50px; font-size: .68rem; color: rgba(var(--ink-rgb),.32);
-  line-height: 1.5;
-}
 
 /* ── Home ─────────────────────────────────────────────────────────────── */
 /* App info top-left, About in its own small scrollable pane to the right —
@@ -909,24 +865,7 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-toggle input:checked + .sm-toggle-track .sm-toggle-thumb { transform: translateX(14px); }
 .sm-toggle input:focus-visible + .sm-toggle-track { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-positive, #34d399) 50%, transparent); }
 
-/* ── Panels page (plugin workspace switcher) ─────────────────────────────
-   Reuses .sm-card/.sm-icon/.sm-card-text/.sm-card-body — same row shell
-   as the Sidebar page above, but a plugin's "open" card body doubles as
-   the row's selected state instead of independent per-row content (see
-   settings-menu.js's _renderPanelsPage()). .sm-radio stands in for
-   .sm-toggle since this is one choice among plugins, not N independent
-   on/off switches. */
-.sm-radio {
-  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
-  position: relative;
-  border: 1.5px solid rgba(var(--ink-rgb),.25);
-  transition: border-color .15s ease;
-}
-.sm-radio.checked { border-color: #818cf8; }
-.sm-radio.checked::after {
-  content: ''; position: absolute; inset: 3px;
-  border-radius: 50%; background: #818cf8;
-}
+/* ── Panels page (plugin workspace switcher) ───────────────────────────── */
 .sm-panel-layouts { display:flex; flex-wrap:wrap; gap:6px; padding:10px 0 14px; }
 .sm-panel-section { display:grid; grid-template-columns:minmax(90px,.7fr) minmax(150px,1fr); align-items:center; gap:12px; padding:10px 12px; border:1px solid rgba(var(--ink-rgb),.07); border-radius:8px; background:rgba(var(--ink-rgb),.025); margin-bottom:7px; }
 .sm-panel-section-name { font-size:.66rem; color:rgba(var(--ink-rgb),.5); letter-spacing:.08em; text-transform:uppercase; }
@@ -934,23 +873,6 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-panel-select:focus { border-color:rgba(129,140,248,.65); }
 
 /* ── Settings panel design system ──────────────────────────────────────── */
-/* Universal data row */
-.sd-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 14px;
-  border-bottom: 1px solid rgba(var(--ink-rgb),.04);
-  min-height: 32px;
-}
-.sd-row:last-child { border-bottom: none; }
-.sd-label { font-size: .72rem; color: rgba(var(--ink-rgb),.65); flex: 1; letter-spacing: .01em; }
-.sd-sublabel { font-size: .6rem; color: rgba(var(--ink-rgb),.25); letter-spacing: .03em; flex: 1; }
-.sd-val { font-size: .68rem; color: rgba(var(--ink-rgb),.3); font-variant-numeric: tabular-nums; white-space: nowrap; }
-
-/* Micro divider — groups related rows inside a merged section without full accordion chrome */
-.sd-subhead {
-  font-size: .56rem; letter-spacing: .12em; text-transform: uppercase;
-  color: rgba(var(--ink-rgb),.2); padding: 8px 14px 3px;
-}
 
 /* Single-button cycle control — click to advance through modes */
 .sd-pill {
@@ -963,48 +885,6 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sd-pill:hover { background: rgba(var(--ink-rgb),.09); color: rgba(var(--ink-rgb),.7); border-color: rgba(var(--ink-rgb),.16); }
 .sd-pill.active { background: rgba(var(--ink-rgb),.13); border-color: rgba(var(--ink-rgb),.26); color: rgb(var(--ink-rgb)); }
 
-/* Wrapping row of sd-pill options */
-.sd-pill-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 10px; border-bottom: 1px solid rgba(var(--ink-rgb),.04); }
-.sd-pill-row .sd-pill { font-size: .6rem; padding: 4px 9px; }
-
-
-.sd-cycle-btn {
-  background: none; border: none; cursor: pointer; padding: 2px 4px;
-  font-size: .9rem; line-height: 1; font-family: inherit;
-  opacity: .75; transition: opacity .12s, transform .12s; flex-shrink: 0;
-}
-.sd-cycle-btn:hover { opacity: 1; transform: scale(1.1); }
-
-/* Slim slider row */
-.sd-slider-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 4px 14px; min-height: 28px;
-  border-bottom: 1px solid rgba(var(--ink-rgb),.04);
-}
-.sd-slider-row:last-child { border-bottom: none; }
-.sd-slider-label { font-size: .65rem; color: rgba(var(--ink-rgb),.35); min-width: 56px; flex-shrink: 0; letter-spacing: .01em; }
-.sd-slider-val { font-size: .63rem; color: rgba(var(--ink-rgb),.28); min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0; }
-
-/* Colour swatch dots */
-.sd-color-dots { display: flex; gap: 5px; align-items: center; flex-shrink: 0; }
-.sd-color-dot {
-  width: 14px; height: 14px; border-radius: 50%;
-  border: 1px solid rgba(var(--ink-rgb),.18); cursor: pointer;
-  flex-shrink: 0; overflow: hidden;
-  transition: transform .1s, box-shadow .1s;
-}
-.sd-color-dot:hover { transform: scale(1.15); box-shadow: 0 0 0 2px rgba(var(--ink-rgb),.2); }
-.sd-color-dot input[type=color] {
-  width: 200%; height: 200%; margin: -50%; opacity: 0; cursor: pointer;
-  -webkit-appearance: none; border: none; padding: 0;
-}
-
-/* Gradient preview bar */
-.sd-grad-bar {
-  height: 3px; border-radius: 2px; flex: 1;
-  border: 1px solid rgba(var(--ink-rgb),.08); min-width: 0;
-}
-
 /* Inline text action link (replaces full-width buttons) */
 .sd-action {
   background: none; border: none; cursor: pointer; padding: 0;
@@ -1014,22 +894,11 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 }
 .sd-action:hover { color: rgba(var(--ink-rgb),.75); }
 
-/* Small toggle — more subordinate than vis-toggle */
-.sd-toggle { position: relative; width: 26px; height: 14px; flex-shrink: 0; cursor: pointer; }
-.sd-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
-.sd-ttrack { position: absolute; inset: 0; border-radius: 7px; background: var(--color-neutral, #9ca3af); border: 1px solid var(--color-neutral, #9ca3af); transition: background .2s, border-color .2s; }
-.sd-tthumb { position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: rgba(var(--ink-rgb),.35); transition: transform .2s, background .2s; }
-.sd-toggle input:checked ~ .sd-ttrack { background: var(--color-positive, #34d399); border-color: var(--color-positive, #34d399); }
-.sd-toggle input:checked ~ .sd-tthumb { transform: translateX(12px); background: rgb(var(--ink-rgb)); }
-
-
-
 /* drawer-nav tabs removed — single accordion panel */
 .ctx-lbl { padding:8px 12px 4px; font-size:.6rem; letter-spacing:.15em; text-transform:uppercase; color:rgba(var(--ink-rgb),.3); font-weight:600; }
 .ctx-sep { height:1px; background:rgba(var(--ink-rgb),.08); margin:4px 0; }
 .ctx-item { position:relative; display:flex; align-items:center; gap:10px; padding:7px 12px; border-radius:6px; font-size:.78rem; color:rgba(var(--ink-rgb),.85); cursor:pointer; transition:background .08s; letter-spacing:.02em; }
 .ctx-item:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
-.ctx-item:hover > .ctx-sub { opacity:1; pointer-events:all; transform:scale(1); }
 .ctx-ico { width:16px; height:16px; opacity:.6; flex-shrink:0; }
 .ctx-lbl2 { flex:1; }
 /* Destructive rows ({ tone: 'danger' }) and press-and-hold rows ({ hold: true }):
@@ -1074,39 +943,9 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .ctx-control-colors input[type="color"]::-webkit-color-swatch-wrapper { padding:0; }
 .ctx-control-colors input[type="color"]::-webkit-color-swatch { border:0; }
 .ctx-control-colors input[type="color"]::-moz-color-swatch { border:0; }
-.ctx-val { font-size:.7rem; color:rgba(var(--ink-rgb),.4); white-space:nowrap; }
-.ctx-arr { font-size:.6rem; opacity:.4; }
-.ctx-sub { position:absolute; left:calc(100% + 4px); top:-5px; min-width:180px; background:rgba(var(--surface-rgb),var(--shell-opacity, .88)); border:1px solid rgba(var(--ink-rgb),.1); border-radius:10px; padding:5px; backdrop-filter:blur(var(--shell-blur, 30px)); box-shadow:0 8px 32px rgba(0,0,0,.7); opacity:0; pointer-events:none; transform:scale(0.96); transform-origin:top left; transition:opacity .15s ease .08s, transform .15s ease .08s; }
-.ctx-item:hover > .ctx-sub { opacity:1; pointer-events:all; transform:scale(1); transition:opacity .1s ease, transform .1s ease; }
-.ctx-sub::before { content:''; position:absolute; left:-12px; top:0; width:12px; height:100%; }
-.ctx-sub.flip { left:auto; right:calc(100% + 4px); transform-origin:top right; }
-.ctx-sub.flip::before { left:auto; right:-12px; }
-.ctx-si { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:6px; font-size:.78rem; color:rgba(var(--ink-rgb),.75); cursor:pointer; transition:background .08s; }
-.ctx-si:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
-.ctx-si.on { color:rgb(var(--ink-rgb)); }
-.ctx-si .ck { width:14px; font-size:.75rem; color:rgba(var(--ink-rgb),.5); flex-shrink:0; }
-.ctx-si.on .ck { color:rgb(var(--ink-rgb)); }
-.color-swatch { width:28px; height:10px; border-radius:3px; flex-shrink:0; border:1px solid rgba(var(--ink-rgb),0.14); display:inline-block; }
 
-.ctx-acc { display:flex; align-items:center; gap:10px; padding:7px 12px; border-radius:6px; font-size:.78rem; color:rgba(var(--ink-rgb),.85); cursor:pointer; transition:background .08s; letter-spacing:.02em; user-select:none; }
-.ctx-acc:hover { background:rgba(var(--ink-rgb),.1); color:rgb(var(--ink-rgb)); }
-.ctx-acc .ctx-chevron { font-size:.55rem; opacity:.35; margin-left:auto; transition:transform .25s ease; display:inline-block; }
-.ctx-acc.open .ctx-chevron { transform:rotate(180deg); }
 .ctx-panel { overflow:hidden; max-height:0; opacity:0; transition:max-height .35s cubic-bezier(0.22,1,0.36,1), opacity .2s ease; }
 .ctx-panel.open { max-height:800px; opacity:1; }
-.vis-row { display:flex; align-items:center; justify-content:space-between; padding:5px 12px 5px 14px; gap:12px; }
-.vis-label { font-size:.74rem; color:rgba(var(--ink-rgb),.65); letter-spacing:.02em; }
-.vis-toggle { position:relative; width:30px; height:16px; flex-shrink:0; cursor:pointer; }
-.vis-toggle input { opacity:0; width:0; height:0; position:absolute; }
-.vis-track { position:absolute; inset:0; border-radius:8px; background:rgba(var(--ink-rgb),.12); border:1px solid rgba(var(--ink-rgb),.12); transition:background .2s, border-color .2s; }
-.vis-thumb { position:absolute; top:2px; left:2px; width:10px; height:10px; border-radius:50%; background:rgba(var(--ink-rgb),.4); transition:transform .2s, background .2s; }
-.vis-toggle input:checked ~ .vis-track { background:rgba(var(--ink-rgb),.22); border-color:rgba(var(--ink-rgb),.3); }
-.vis-toggle input:checked ~ .vis-thumb { transform:translateX(14px); background:rgb(var(--ink-rgb)); }
-.vis-panel { padding:4px 0 6px; }
-.vis-subheading { font-size:.58rem; letter-spacing:.14em; text-transform:uppercase; color:rgba(var(--ink-rgb),.25); font-weight:600; padding:6px 14px 2px; }
-
-
-
 
 /* AMOLED keeps the workspace black even when a wallpaper or transparent
    window is configured. Theme switching restores those preferences. */
@@ -1116,7 +955,6 @@ html[data-app-theme="amoled"] #boot-splash-bg { display:none !important; }
 html[data-app-theme="amoled"] #settings-drawer,
 html[data-app-theme="amoled"] #settings-menu-panel,
 html[data-app-theme="amoled"] .ctx-menu-surface,
-html[data-app-theme="amoled"] .ctx-sub,
 html[data-app-theme="amoled"] .panel-window-titlebar,
 html[data-app-theme="amoled"] #media-fullscreen .panel-section,
 html[data-app-theme="amoled"] .sm-sidebar,
@@ -1191,6 +1029,5 @@ html[data-app-theme="amoled"] #settings-menu {
     </div>
   </div><!-- /settings-panel-main -->
 </div><!-- /settings-drawer -->
-
 
 <script type="module" src="./app.js"></script>

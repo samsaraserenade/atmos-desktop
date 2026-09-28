@@ -38,6 +38,10 @@ assert.match(persist, /outputCurrency: 'GBP'/,
 assert.match(sidebar, /export function indicatorContextMenuItems\(\)/,
   'indicator controls must read current persisted state whenever the chart menu opens');
 assert.doesNotMatch(persist, /allocationMonotone:/, 'obsolete palette preference is no longer persisted');
+for (const flag of ['samsaraOverlayEnabled', 'samsaraMaEnabled', 'samsaraRsiEnabled', 'samsaraSessionsEnabled', 'samsaraCandleColoringEnabled', 'cashInvestedPaneVisible']) {
+  assert.match(persist, new RegExp(`${flag}: false`), `the chart starts with no indicators: ${flag}`);
+  assert.match(persist, new RegExp(`INDICATOR_FIELDS = \\[[^\\]]*'${flag}'`), `saved "on" from version 1 is dropped once: ${flag}`);
+}
 assert.doesNotMatch(persist, /chartBgOpacity/, 'panel opacity is owned by Core appearance settings');
 assert.doesNotMatch(sidebar + chart, /setChartOpacity|Background Opacity|chartBgOpacity/,
   'Portfolio must not retain a duplicate panel-opacity control');

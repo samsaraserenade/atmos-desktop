@@ -3,6 +3,7 @@
 // the VPS for the panel and six widgets; settings changed in one frame
 // reaching the others; a widget header menu; the chart's menu (ticks,
 // dropdowns); an Appearance font inside the frames; opening a watchlist
+// symbol from the panel's ticker picker (where the watchlist lives);
 // symbol's chart from a widget; the ']' toggle; state after a restart.
 // A synthetic VPS (fake-vps.cjs) stands in for the real one.
 // Usage: node scripts/e2e/finance.cjs [outDir]   (see scripts/e2e/README.md)
@@ -117,13 +118,11 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('portfolio-tracker'));
   const balance = await frameFor(s.page, 'Balance');
   const connections = await frameFor(s.page, 'Portfolio Connections');
-  const watchlist = await frameFor(s.page, 'Watchlist');
   const panel = await frameFor(s.page, 'Finance');
   await balance?.waitForFunction(() => /[0-9]/.test(document.body.innerText), null, { timeout: 15000 }).catch(() => {});
   await s.page.waitForTimeout(2000);
   r.balance = await text(balance);
   r.connections = await text(connections);
-  r.watchlist = await text(watchlist);
   r.spot = await text(await frameFor(s.page, 'Spot'));
   r.performance = await text(await frameFor(s.page, 'Performance'));
   r.panel = await panel?.evaluate(() => ({ mode: document.querySelector('.finance-portfolio-toolbar') ? 'portfolio' : 'other', text: document.body.innerText.slice(0, 80) })).catch(e => e.message);
@@ -185,12 +184,12 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   r.privateMode.balanceAfter = await text(balance);
   r.privateMode.axisAfter = await axisLabels();
 
-  step('// Opening a watchlist');
-  // Opening a watchlist symbol from the widget shows its chart in the panel.
-  await watchlist?.evaluate(() => {
-    const row = [...document.querySelectorAll('[data-symbol], .wl-row, .mk-row')].find(el => /SOL/.test(el.textContent));
-    row?.click();
-  });
+  step('// Opening a watchlist symbol');
+  // The watchlist lives in the panel's ticker picker: open it, pick SOL.
+  await panel?.evaluate(() => document.querySelector('.finance-ticker-picker-button')?.click());
+  await s.page.waitForTimeout(400);
+  r.pickerRows = await panel?.evaluate(() => [...document.querySelectorAll('.finance-ticker-picker-row[data-symbol]')].map(row => row.dataset.symbol)).catch(e => e.message);
+  await panel?.evaluate(() => [...document.querySelectorAll('.finance-ticker-picker-row[data-symbol]')].find(row => row.dataset.symbol === 'SOL')?.click());
   await s.page.waitForTimeout(2500);
   const panelNow = await frameFor(s.page, 'Finance');
   r.panelAfterWatchlistClick = await panelNow?.evaluate(() => ({ markets: !!document.querySelector('.mq-toolbar'), text: document.body.innerText.slice(0, 60) })).catch(e => e.message);
@@ -256,7 +255,7 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   s = await launch();
   const connections3 = await frameFor(s.page, 'Portfolio Connections');
   await s.page.waitForTimeout(2000);
-  r.afterRestart = { connections: await text(connections3), watchlist: await text(await frameFor(s.page, 'Watchlist')) };
+  r.afterRestart = { connections: await text(connections3) };
   r.errorsAfterRestart = s.errors;
 
   step('// 4. Disconnect, then pair again');

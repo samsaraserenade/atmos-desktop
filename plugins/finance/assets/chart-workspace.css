@@ -1,22 +1,9 @@
 .finance-workspace, .finance-workspace * { box-sizing:border-box; }
 .finance-workspace { display:flex; flex-direction:column; width:100%; height:100%; min-height:0; color:rgb(var(--ink-rgb)); font:12px/1.4 var(--app-font-family, "Segoe UI", sans-serif); --finance-toolbar-h:54px; background:transparent; }
-.finance-indicators-button { font:inherit; color:inherit; background:transparent; border:1px solid rgba(var(--ink-rgb),.15); border-radius:5px; padding:6px 12px; cursor:pointer; }
-.finance-indicators-button[aria-expanded="true"] { background:rgba(var(--ink-rgb),.12); border-color:rgba(var(--ink-rgb),.35); }
-.finance-indicators-button:focus-visible, .finance-indicators :focus-visible { outline:2px solid #a8c7fa; outline-offset:3px; }
 .finance-chart-body { display:flex; flex:1; min-height:0; overflow:hidden; }
 .finance-chart-stage { flex:1; min-width:0; min-height:0; position:relative; container-type:inline-size; container-name:finance-chart; }
-.finance-indicators { box-sizing:border-box; flex:0 0 280px; padding:16px; overflow:auto; border-left:1px solid rgba(var(--ink-rgb),.1); background:rgba(var(--surface-rgb),var(--panel-opacity, var(--default-panel-opacity, .69))); backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%); -webkit-backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%); }
-.finance-indicators[hidden] { display:none; }
-.finance-indicators h2 { font-size:14px; margin:0 0 6px; }
-.finance-indicators p { font-size:11px; color:rgba(var(--ink-rgb),.55); margin:0 0 18px; }
-.finance-indicators .sd-row { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:34px; }
-.finance-axis-toggles { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
-.finance-axis-toggles .sd-row { gap:8px; }
-.finance-indicators .sd-slider-row { margin:10px 0; }
-.finance-indicators .sd-subhead { margin:12px 0 8px; font-weight:600; }
 @media (max-width:640px) {
   .finance-chart-body { flex-direction:column; }
-  .finance-indicators { flex:0 1 45%; border-left:0; border-top:1px solid rgba(var(--ink-rgb),.1); }
 }
 .finance-portfolio-chart { display:flex; flex-direction:column; position:relative; width:100%; height:100%; min-height:0; }
 .finance-plot-surface { position:relative; flex:1; min-height:0; }
@@ -108,9 +95,9 @@
 /* ── Ticker picker ─────────────────────────────────────────────────
    Pinned to the toolbar's far left (panel.js prepends it on every mode
    switch, same as indicatorButton/settingsButton are pinned at the right).
-   The panel opens *upward* (bottom:100%), not downward like a typical menu
-   — the toolbar sits at the bottom of the dock, so there's chart room
-   above it and nothing but the panel edge below. */
+   Its sheet is fitted into the panel's bottom-left corner, rising from the
+   dock: fixed to the frame, flush left, its bottom set by panel.js from the
+   dock's real top edge. It is also where the watchlist lives now. */
 .finance-ticker-picker { position:relative; }
 .finance-ticker-picker-button {
   display:inline-flex; align-items:center; gap:6px; flex-shrink:0;
@@ -125,47 +112,88 @@
 .finance-ticker-picker-button:focus-visible { outline:2px solid #a8c7fa; outline-offset:-2px; }
 .finance-ticker-picker-label { max-width:140px; overflow:hidden; text-overflow:ellipsis; }
 .finance-ticker-picker-panel {
-  position:absolute; left:0; bottom:calc(100% + 8px); z-index:30;
-  width:240px; max-height:320px; display:flex; flex-direction:column; gap:6px;
-  padding:8px; border-radius:10px; border:1px solid rgba(var(--ink-rgb),.1);
-  background:rgba(var(--surface-rgb),.97); box-shadow:0 12px 32px rgba(0,0,0,.4);
+  position:fixed; left:0; bottom:var(--finance-toolbar-h,54px); z-index:30;
+  width:min(380px, 100vw); max-height:min(560px, calc(100vh - var(--finance-toolbar-h,54px) - 24px));
+  display:flex; flex-direction:column; gap:8px;
+  padding:12px 12px 10px; border-radius:0 12px 0 0;
+  border:1px solid rgba(var(--ink-rgb),.1); border-left:0; border-bottom:0;
+  background:rgba(var(--surface-rgb),.96); box-shadow:0 -8px 32px rgba(0,0,0,.35);
   backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%);
 }
 .finance-ticker-picker-panel[hidden] { display:none; }
 .finance-ticker-picker-search {
-  flex:0 0 auto; height:30px; padding:0 10px; border:1px solid rgba(var(--ink-rgb),.1); border-radius:6px;
+  flex:0 0 auto; height:34px; padding:0 12px; border:1px solid rgba(var(--ink-rgb),.1); border-radius:6px;
   outline:0; color:rgb(var(--ink-rgb)); background:rgba(var(--ink-rgb),.05);
-  font:500 11px var(--app-font-family, "Segoe UI", sans-serif);
+  font-family:var(--app-font-family, "Segoe UI", sans-serif); font-size:12px; font-weight:500;
+  transition:border-color .12s, background .12s;
 }
 .finance-ticker-picker-search:focus { border-color:rgba(var(--ink-rgb),.28); background:rgba(var(--ink-rgb),.08); }
 .finance-ticker-picker-search::placeholder { color:rgba(var(--ink-rgb),.4); }
-.finance-exchange-picker { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:4px; }
-.finance-exchange-chip {
-  height:22px; padding:0 8px; border:1px solid rgba(var(--ink-rgb),.1); border-radius:11px;
-  color:rgba(var(--ink-rgb),.55); background:transparent; cursor:pointer;
-  font:500 10px var(--app-font-family, "Segoe UI", sans-serif);
+.finance-ticker-picker-search.err { border-color:var(--color-negative,#f87171); }
+/* Exchanges as plain-text toggles, like the dock's own buttons. The sheet
+   sits inside the dock (.atmos-chart-controls), whose generic button rule
+   pads and colours every button with !important; the rules below are
+   scoped under the sheet and repeat the !important so they win. */
+.finance-ticker-picker-panel .finance-exchange-picker { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:0 12px; padding:0 2px; }
+.finance-ticker-picker-panel .finance-exchange-chip {
+  height:auto; padding:2px 0; border:0 !important; background:transparent !important; cursor:pointer;
+  color:rgba(var(--ink-rgb),.38) !important; font-family:var(--app-font-family, "Segoe UI", sans-serif);
+  font-size:10px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; transition:color .12s;
 }
-.finance-exchange-chip:hover { color:rgba(var(--ink-rgb),.9); background:rgba(var(--ink-rgb),.06); }
-.finance-exchange-chip.is-active { color:rgb(var(--ink-rgb)); border-color:rgba(var(--ink-rgb),.3); background:rgba(var(--ink-rgb),.1); }
-.finance-exchange-chip:focus-visible { outline:2px solid #a8c7fa; outline-offset:-2px; }
-.finance-ticker-picker-list { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:1px; scrollbar-width:thin; }
-.finance-ticker-picker-row {
-  display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:8px;
-  width:100%; height:30px; padding:0 8px; border:0; border-radius:6px;
-  color:rgba(var(--ink-rgb),.85); background:transparent; cursor:pointer; text-align:left;
-  font:500 11px var(--app-font-family, "Segoe UI", sans-serif);
+.finance-ticker-picker-panel .finance-exchange-chip:hover { color:rgba(var(--ink-rgb),.75) !important; }
+.finance-ticker-picker-panel .finance-exchange-chip.is-active { color:rgb(var(--ink-rgb)) !important; }
+.finance-ticker-picker-panel .finance-exchange-chip:focus-visible { outline:1px solid rgba(var(--ink-rgb),.5); outline-offset:2px; }
+.finance-ticker-picker-list { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; scrollbar-width:thin; margin:0 -4px; padding:0 4px; }
+.finance-ticker-picker-heading {
+  padding:10px 8px 4px; color:rgba(var(--ink-rgb),.42);
+  font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
 }
-.finance-ticker-picker-row:hover, .finance-ticker-picker-row:focus-visible { background:rgba(var(--ink-rgb),.08); outline:0; }
-.finance-ticker-picker-symbol { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.finance-ticker-picker-price { color:rgba(var(--ink-rgb),.55); font-variant-numeric:tabular-nums; }
-.finance-ticker-picker-change { font-variant-numeric:tabular-nums; text-align:right; min-width:52px; }
-.finance-ticker-picker-portfolio {
-  grid-template-columns:1fr auto; margin-bottom:4px; padding-bottom:8px;
-  border-bottom:1px solid rgba(var(--ink-rgb),.09); border-radius:6px 6px 0 0;
-  font-weight:600;
+.finance-ticker-picker-panel .finance-ticker-picker-row {
+  position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto auto minmax(58px,auto); align-items:center; gap:10px;
+  width:100%; height:32px; padding:0 8px; border:0 !important; border-radius:6px;
+  color:rgba(var(--ink-rgb),.85) !important; background:transparent !important; cursor:pointer; text-align:left;
+  font-family:var(--app-font-family, "Segoe UI", sans-serif); font-size:12px; font-weight:500;
 }
-.finance-ticker-picker-portfolio .finance-ticker-picker-sub { color:rgba(var(--ink-rgb),.4); font-weight:500; font-size:10px; }
-.finance-ticker-picker-jump .finance-ticker-picker-symbol { color:rgba(var(--ink-rgb),.65); font-style:italic; }
+.finance-ticker-picker-panel .finance-ticker-picker-row:hover,
+.finance-ticker-picker-panel .finance-ticker-picker-row:focus-visible { background:rgba(var(--ink-rgb),.08) !important; outline:0; }
+.finance-ticker-picker-symbol { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; letter-spacing:.02em; }
+.finance-ticker-picker-row.is-held .finance-ticker-picker-symbol { color:rgb(var(--ink-rgb)); }
+.finance-ticker-picker-share { color:rgba(var(--ink-rgb),.38); font-size:11px; font-variant-numeric:tabular-nums; }
+.finance-ticker-picker-price { color:rgba(var(--ink-rgb),.6); font-variant-numeric:tabular-nums; }
+.finance-ticker-picker-change { font-variant-numeric:tabular-nums; text-align:right; }
+/* The remove control sits over the change column and appears on hover or focus. */
+.finance-ticker-picker-panel .finance-ticker-picker-remove {
+  position:absolute; right:6px; top:50%; transform:translateY(-50%);
+  width:22px; height:22px; border:0 !important; border-radius:4px; padding:0;
+  color:rgba(var(--ink-rgb),.6) !important; background:rgba(var(--surface-rgb),.95) !important; cursor:pointer;
+  font-size:15px; line-height:1; opacity:0; transition:opacity .1s, color .1s;
+}
+.finance-ticker-picker-row:hover .finance-ticker-picker-remove,
+.finance-ticker-picker-row:focus-visible .finance-ticker-picker-remove,
+.finance-ticker-picker-remove:focus-visible { opacity:1; }
+.finance-ticker-picker-panel .finance-ticker-picker-remove:hover { color:var(--color-negative,#f87171) !important; }
+.finance-ticker-picker-panel .finance-ticker-picker-action { grid-template-columns:minmax(0,1fr) auto; }
+.finance-ticker-picker-action .finance-ticker-picker-sub { color:rgba(var(--ink-rgb),.4); font-weight:500; font-size:11px; white-space:nowrap; }
+/* The Portfolio entry is a card above the lists, not a row among them. */
+.finance-ticker-picker-panel .finance-ticker-picker-portfolio {
+  grid-template-columns:auto minmax(0,1fr) auto; gap:12px;
+  height:auto; min-height:52px; margin:0 0 6px; padding:8px 12px 8px 10px; border-radius:10px;
+  background:rgba(var(--ink-rgb),.06) !important; box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.08);
+}
+.finance-ticker-picker-panel .finance-ticker-picker-portfolio:hover,
+.finance-ticker-picker-panel .finance-ticker-picker-portfolio:focus-visible { background:rgba(var(--ink-rgb),.11) !important; }
+.finance-ticker-picker-panel .finance-ticker-picker-portfolio.is-current { box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.3); }
+.finance-ticker-picker-portfolio-icon {
+  display:grid; place-items:center; width:30px; height:30px; border-radius:8px;
+  color:rgb(var(--ink-rgb)); background:rgba(var(--ink-rgb),.08);
+}
+.finance-ticker-picker-portfolio-text { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.finance-ticker-picker-portfolio .finance-ticker-picker-symbol { font-size:13.5px; font-weight:700; color:rgb(var(--ink-rgb)); }
+.finance-ticker-picker-portfolio .finance-ticker-picker-sub { color:rgba(var(--ink-rgb),.45); font-size:11px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.finance-ticker-picker-portfolio-total {
+  color:rgb(var(--ink-rgb)); font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.finance-ticker-picker-hint { padding:6px 8px 10px; color:rgba(var(--ink-rgb),.38); font-size:11px; }
 
 /* ── Toolbar dock/undock handle ──────────────────────────────────────────────
    An invisible drag strip sitting on the dock's top edge

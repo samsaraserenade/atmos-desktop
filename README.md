@@ -125,7 +125,8 @@ designed so that you can safely install things you did not write.
   load one that has been changed.
 - **A locked-down core.** The Atmos window itself runs only Atmos's own
   code: its Content-Security-Policy refuses injected scripts, it is
-  sandboxed, and developer tools are off in installed copies.
+  sandboxed, and developer tools are off in installed copies (unless
+  started with `--devtools`).
 
 ---
 

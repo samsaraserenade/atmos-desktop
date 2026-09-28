@@ -66,16 +66,6 @@ export async function saveAsset(key, value) {
   }
 }
 
-export async function deleteAsset(key) {
-  try {
-    const transaction = (await openDB()).transaction('assets', 'readwrite');
-    transaction.objectStore('assets').delete(key);
-    await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error); });
-  } catch (error) {
-    console.error(`[finance] could not delete ${key}:`, error);
-  }
-}
-
 export async function loadAsset(key, fallback = null) {
   try {
     const request = (await openDB()).transaction('assets', 'readonly').objectStore('assets').get(key);
@@ -288,7 +278,6 @@ export function save() {
   _saveQueued = true;
   queueMicrotask(_flush);
 }
-export const scheduleSave = () => save();
 export const flushPendingSave = () => { if (_saveQueued) _flush(); };
 
 // ── Other frames' changes ────────────────────────────────────────────────────

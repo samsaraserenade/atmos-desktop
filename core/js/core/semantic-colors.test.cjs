@@ -24,9 +24,9 @@ test('Core colors migrate, persist, and share subscriptions through the price-co
   assert.equal(core.getSemanticColors().positive, '#112233');
   assert.equal(core.getSemanticColors().negative, '#445566');
   const seen = [];
-  const stop = core.onPriceColorChange(colors => seen.push(colors));
+  const stop = core.onSemanticColorChange(colors => seen.push({ ...colors }));
   core.setSemanticColor('neutral', '#abcdef');
-  core.setPriceColorUp('#123456');
+  core.setSemanticColor('positive', '#123456');
   assert.equal(seen.length, 2);
   assert.equal(seen[0].neutral, '#abcdef');
   assert.equal(core.colorForChange(0), '#abcdef');

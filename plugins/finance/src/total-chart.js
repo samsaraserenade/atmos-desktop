@@ -10,7 +10,7 @@ import {
   isRemotePortfolioMode, onRemoteTotalHistoryUpdate, recordPortfolioHistoryFrame,
 } from './registry.js';
 import { getTotal, onCurrencyChange, onRatesChange, convertToGbp, convertFromGbp } from './totals.js';
-import { getPriceColors, setPriceColorUp, setPriceColorDown, onPriceColorChange } from './host/semantic-colors.js';
+import { getPriceColors, onPriceColorChange } from './host/semantic-colors.js';
 import { indexAtOrAfter } from './history-change.js';
 import { onStateLoaded, save as saveState } from './host/persist.js';
 import { saveChartHistory, loadChartHistory, saveChartHidden, loadChartHidden } from './storage.js';
@@ -496,8 +496,6 @@ export function setPriceAxisVisible(value) {
 }
 export function setChartLineOpacity(value) { updateLegacyChartSetting('lineOpacity', Math.max(0, Math.min(1, Number(value) || 0))); }
 export function setPriceTagVisible(value) { portfolioState.priceTagVisible = !!value; updateLegacyChartSetting('priceTagVisible', !!value); }
-export function setChartLineColorUp(value) { setPriceColorUp(value); }
-export function setChartLineColorDown(value) { setPriceColorDown(value); }
 export function setBalanceVisible(value) { balanceVisible = !!value; applyBalanceVisible(balanceVisible); updateLegacyChartSetting('balanceVisible', balanceVisible, false); }
 export function setCashInvestedPaneVisible(value) {
   cashInvestedVisible = value !== false;

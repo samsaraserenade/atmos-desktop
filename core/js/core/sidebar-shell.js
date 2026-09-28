@@ -131,7 +131,7 @@ function applySectionHeight(section, previewHeight) {
   else section.style.removeProperty('--sidebar-section-height');
 }
 
-export function applySidebarSectionHeights() {
+function applySidebarSectionHeights() {
   sections().forEach(section => applySectionHeight(section));
 }
 
@@ -400,7 +400,7 @@ export function openSidebar() {
   window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
-export function closeSidebar() {
+function closeSidebar() {
   document.getElementById('settings-drawer')?.classList.remove('open');
   document.body.classList.remove('drawer-open');
   sidebarState.open = false;
@@ -408,7 +408,7 @@ export function closeSidebar() {
   window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
-export function toggleSidebar() {
+function toggleSidebar() {
   sidebarState.open ? closeSidebar() : openSidebar();
 }
 
@@ -467,7 +467,7 @@ extensionsButton?.addEventListener('click', event => {
     .catch(error => console.warn('[settings] settings menu failed to load:', error.message));
 });
 
-export function describeExtensionAttention(summary) {
+function describeExtensionAttention(summary) {
   const lines = [];
   if (summary?.problems?.length) {
     lines.push(summary.problems.length === 1

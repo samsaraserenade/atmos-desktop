@@ -1,25 +1,31 @@
-.finance-allocation { padding: 8px 12px 12px; font-family: inherit; }
-.finance-allocation-modes,.finance-allocation-books { display:grid; gap:3px; margin-bottom:8px; padding:2px; border-radius:6px; background:rgba(var(--ink-rgb),.055); }
-.finance-allocation-modes { grid-template-columns:1fr 1fr; }
-.finance-allocation-books { grid-template-columns:repeat(3,1fr); }
-.finance-allocation-modes button,.finance-allocation-books button { border:0; border-radius:4px; padding:5px 8px; color:rgba(var(--ink-rgb),.5); background:transparent; font:600 .68rem/1.2 inherit; cursor:pointer; }
-.finance-allocation-modes button.is-active,.finance-allocation-books button.is-active { color:rgba(var(--ink-rgb),.92); background:rgba(var(--ink-rgb),.11); }
-.finance-allocation-view { display:flex; align-items:center; justify-content:space-between; gap:8px; color:rgba(var(--ink-rgb),.43); font-size:.64rem; }
-.finance-allocation-view select { min-width:126px; border:1px solid rgba(var(--ink-rgb),.09); border-radius:4px; padding:3px 20px 3px 7px; color:rgba(var(--ink-rgb),.78); background:rgba(var(--surface-rgb),.42); font:600 .64rem/1.2 inherit; }
-.finance-allocation-total { margin:9px 0 5px; color:rgba(var(--ink-rgb),.42); font-size:.61rem; font-weight:650; letter-spacing:.07em; text-transform:uppercase; }
-.finance-allocation-rows { display:grid; gap:3px; }
-.finance-allocation-row { position:relative; display:flex; justify-content:space-between; gap:8px; overflow:hidden; padding:6px 8px; border-radius:3px; background:rgba(var(--ink-rgb),.035); color:rgba(var(--ink-rgb),.76); font-size:.68rem; font-variant-numeric:tabular-nums; }
-.finance-allocation-bar { position:absolute; inset:0 auto 0 0; z-index:0; background:color-mix(in srgb,var(--color-neutral,#94a3b8) 16%,transparent); pointer-events:none; }
+/* Allocation widget (see src/allocation-widget.js). Drawn in the sidebar's
+   own vocabulary: plain-text toggles like the chart toolbar's (bold = the
+   active one), a small heading, and rows like the Spot list's, with the
+   share painted as a bar behind each row. */
+.finance-allocation { font-family: inherit; }
+.finance-allocation-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:6px 14px 2px; }
+.finance-allocation-group { display:flex; align-items:center; gap:10px; min-width:0; }
+.finance-allocation-group button { border:0; padding:2px 0; background:transparent; color:rgba(var(--ink-rgb),.38); font-family:inherit; font-size:.62rem; font-weight:600; line-height:1.4; letter-spacing:.06em; text-transform:uppercase; cursor:pointer; transition:color .12s; }
+.finance-allocation-group button:hover { color:rgba(var(--ink-rgb),.7); }
+.finance-allocation-group button.is-active { color:rgba(var(--ink-rgb),.92); }
+.finance-allocation-group button:focus-visible { outline:1px solid rgba(var(--ink-rgb),.5); outline-offset:2px; }
+.finance-allocation-books[hidden] { display:none; }
+.finance-allocation-total { padding:6px 14px 4px; color:rgba(var(--ink-rgb),.42); font-size:.6rem; font-weight:600; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.finance-allocation-rows { display:flex; flex-direction:column; padding-bottom:4px; }
+.finance-allocation-row { position:relative; display:flex; align-items:center; justify-content:space-between; gap:8px; height:28px; min-height:28px; padding:0 14px; border-bottom:1px solid rgba(var(--ink-rgb),.04); color:rgba(var(--ink-rgb),.76); font-size:.7rem; font-variant-numeric:tabular-nums; overflow:hidden; }
+.finance-allocation-row:last-child { border-bottom:0; }
+.finance-allocation-row:hover { background:rgba(var(--ink-rgb),.04); }
+.finance-allocation-bar { position:absolute; left:0; top:0; bottom:0; z-index:0; background:rgba(var(--ink-rgb),.07); pointer-events:none; transition:width .15s ease; }
 .finance-allocation-label,.finance-allocation-value { position:relative; z-index:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.finance-allocation-label { font-weight:600; }
-.finance-allocation-value { flex:none; color:rgba(var(--ink-rgb),.9); }
-.finance-allocation-empty { padding:12px 4px; color:rgba(var(--ink-rgb),.34); font-size:.66rem; text-align:center; }
+.finance-allocation-label { flex:1; min-width:0; color:rgba(var(--ink-rgb),.65); font-weight:600; letter-spacing:.01em; }
+.finance-allocation-value { flex:none; color:rgba(var(--ink-rgb),.9); font-weight:600; }
+.finance-allocation-empty { padding:12px 14px; color:rgba(var(--ink-rgb),.34); font-size:.66rem; text-align:center; }
 .finance-allocation-total.is-positive { color:var(--color-positive,#34d399); }
 .finance-allocation-total.is-negative { color:var(--color-negative,#f87171); }
 .finance-allocation-total.is-neutral { color:var(--color-neutral,#94a3b8); }
-.finance-exposure-row { background:rgba(var(--ink-rgb),.025); }
+/* Exposure: longs grow right from the centre line, shorts grow left. */
 .finance-exposure-axis { position:absolute; z-index:1; top:0; bottom:0; left:50%; width:1px; background:rgba(var(--ink-rgb),.13); }
-.finance-exposure-row .finance-allocation-bar { inset:0 50% 0 auto; background:color-mix(in srgb,var(--color-positive,#34d399) 18%,transparent); }
-.finance-exposure-row.is-short .finance-allocation-bar { inset:0 auto 0 50%; background:color-mix(in srgb,var(--color-negative,#f87171) 18%,transparent); }
+.finance-exposure-row .finance-allocation-bar { left:50%; right:auto; background:color-mix(in srgb,var(--color-positive,#34d399) 18%,transparent); }
+.finance-exposure-row.is-short .finance-allocation-bar { left:auto; right:50%; background:color-mix(in srgb,var(--color-negative,#f87171) 18%,transparent); }
 .finance-exposure-row.is-long .finance-allocation-value { color:var(--color-positive,#34d399); }
 .finance-exposure-row.is-short .finance-allocation-value { color:var(--color-negative,#f87171); }

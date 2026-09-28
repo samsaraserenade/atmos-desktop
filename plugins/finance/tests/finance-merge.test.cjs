@@ -12,7 +12,6 @@ test('Finance loads both features locally and routes IPC to its installed identi
     assert.ok(read(entry).includes(`import './markets/${entry}'`));
   }
   assert.ok(read('panel.js').includes("import('./markets/panel.js')"));
-  assert.ok(read('src/registry.js').includes("import('../markets/watchlist.js')"));
   assert.match(read('src/host/frame.js'), /export const SELF = 'plugin:finance'/);
   for (const file of ['src/remote.js', 'src/network.js']) {
     assert.match(read(file), /invokeFinance as invoke/);

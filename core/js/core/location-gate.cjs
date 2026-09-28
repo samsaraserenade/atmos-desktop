@@ -28,4 +28,4 @@ function createLocationGate({ appOrigin, now = () => Date.now(), windowMs = DETE
   };
 }
 
-module.exports = { createLocationGate, DETECT_WINDOW_MS };
+module.exports = { createLocationGate };

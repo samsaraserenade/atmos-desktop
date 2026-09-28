@@ -201,4 +201,4 @@ function createExtensionCatalog({ coreRoot = () => null, bundledRoot, installedR
   return { list, find, useFallback, refresh: () => cache.clear() };
 }
 
-module.exports = { createExtensionCatalog, resolveTier, readManifest, TIERS };
+module.exports = { createExtensionCatalog, TIERS };

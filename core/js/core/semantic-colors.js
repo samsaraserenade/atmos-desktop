@@ -1,7 +1,7 @@
 /** Core-owned semantic colors for any plugin: status, feedback, or numeric changes. */
 import { registerCoreStateNamespace, scheduleSave, onStateLoaded } from '../persist.js';
 
-export const DEFAULT_SEMANTIC_COLORS = Object.freeze({
+const DEFAULT_SEMANTIC_COLORS = Object.freeze({
   positive: '#34d399', negative: '#f87171', neutral: '#9ca3af',
 });
 const listeners = new Set();
@@ -49,16 +49,6 @@ function emit() {
   }
 }
 
-/** Legacy shape and names remain available to existing price-color consumers. */
-export function getPriceColors() {
-  return { up: state.positive, down: state.negative, neutral: state.neutral };
-}
-export function setPriceColorUp(hex) { setSemanticColor('positive', hex); }
-export function setPriceColorDown(hex) { setSemanticColor('negative', hex); }
-export function setPriceColorNeutral(hex) { setSemanticColor('neutral', hex); }
-export function onPriceColorChange(listener) {
-  return onSemanticColorChange(() => listener(getPriceColors()));
-}
 
 export function classifyChange(change) {
   if (change == null || change === 0 || !Number.isFinite(Number(change))) return 'flat';

@@ -105,9 +105,6 @@ function scanExtension(dir) {
       for (const [pattern, permission] of browser) {
         if (pattern.test(source)) { used.browser.add(permission); note('browser', permission, rel); }
       }
-      for (const [, kind, target] of source.matchAll(/extensionInvoke\(\s*['"](plugin|service)['"]\s*,\s*['"]([a-z0-9-]+)['"]/g)) {
-        if (target !== id) { used.invokes.add(`${kind}:${target}`); note('invokes', `${kind}:${target}`, rel); }
-      }
     }
     // Compiling WebAssembly (often inside a vendored library) needs "wasm".
     if (!main && /\bWebAssembly\.(?:instantiate|compile)|\.wasm['"`]/.test(source)) { used.browser.add('wasm'); note('browser', 'wasm', rel); }
@@ -228,7 +225,7 @@ function auditLibrary(dir, { allowStorage = [] } = {}) {
   return problems;
 }
 
-module.exports = { scanExtension, auditExtension, auditLibrary, hostAllowed };
+module.exports = { auditExtension, auditLibrary };
 
 if (require.main === module) {
   // `node scripts/extension-audit.cjs <dir>...` prints what each extension uses.

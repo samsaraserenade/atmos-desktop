@@ -11,7 +11,7 @@ const LEGACY_ASSET_KEYS = ['background:wallpaper', 'background'];
 
 // The image Atmos shows until you choose your own or remove it (Core's
 // assets, served with the Atmos page).
-export const DEFAULT_IMAGE = new URL('assets/atmos-background.jpg', document.baseURI).href;
+const DEFAULT_IMAGE = new URL('assets/atmos-background.jpg', document.baseURI).href;
 
 let imageEl = null;
 let overlayEl = null;

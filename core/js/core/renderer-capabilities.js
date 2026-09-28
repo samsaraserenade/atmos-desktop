@@ -57,7 +57,3 @@ export function onCapabilityChange(name, listener, { signal, immediate = true } 
   if (immediate) listener(getCapability(name));
   return unsubscribe;
 }
-
-export function listProvidedCapabilities() {
-  return [...providers.entries()].map(([name, entry]) => ({ name, owner: entry.owner }));
-}

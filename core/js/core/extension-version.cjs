@@ -105,4 +105,4 @@ function satisfies(version, range) {
   return true;
 }
 
-module.exports = { parseVersion, isValidVersion, compareVersions, parseRange, isValidRange, satisfies };
+module.exports = { isValidVersion, compareVersions, isValidRange, satisfies };

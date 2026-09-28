@@ -59,10 +59,3 @@ export function unmountSettingsPanel(id) {
   catch (error) { console.error(`[settings-registry] unmount() failed for '${id}':`, error); }
   finally { mounted.scope.dispose(); _mounted.delete(id); }
 }
-
-export function unregisterSettingsPanel(id) {
-  unmountSettingsPanel(id);
-  _entries.delete(id);
-}
-
-export function isSettingsPanelRegistered(id) { return _entries.has(id); }

@@ -15,7 +15,7 @@ const MAX_STATE_BYTES = 1024 * 1024;
 const MENU_TYPES = new Set([undefined, 'separator', 'heading', 'meta', 'select', 'toggle', 'range', 'number', 'text', 'colors', 'buttons']);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
-export class BridgeError extends Error {
+class BridgeError extends Error {
   constructor(message, name = 'AtmosPermissionError') {
     super(message);
     this.name = name;

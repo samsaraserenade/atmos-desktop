@@ -51,5 +51,3 @@ window.addEventListener('beforeunload', () => {
   for (const scope of _scopes.values()) scope.dispose();
   _scopes.clear();
 });
-
-export function isBootHookRegistered(id) { return _hooks.has(id); }
