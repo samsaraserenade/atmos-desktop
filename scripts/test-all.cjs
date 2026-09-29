@@ -65,9 +65,9 @@ function finish() {
   process.exit(failed ? 1 : 0);
 }
 
-// Core, permissions, services' contracts, the build hook.
+// Core, permissions, services' contracts, the build hook, the extension template and SDK kit.
 const packageJson = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'));
-for (const script of ['test:core', 'test:services', 'test:permissions', 'test:build']) {
+for (const script of ['test:core', 'test:services', 'test:permissions', 'test:build', 'test:sdk']) {
   if (packageJson.scripts?.[script]) run(script, ['npm', ['run', '-s', script]], { shell: process.platform === 'win32' });
 }
 

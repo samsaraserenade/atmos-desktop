@@ -51,7 +51,8 @@ test('bundled extensions with main-process code or a boot frame declare "exports
 // service it calls listed as a dependency whose range the repo's copy meets.
 // A released extension's required dependencies are released too.
 test('bundled extensions have a version, a publisher and complete dependencies', () => {
-  const { isValidVersion, satisfies } = require('../core/js/core/extension-version.cjs');
+  const { isValidVersion, satisfies, checkEngines } = require('../core/js/core/extension-version.cjs');
+  const atmosVersion = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8')).version;
   const { normalizeDependencies } = require('../core/js/core/extension-dependencies.cjs');
   const manifests = new Map(extensions.map(relative => [refOf(relative), JSON.parse(fs.readFileSync(path.join(repo, relative, 'extension.json'), 'utf8'))]));
   const release = JSON.parse(fs.readFileSync(path.join(repo, 'release.json'), 'utf8'));
@@ -63,6 +64,9 @@ test('bundled extensions have a version, a publisher and complete dependencies',
     if (!isValidVersion(manifest.version)) problems.push(`${ref}: "version" must be MAJOR.MINOR.PATCH`);
     if (manifest.publisher !== 'atmos') problems.push(`${ref}: "publisher" must be "atmos"`);
     if (manifest.after !== undefined) problems.push(`${ref}: use "dependencies" instead of "after"`);
+    // "engines.atmos", when given, is a range this repo's Atmos is in.
+    const engines = checkEngines(manifest, atmosVersion);
+    if (!engines.ok) problems.push(`${ref}: ${engines.reason}`);
     const { list, errors } = normalizeDependencies(manifest);
     problems.push(...errors.map(error => `${ref}: ${error}`));
     const declared = new Set(list.map(dep => dep.ref));
@@ -136,11 +140,12 @@ test('the audit checks that what an extension shares exists', t => {
   const write = exportsBlock => fs.writeFileSync(path.join(dir, 'extension.json'), JSON.stringify({ permissions: { ipc: true }, exports: exportsBlock }));
   write({ ipc: { 'read-tags': 'official' } });
   assert.deepEqual(auditExtension(dir), []);
-  write({ ipc: { 'read-tags': 'official', 'read-any-file': 'all' }, resources: { art: 'official' } });
+  write({ ipc: { 'read-tags': 'official', 'read-any-file': 'all' } });
   assert.deepEqual(auditExtension(dir), [
     "sharer: shares IPC handler 'read-any-file' (\"exports.ipc\") but never registers it",
-    "sharer: shares resource provider 'art' (\"exports.resources\") but doesn't declare it",
   ]);
+  write({ ipc: { 'read-tags': 'official' }, resources: { art: 'official' } });
+  assert.deepEqual(auditExtension(dir), ['sharer: unknown exports "resources" (use ipc, events, methods)']);
   write({ ipc: { 'read-tags': 'everyone' } });
   assert.deepEqual(auditExtension(dir), ['sharer: exports.ipc.read-tags must be "official" or "all"']);
 });

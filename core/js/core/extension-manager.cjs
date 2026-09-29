@@ -71,6 +71,7 @@ function readIndexEntry(item) {
     description: typeof item.description === 'string' ? item.description : null,
     apiVersion: item.apiVersion,
     requires: item.requires,
+    engines: item.engines && typeof item.engines === 'object' && !Array.isArray(item.engines) ? item.engines : undefined,
     dependencies: item.dependencies && typeof item.dependencies === 'object' ? item.dependencies : {},
   };
 }
@@ -237,7 +238,7 @@ function createExtensionManager({
   function bestPackages(packages) {
     const best = new Map();
     for (const item of packages) {
-      const compatibility = checkCompatibility({ apiVersion: item.apiVersion, requires: item.requires });
+      const compatibility = checkCompatibility({ apiVersion: item.apiVersion, requires: item.requires, engines: item.engines }, { appVersion });
       if (!compatibility.compatible) continue;
       const key = ref(item.kind, item.id);
       if (!best.has(key) || compareVersions(item.version, best.get(key).version) > 0) best.set(key, item);

@@ -5,23 +5,24 @@
  *   "permissions": {
  *     "network":   ["api.example.com", "*.example.org"] | ["*"],
  *     "browser":   ["geolocation", "clipboard-read", "notifications", "media", "display-capture"],
- *     "invokes":   ["service:example-service"],     // other extensions' IPC it calls
+ *     "invokes":   ["service:example-service"],     // other extensions it talks to
  *     "node":      ["fs", "path", "child_process"],  // modules main.cjs requires
  *     "electron":  ["dialog", "shell", "app", "BrowserWindow", "clipboard", "nativeImage", "net"],
  *     "ipc":       true,                              // main.cjs registers IPC handlers
- *     "provides":  ["example-data"],                  // main-process capabilities it offers
- *     "uses":      ["media-library"],                 // main-process capabilities it uses
  *     "resources": ["example-art"]                    // atmos-resource:// providers
  *   }
  *
- * Core enforces what passes through it: the Electron objects, IPC,
- * capabilities and resource providers a main.cjs receives, and the browser
- * permissions the Atmos window may use. Direct Node `require()` calls and
- * renderer network access cannot be enforced in-process; they are declared
- * and checked statically by scripts/extension-permissions.test.cjs.
+ * Core enforces what passes through it: the Electron objects, IPC and
+ * resource providers a main.cjs receives, the hosts a frame and
+ * atmos.fetch() reach, and the browser permissions each origin may use.
+ * Direct Node `require()` calls cannot be enforced in-process; they are
+ * declared and checked statically by scripts/extension-permissions.test.cjs.
+ *
+ * "provides" (main-process capabilities) is still accepted, so packages
+ * made before SDK 1.0 load, but means nothing: nothing could use them.
  */
 
-const KEYS = ['network', 'browser', 'invokes', 'node', 'electron', 'ipc', 'provides', 'uses', 'resources'];
+const KEYS = ['network', 'browser', 'invokes', 'node', 'electron', 'ipc', 'provides', 'resources'];
 // "wasm" is not a Chromium permission: it lets the extension's frames
 // compile WebAssembly (their CSP gets 'wasm-unsafe-eval').
 const BROWSER_PERMISSIONS = ['geolocation', 'clipboard-read', 'notifications', 'media', 'display-capture', 'wasm'];
@@ -31,8 +32,44 @@ const CONTEXT_ELECTRON = ['app', 'BrowserWindow', 'dialog', 'shell'];
 const BASELINE_BROWSER = ['clipboard-sanitized-write', 'fullscreen'];
 
 const EMPTY = Object.freeze({
-  network: [], browser: [], invokes: [], node: [], electron: [], ipc: false, provides: [], uses: [], resources: [],
+  network: [], browser: [], invokes: [], node: [], electron: [], ipc: false, provides: [], resources: [],
 });
+
+// A network entry is a host name (a label or more, dots between, no
+// scheme, port, path or spaces), optionally "*." for its subdomains, or "*"
+// for any host. It becomes a CSP source and the atmos.fetch() allow-list,
+// so anything else could mean more than the approval prompt says.
+const HOST_PATTERN = /^(\*\.)?(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+// Names that mean this computer or the local network, whatever resolves
+// them: "Connect to printer.lan" mustn't read like a website.
+const LOCAL_SUFFIXES = ['localhost', 'local', 'internal', 'lan', 'home.arpa'];
+
+/**
+ * Whether a normalised network entry is a public host name, "*.host" or
+ * "*". Not an IP address (the last label of a name always has a letter:
+ * "127.0.0.1" and "0x7f.1" are addresses) and not a local-only name.
+ */
+function isValidHost(entry) {
+  if (entry === '*') return true;
+  if (!HOST_PATTERN.test(entry)) return false;
+  const name = entry.replace(/^\*\./, '');
+  if (!/[a-z]/.test(name.slice(name.lastIndexOf('.') + 1))) return false;
+  return !LOCAL_SUFFIXES.some(suffix => name === suffix || name.endsWith(`.${suffix}`));
+}
+
+/**
+ * Whether `host` (a URL's hostname) is covered by `network`: exactly, by a
+ * "*.parent" entry (its subdomains, not the parent itself, as in CSP), or
+ * by "*".
+ */
+function hostAllowed(host, network) {
+  const name = String(host || '').toLowerCase().replace(/\.$/, '');
+  if (!name) return false;
+  return (network || []).some(entry => entry === '*'
+    || entry === name
+    || (entry.startsWith('*.') && name.endsWith(entry.slice(1))));
+}
 
 function list(value, key) {
   if (value === undefined) return [];
@@ -50,16 +87,19 @@ function normalizePermissions(permissions) {
   if (unknown.length) throw new TypeError(`unknown permission ${unknown.map(key => `"${key}"`).join(', ')}`);
   if (permissions.ipc !== undefined && typeof permissions.ipc !== 'boolean') throw new TypeError('permissions.ipc must be true or false');
   const normalized = {
-    network: list(permissions.network, 'network').map(host => host.toLowerCase()),
+    network: [...new Set(list(permissions.network, 'network').map(host => host.toLowerCase()))].sort(),
     browser: list(permissions.browser, 'browser'),
     invokes: list(permissions.invokes, 'invokes'),
     node: list(permissions.node, 'node'),
     electron: list(permissions.electron, 'electron'),
     ipc: permissions.ipc === true,
     provides: list(permissions.provides, 'provides'),
-    uses: list(permissions.uses, 'uses'),
     resources: list(permissions.resources, 'resources'),
   };
+  const badHosts = normalized.network.filter(entry => !isValidHost(entry));
+  if (badHosts.length) {
+    throw new TypeError(`permissions.network entries are public host names like "api.example.com" or "*.example.com", or "*"; not addresses, ports, paths or local names (${badHosts.map(entry => JSON.stringify(entry)).join(', ')})`);
+  }
   const badBrowser = normalized.browser.filter(name => !BROWSER_PERMISSIONS.includes(name));
   if (badBrowser.length) throw new TypeError(`unknown browser permission ${badBrowser.join(', ')}`);
   const badInvoke = normalized.invokes.filter(name => !/^(plugin|service):[a-z0-9][a-z0-9-]*$/.test(name));
@@ -84,6 +124,12 @@ const ELECTRON_TEXT = {
   net: 'Make network requests from the main process',
   safeStorage: 'Encrypt data with your system\u2019s secure storage',
 };
+// The system services an extension reaches through the SDK, in plain words.
+const SYSTEM_INVOKES = {
+  'service:audio': 'Play audio',
+  'service:wallpaper': 'See and change your wallpaper',
+  'service:location': 'Know your location, as set in Atmos',
+};
 const BROWSER_TEXT = {
   geolocation: 'Use your location',
   'clipboard-read': 'Read the clipboard',
@@ -93,8 +139,12 @@ const BROWSER_TEXT = {
   wasm: 'Run compiled WebAssembly code',
 };
 
-/** Plain-language lines for Settings and the approval prompt. */
-function describePermissions(permissions, { hasMain = false } = {}) {
+/**
+ * Plain-language lines for Settings and the approval prompt. `everyHost`
+ * names every host rather than four and "N more" (for anything the user
+ * approves, and for what an update adds).
+ */
+function describePermissions(permissions, { hasMain = false, everyHost = false } = {}) {
   const p = normalizePermissions(permissions);
   const lines = [];
   if (hasMain) lines.push('Runs code in Atmos’s main process, with full access to your computer');
@@ -104,14 +154,46 @@ function describePermissions(permissions, { hasMain = false } = {}) {
   lines.push(...p.browser.map(name => BROWSER_TEXT[name]));
   if (p.network.includes('*')) lines.push('Connect to any website or server');
   else if (p.network.length) {
-    const shown = p.network.slice(0, 4).join(', ');
-    lines.push(`Connect to ${shown}${p.network.length > 4 ? ` and ${p.network.length - 4} more` : ''}`);
+    const shown = (everyHost ? p.network : p.network.slice(0, 4)).join(', ');
+    lines.push(`Connect to ${shown}${!everyHost && p.network.length > 4 ? ` and ${p.network.length - 4} more` : ''}`);
   }
-  if (p.invokes.length) lines.push(`Use what ${p.invokes.map(name => name.split(':')[1]).join(', ')} share${p.invokes.length === 1 ? 's' : ''} with other extensions`);
-  if (p.provides.length) lines.push(`Share ${p.provides.join(', ')} with other extensions`);
-  if (p.uses.length) lines.push(`Use ${p.uses.join(', ')} from other extensions`);
+  lines.push(...p.invokes.filter(name => SYSTEM_INVOKES[name]).map(name => SYSTEM_INVOKES[name]));
+  const others = p.invokes.filter(name => !SYSTEM_INVOKES[name]);
+  if (others.length) lines.push(`Use what ${others.map(name => name.split(':')[1]).join(', ')} share${others.length === 1 ? 's' : ''} with other extensions`);
   if (!lines.length) lines.push('No special permissions');
   return [...new Set(lines)];
+}
+
+/** Whether network entry `entry` is already covered by the entries in `list`. */
+function hostCovered(entry, list) {
+  if (list.includes('*') || list.includes(entry)) return true;
+  if (entry === '*') return false;
+  if (!entry.startsWith('*.')) return hostAllowed(entry, list);
+  // "*.a.example" is within "*.example"; nothing narrower covers a wildcard.
+  const name = entry.slice(2);
+  return list.some(other => other.startsWith('*.') && name.endsWith(other.slice(1)));
+}
+
+/**
+ * What `current` asks for that `approved` didn't, compared as data (not as
+ * the English lines): { network, browser, invokes, … } with only the
+ * additions, or null when nothing was added. `approved` that can't be read
+ * (from an older Atmos) counts as nothing approved.
+ */
+function permissionsAdded(current, approved) {
+  const now = normalizePermissions(current);
+  let before;
+  try { before = normalizePermissions(approved ?? undefined); } catch { before = normalizePermissions(undefined); }
+  const added = {};
+  for (const key of ['browser', 'invokes', 'node', 'electron', 'provides', 'resources']) {
+    const had = new Set(before[key]);
+    const extra = now[key].filter(value => !had.has(value));
+    if (extra.length) added[key] = extra;
+  }
+  const hosts = now.network.filter(entry => !hostCovered(entry, before.network));
+  if (hosts.length) added.network = hosts;
+  if (now.ipc && !before.ipc) added.ipc = true;
+  return Object.keys(added).length ? added : null;
 }
 
 // ── What an extension shares with others ("exports") ─────────────────────
@@ -119,9 +201,11 @@ function describePermissions(permissions, { hasMain = false } = {}) {
 //   "exports": {
 //     "ipc":       { "read-tags": "official" },   // main.cjs handlers (invoke)
 //     "events":    { "changed": "all" },          // its events: main.cjs context.send() and atmos.events
-//     "methods":   { "greet": "all" },            // methods its boot frame expose()s (call)
-//     "resources": { "example-art": "official" }  // atmos-resource:// providers it registers
+//     "methods":   { "greet": "all" }             // methods its boot frame expose()s (call)
 //   }
+//
+// An extension's atmos-resource:// providers serve its own frames only
+// (sharing them, "exports.resources", went with SDK 1.0: nothing used it).
 //
 // Everything an extension offers is its own until it is listed here. The
 // level says who else may use it: "official" (system and official
@@ -134,7 +218,7 @@ function describePermissions(permissions, { hasMain = false } = {}) {
 // community ones: an official extension that hasn't been updated yet keeps
 // working with the others. Its reach lists are then ["*"].
 
-const EXPORT_KINDS = ['ipc', 'events', 'methods', 'resources'];
+const EXPORT_KINDS = ['ipc', 'events', 'methods'];
 const EXPORT_LEVELS = ['official', 'all'];
 const EXPORT_NAME = /^[a-z0-9][a-z0-9:._-]*$/i;
 
@@ -167,7 +251,7 @@ function levelAllows(level, tier) {
 
 /**
  * What `caller` ({ kind, id, tier, invokes }) may use of `target`
- * ({ kind, id, exports }): { ipc, events, methods, resources }, each a list
+ * ({ kind, id, exports }): { ipc, events, methods }, each a list
  * of names, or ["*"] for everything (a target with no "exports" block,
  * to an official caller). Its own extension: `null` (everything). Not
  * declared in "invokes": nothing.
@@ -192,4 +276,5 @@ function reachOf(caller, target) {
 
 module.exports = {
   BASELINE_BROWSER, CONTEXT_ELECTRON, normalizePermissions, describePermissions, normalizeExports, levelAllows, reachOf, reaches,
+  isValidHost, hostAllowed, hostCovered, permissionsAdded,
 };

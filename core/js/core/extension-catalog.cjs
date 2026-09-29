@@ -28,6 +28,13 @@
  *     bundled one, and otherwise shows as not loadable (tampered);
  *   - a community copy never replaces an official one with the same id.
  *
+ * Developer folders (`developerFolders`, from --dev-extension and
+ * --dev-service) are extensions being written: loaded straight from where
+ * they are, always community. One never stands in for an installed copy of
+ * the same id, official or community (it would take that copy's storage and
+ * saved state without an approval): the installed copy loads, and the
+ * developer folder is ignored, marked on it as `developerIgnored`.
+ *
  * A third place, `previousRoot`, holds the version an update replaced
  * (extension-manager.cjs keeps it until the new one has started once). Its
  * copies only count if officially signed, and lose ties, so they only load
@@ -83,7 +90,7 @@ function versionOf(manifest) {
   return manifest && !manifest.invalid && isValidVersion(manifest.version) ? manifest.version : null;
 }
 
-const SOURCE_RANK = { core: -1, bundled: 0, installed: 1, previous: 2 };
+const SOURCE_RANK = { core: -1, bundled: 0, installed: 1, previous: 2, developer: 3 };
 
 /** Higher version first; a missing version sorts lowest; bundled, then installed, wins ties. */
 function compareCandidates(a, b) {
@@ -104,10 +111,15 @@ function compareCandidates(a, b) {
  * @param {(kind: 'plugins'|'services') => string|null} options.bundledRoot
  * @param {(kind: 'plugins'|'services') => string|null} options.installedRoot
  * @param {(kind: 'plugins'|'services') => string|null} [options.previousRoot]
+ * @param {(kind: 'plugins'|'services') => string[]} [options.developerFolders]
+ *        extension folders being developed (each folder's name is its id)
  * @param {Map} [options.trustedKeys]  from loadTrustedKeys()
  * @param {(message: string) => void} [options.warn]
  */
-function createExtensionCatalog({ coreRoot = () => null, bundledRoot, installedRoot, previousRoot = () => null, trustedKeys = new Map(), warn = message => console.warn(message) }) {
+function createExtensionCatalog({
+  coreRoot = () => null, bundledRoot, installedRoot, previousRoot = () => null, developerFolders = () => [],
+  trustedKeys = new Map(), warn = message => console.warn(message),
+}) {
   const cache = new Map();
 
   function candidateFor(kind, id, source, extensionPath) {
@@ -115,6 +127,8 @@ function createExtensionCatalog({ coreRoot = () => null, bundledRoot, installedR
     if (manifest?.invalid) warn(`[extensions] ${KINDS[kind]} '${id}' has invalid extension.json: ${manifest.error}`);
     const base = { id, kind: KINDS[kind], path: extensionPath, source, manifest, version: versionOf(manifest), signature: null };
     if (source === 'core' || source === 'bundled') return { ...base, tier: resolveTier(manifest, source) };
+    // Being developed: community, whatever it carries.
+    if (source === 'developer') return { ...base, tier: 'third-party' };
     const check = checkSignature(extensionPath, {
       kind: KINDS[kind], id, manifest: manifest && !manifest.invalid ? manifest : null, trustedKeys,
     });
@@ -135,19 +149,24 @@ function createExtensionCatalog({ coreRoot = () => null, bundledRoot, installedR
       .filter(item => item.tier === 'first-party' && item.signature?.status !== 'invalid')
       .sort(compareCandidates);
     const broken = candidates.filter(item => item.signature?.status === 'invalid');
-    const community = candidates.filter(item => item.tier === 'third-party');
+    // An installed copy first: a developer folder only loads on its own.
+    const community = candidates.filter(item => item.tier === 'third-party')
+      .sort((a, b) => (a.source === 'developer') - (b.source === 'developer'));
+    const developer = candidates.find(item => item.source === 'developer');
 
     let chosen = system || official[0] || broken[0] || community[0];
     const fallback = !system && official[0] ? official[1] || null : null;
     for (const item of candidates) {
       if (item === chosen || item === fallback || item.source === 'previous') continue;
       const why = item.signature?.status === 'invalid' ? `its signature is broken (${item.signature.reason})`
+        : item.source === 'developer' ? `${chosen.source === 'installed' ? 'an installed' : 'another'} extension has the id '${id}'; remove it (Settings → Extensions) or rename the folder`
         : item.tier === 'third-party' && chosen.tier !== 'third-party' ? 'it is not signed, and an official copy is present'
           : chosen.tier === 'system' ? 'it is part of Atmos'
             : `version ${chosen.version || '(none)'} from ${chosen.source === 'bundled' ? 'Atmos' : chosen.path} is loaded instead`;
       warn(`[extensions] ignoring ${item.source} ${label} (${item.path}): ${why}`);
     }
     if (fallback) chosen = { ...chosen, fallback };
+    if (developer && chosen !== developer) chosen = { ...chosen, developerIgnored: developer.path };
     return chosen;
   }
 
@@ -167,6 +186,15 @@ function createExtensionCatalog({ coreRoot = () => null, bundledRoot, installedR
         if (!byId.has(id)) byId.set(id, []);
         byId.get(id).push(candidate);
       }
+    }
+    for (const folder of developerFolders(kind) || []) {
+      const id = path.basename(path.resolve(folder));
+      if (!VALID_ID.test(id) || !fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+        warn(`[extensions] ignoring developer folder ${folder}: it must exist, and its name is the id (lowercase letters, numbers and hyphens)`);
+        continue;
+      }
+      if (!byId.has(id)) byId.set(id, []);
+      byId.get(id).push(candidateFor(kind, id, 'developer', path.resolve(folder)));
     }
     // A previous version on its own (the extension was removed since) never loads.
     for (const [id, candidates] of byId) {

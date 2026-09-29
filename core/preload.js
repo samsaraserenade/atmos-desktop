@@ -5,7 +5,6 @@
  */
 console.log('[preload] loading...');
 const { contextBridge, ipcRenderer } = require('electron');
-const { webUtils } = require('electron');
 
 // ── Context bridge ────────────────────────────────────────────────────────────
 
@@ -49,6 +48,16 @@ contextBridge.exposeInMainWorld('atmosCore', {
   // never invokes a main.cjs handler.
   invokeExtensionAs: (caller, kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, String(caller), ...args),
   showExtensionNotification: (kind, id, options) => ipcRenderer.invoke('extensions:notify', kind, id, options),
+  // A framed extension's atmos.fetch(), made by the main process on its
+  // behalf (stamped with `caller`, like invokeExtensionAs).
+  extensionFetch: (caller, requestId, request) => ipcRenderer.invoke('extensions:fetch', String(caller), String(requestId), request),
+  abortExtensionFetch: (caller, requestId) => ipcRenderer.send('extensions:fetch-abort', String(caller), String(requestId)),
+  // A developer folder changed (--dev-extension): { kind, id, restart, extension }.
+  onDeveloperChange: callback => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('extensions:developer-changed', listener);
+    return () => ipcRenderer.removeListener('extensions:developer-changed', listener);
+  },
   onExtensionNotificationClick: callback => {
     const listener = (_event, kind, id, tag) => callback(kind, id, tag);
     ipcRenderer.on('extensions:notification-click', listener);
@@ -93,7 +102,6 @@ contextBridge.exposeInMainWorld('atmos', {
     ipcRenderer.on(channel, listener);
     return () => ipcRenderer.removeListener(channel, listener);
   },
-  getPathForFile: webUtils ? file => webUtils.getPathForFile(file) : undefined,
 });
 
 console.log('[preload] Atmos bridges exposed successfully');

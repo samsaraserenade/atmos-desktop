@@ -1,5 +1,5 @@
 /**
- * Atmos SDK — the only way a framed extension talks to Atmos.
+ * Atmos SDK 1.0 — the only way a framed extension talks to Atmos.
  *
  *   import atmos from 'atmos-sdk';
  *
@@ -10,10 +10,25 @@
  * Every call goes through a message port to Atmos Core, which checks it
  * against the permissions in the extension's extension.json. The frame has
  * no other route to Atmos: it cannot see the Atmos page, other extensions'
- * frames or Electron. See ATMOS_CORE_INTEGRATION.md, "Atmos SDK".
+ * frames or Electron. See ATMOS_CORE_INTEGRATION.md, section 4, and the
+ * typings beside this file (atmos-sdk.d.ts).
+ *
+ * What SDK 1.0 promises (semver: a later 1.x only adds):
+ *
+ *   stable        extension, surface (type, id, presentation, setMenu,
+ *                 setGlass, trackGlass), state, events, appearance,
+ *                 contextMenu, clipboard, panel, invoke, listen, call,
+ *                 expose, library, wallpaper, audio, fetch, location,
+ *                 lifecycle, ready, SDK_VERSION
+ *   experimental  notifications (not yet seen working on Windows)
+ *   first-party   drawer, surface.onKey, background(), legacy.* — for
+ *                 official extensions; Atmos refuses them to community
+ *                 ones, and they may change in a minor version
+ *
+ * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = 3;
+export const SDK_VERSION = '1.0.0';
 
 let port = null;
 let nextId = 1;
@@ -34,7 +49,8 @@ function send(message) {
   else queue.push(message);
 }
 
-function request(method, ...args) {
+/** A request Atmos answers. */
+function ask(method, ...args) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, { resolve, reject });
@@ -42,6 +58,7 @@ function request(method, ...args) {
   });
 }
 
+/** A message Atmos doesn't answer. */
 function notify(method, ...args) {
   send({ method, args });
 }
@@ -60,8 +77,11 @@ function publish(topic, payload) {
 }
 
 function toError(error) {
-  const out = new Error(error?.message || 'Atmos request failed');
-  if (error?.name) out.name = error.name;
+  const name = error?.name;
+  const message = error?.message || 'Atmos request failed';
+  if (name === 'AbortError' || name === 'TimeoutError') return new DOMException(message, name);
+  const out = name === 'TypeError' ? new TypeError(message) : name === 'RangeError' ? new RangeError(message) : new Error(message);
+  if (name) out.name = name;
   return out;
 }
 
@@ -172,7 +192,7 @@ function loadAppFont(font) {
   appFontId = id;
   if (appFontFace) { document.fonts.delete(appFontFace); appFontFace = null; }
   if (!id || typeof font.family !== 'string') return;
-  request('appearance.fontData', id).then(dataUrl => {
+  ask('appearance.fontData', id).then(dataUrl => {
     if (appFontId !== id || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return;
     const face = new FontFace(font.family, `url(${dataUrl})`);
     appFontFace = face;
@@ -258,16 +278,6 @@ function armDrawer() {
   }, { passive: true });
 }
 
-function armFileDrops() {
-  // A file drag entering the frame: Atmos covers the frame and takes the
-  // drop, since only it can see the files' paths (see surface.onFileDrop).
-  document.addEventListener('dragenter', event => {
-    if (!event.dataTransfer?.types?.includes('Files')) return;
-    event.preventDefault();
-    notify('drop.arm');
-  }, true);
-}
-
 /** Internal: called by /__atmos/frame.js before the entry file loads. */
 export function __connect() {
   return new Promise(resolve => {
@@ -278,6 +288,7 @@ export function __connect() {
       port.onmessage = onMessage;
       init = event.data.init;
       Object.assign(extension, init.extension);
+      Object.freeze(extension);
       Object.assign(surface, init.surface);
       document.documentElement.dataset.atmosSurface = surface.type;
       applyAppearance(init.appearance);
@@ -288,7 +299,6 @@ export function __connect() {
       }
       if (surface.type === 'sidebar' || surface.type === 'settings') watchSize();
       forwardKeys();
-      if (surface.fileDrops) armFileDrops();
       if (surface.drawer) {
         drawerState = Object.freeze({ ...surface.drawer });
         if (!drawerState.locked) { armDrawer(); setDrawerVisible(drawerState.visible); }
@@ -301,42 +311,33 @@ export function __connect() {
   });
 }
 
-/** Which extension this frame belongs to: { id, kind, tier }. */
+// ── Stable ───────────────────────────────────────────────────────────────────
+
+/** Which extension this frame belongs to: { id, kind, tier, version }. */
 export const extension = {};
 
 /**
- * This frame's surface: { type: 'panel'|'sidebar'|'settings'|'boot', presentation, fileDrops }.
- * A layout change recreates the frame, so `presentation` is fixed for its
- * lifetime.
- *
- * With "fileDrops": true on the surface in the manifest, files dragged from
- * the desktop are received by Atmos on the frame's behalf:
- *   onFileDrag(({ state }) => ...)   state 'over' while a file drag is over
- *                                    the frame, 'leave' when it ends
- *   onFileDrop(drop => ...)          { paths, files, types, data, x, y }:
- *                                    paths[i] is files[i]'s path on disk
- *                                    ('' for files that have none, e.g. an
- *                                    image dragged from a web page); data
- *                                    holds text/uri-list, text/plain and
- *                                    text/html when present.
+ * This frame's surface: { type: 'panel'|'sidebar'|'settings'|'boot', id,
+ * presentation: 'full'|'tile'|'window'|null, glass, drawer }. A layout
+ * change recreates the frame, so `presentation` is fixed for its lifetime.
  */
 export const surface = {
-  onFileDrag: fn => subscribe('fileDrag', fn),
-  /** Boot frames: a key declared on the boot contribution ("keys": ["Space"]) was pressed: fn({ code }). */
-  onKey: fn => subscribe('key', fn),
-  onFileDrop: fn => subscribe('fileDrop', fn),
   /**
    * Sidebar widgets: the items Atmos adds to this widget's header menu
    * (right-click on its title); same item shapes as contextMenu.open().
    * Call again whenever they change (a `checked` flag, say).
    */
+  setMenu(items) {
+    headerActions.clear();
+    return ask('surface.setMenu', (items || []).map((item, index) => plainMenuItem(item, index, headerActions)));
+  },
   /**
    * Panels declaring "glass": true — Core draws the frosted material under
    * the frame (a frame's own backdrop-filter can't blur the wallpaper).
    * regions: [{ x, y, width, height, material: 'panel'|'shell', radius }]
    * in this frame's pixels. Leave those areas transparent in the frame.
    */
-  setGlass: regions => request('surface.setGlass', regions),
+  setGlass: regions => ask('surface.setGlass', regions),
   /**
    * The same, kept up to date for you: every element with a
    * data-atmos-glass="panel|shell" attribute (optionally
@@ -365,7 +366,7 @@ export const surface = {
       const next = JSON.stringify(regions);
       if (next === last) return;
       last = next;
-      request('surface.setGlass', regions).catch(error => console.warn('[atmos] setGlass:', error.message));
+      ask('surface.setGlass', regions).catch(error => console.warn('[atmos] setGlass:', error.message));
     };
     const queue = () => {
       if (queued) return;
@@ -393,75 +394,95 @@ export const surface = {
       resize.disconnect();
       window.removeEventListener('resize', queue);
       document.removeEventListener('scroll', queue, true);
-      request('surface.setGlass', []).catch(() => {});
+      ask('surface.setGlass', []).catch(() => {});
     };
   },
-  setMenu(items) {
-    headerActions.clear();
-    return request('surface.setMenu', (items || []).map((item, index) => plainMenuItem(item, index, headerActions)));
-  },
+  /**
+   * First-party. Boot frames: a key declared on the boot contribution
+   * ("keys": ["Space"]) was pressed: fn({ code }).
+   */
+  onKey: fn => subscribe('key', fn),
 };
 
 /**
  * Persisted state for this extension, shared by all of its frames and saved
- * with Atmos's settings. Keep it small (under 1 MB); use IndexedDB in the
+ * in a file of its own. Keep it small (under 1 MB); use IndexedDB in the
  * frame for larger data.
  */
-export const state = {
-  get: () => request('state.get'),
-  set: value => request('state.set', value),
-  update: patch => request('state.update', patch),
+export const state = Object.freeze({
+  get: () => ask('state.get'),
+  set: value => ask('state.set', value),
+  update: patch => ask('state.update', patch),
   onChange: fn => subscribe('state', fn),
-};
+});
 
 /**
  * Events. Plain names are this extension's own (`<id>:<name>` for others);
  * listening to another extension's events requires declaring it in
- * "invokes". Emitting is only possible in the extension's own namespace.
+ * "invokes", and it sharing them ("exports.events"). Emitting is only
+ * possible in the extension's own namespace.
  */
-export const events = {
-  emit: (name, payload) => request('events.emit', name, payload),
+export const events = Object.freeze({
+  emit: (name, payload) => ask('events.emit', name, payload),
   on(name, fn) {
     const unsubscribe = subscribe(`event:${name}`, fn);
-    const subscribed = request('events.subscribe', name);
+    const subscribed = ask('events.subscribe', name);
     subscribed.catch(error => { unsubscribe(); console.error(`[atmos-sdk] cannot listen to '${name}':`, error.message); });
     return () => { unsubscribe(); notify('events.unsubscribe', name); };
   },
-};
+});
 
-/** Current theme: { theme, colorScheme, vars }. Frames are themed automatically. */
-export const appearance = {
-  get: () => request('appearance.get'),
+/** Current theme: { theme, colorScheme, vars, font }. Frames are themed automatically. */
+export const appearance = Object.freeze({
+  get: () => ask('appearance.get'),
   onChange: fn => subscribe('appearance', fn),
-};
+});
 
 /**
  * Show an Atmos context menu at frame coordinates. Items are
- *   { id, label, run?, checked? }             a row; `checked` shows a tick
+ *   { id, label, run?, checked?, hold?, tone?, icon? }   a row
  *   { id, label, type: 'select', value, options: [{ value, label }], run(value) }
+ *   { type: 'toggle' | 'range' | 'number' | 'text' | 'colors', …, run(value) }
+ *   { type: 'buttons', buttons: [{ id, label, icon?, title?, run }] }
  *   { type: 'separator' | 'heading' | 'meta', label? }
- * Resolves with the chosen id ({ id, value } for a select), or null when
+ * Resolves with the chosen id ({ id, value } for a control), or null when
  * dismissed.
  */
-export const contextMenu = {
+export const contextMenu = Object.freeze({
   async open(x, y, items) {
     // Each menu has its own actions: a menu closing later must not drop
     // the actions of one opened since.
     const actions = new Map();
     menuActions = actions;
     try {
-      return await request('contextMenu.open', x, y, (items || []).map((item, index) => plainMenuItem(item, index, actions)));
+      return await ask('contextMenu.open', x, y, (items || []).map((item, index) => plainMenuItem(item, index, actions)));
     } finally {
       actions.clear();
     }
   },
   /** Close the menu this frame has open, if any (when what it points at scrolls away, say). */
-  close: () => request('contextMenu.close'),
-};
+  close: () => ask('contextMenu.close'),
+});
+
+/**
+ * The clipboard. A frame that has focus can use navigator.clipboard itself;
+ * an action chosen from an Atmos menu (contextMenu.open, setMenu) runs
+ * while the Atmos page has focus, so copy through here instead.
+ */
+export const clipboard = Object.freeze({
+  writeText: text => ask('clipboard.write', { text: String(text) }),
+  /** A PNG Blob, optionally with plain text beside it. */
+  writeImage: (png, text) => ask('clipboard.write', text == null ? { image: png } : { image: png, text: String(text) }),
+});
+
+/** This extension's panel. */
+export const panel = Object.freeze({
+  show: () => ask('panel.show'),
+});
 
 /** Call another extension's main-process IPC handler: invoke('service:x', 'channel', ...args). */
 export function invoke(target, channel, ...args) {
-  return request('invoke', target, channel, ...args);
+  return ask('invoke', target, channel, ...args);
 }
 
 /**
@@ -474,7 +495,7 @@ export function listen(target, channel, fn) {
   const key = `${target} ${channel}`;
   const deliver = args => fn(...(Array.isArray(args) ? args : []));
   const unsubscribe = subscribe(`main:${key}`, deliver);
-  request('main.subscribe', target, channel).catch(error => {
+  ask('main.subscribe', target, channel).catch(error => {
     unsubscribe();
     console.error(`[atmos-sdk] cannot listen to ${target} '${channel}':`, error.message);
   });
@@ -486,39 +507,24 @@ export function listen(target, channel, fn) {
 
 /** Call a method a service exposes from its boot frame: call('service:x', 'method', ...args). */
 export function call(target, method, ...args) {
-  return request('call', target, method, ...args);
+  return ask('call', target, method, ...args);
 }
 
 /**
  * From boot.js: offer methods to call(). The extension's own panel and
  * widgets can always call them ('plugin:<own id>'); other extensions need
- * the target in "permissions.invokes".
+ * the target in "permissions.invokes", and the method in "exports.methods".
  */
 export function expose(methods) {
   if (!methods || typeof methods !== 'object') throw new TypeError('atmos.expose: methods must be an object');
   exposed = methods;
-  return request('services.expose', Object.keys(methods).filter(name => typeof methods[name] === 'function'));
+  return ask('services.expose', Object.keys(methods).filter(name => typeof methods[name] === 'function'));
 }
 
 /** URL of a library service's module, for import(): await import(await library('service:plotting', 'index.js')). */
 export function library(target, file) {
-  return request('library.url', target, file);
+  return ask('library.url', target, file);
 }
-
-/**
- * System notifications (the Notification API doesn't work in frames).
- * Needs "notifications" in "permissions.browser".
- *   show({ title, body?, tag?, silent? })  resolves true once shown, false
- *                                          where the system has none
- *   onClick(({ tag }) => ...)              the user clicked one of this
- *                                          extension's notifications; Atmos
- *                                          comes to the front first. Every
- *                                          frame of the extension hears it.
- */
-export const notifications = {
-  show: options => request('notifications.show', options),
-  onClick: fn => subscribe('notificationClick', fn),
-};
 
 /**
  * The background layer's Wallpaper service. Needs "invokes": ["service:wallpaper"].
@@ -527,15 +533,15 @@ export const notifications = {
  *                  data URL of the current image (null when there is none)
  *   onChange(fn)   the same, whenever the image or mode changes
  */
-export const wallpaper = {
-  set: file => request('wallpaper.set', file),
-  get: () => request('wallpaper.get'),
+export const wallpaper = Object.freeze({
+  set: file => ask('wallpaper.set', file),
+  get: () => ask('wallpaper.get'),
   onChange(fn) {
     const unsubscribe = subscribe('wallpaper', fn);
-    request('wallpaper.subscribe').catch(error => { unsubscribe(); console.error('[atmos-sdk] cannot follow the wallpaper:', error.message); });
+    ask('wallpaper.subscribe').catch(error => { unsubscribe(); console.error('[atmos-sdk] cannot follow the wallpaper:', error.message); });
     return unsubscribe;
   },
-};
+});
 
 /**
  * The background layer's Audio service: this extension's own playback
@@ -543,27 +549,191 @@ export const wallpaper = {
  * frames come and go). Needs "invokes": ["service:audio"].
  *
  *   load(source, { id, position, play })  source: a Blob/File, or an
- *        atmos-resource:// URL from a provider the extension registers or
- *        invokes; id: your own label for it (a track key), reported back
+ *        atmos-resource:// URL from a provider the extension registers;
+ *        id: your own label for it (a track key), reported back
  *   play() pause() seek(seconds) setVolume(0–1) stop()
  *   state()       { type, source, playing, currentTime, duration, volume, ended, error }
  *   onChange(fn)  the same on every change, in every frame of the extension
  *                 (type: source, loaded, play, pause, time, ended, volume, error)
  */
-export const audio = {
-  load: (source, options) => request('audio.load', source, options),
-  play: () => request('audio.play'),
-  pause: () => request('audio.pause'),
-  seek: seconds => request('audio.seek', seconds),
-  setVolume: value => request('audio.volume', value),
-  stop: () => request('audio.stop'),
-  state: () => request('audio.state'),
+export const audio = Object.freeze({
+  load: (source, options) => ask('audio.load', source, options),
+  play: () => ask('audio.play'),
+  pause: () => ask('audio.pause'),
+  seek: seconds => ask('audio.seek', seconds),
+  setVolume: value => ask('audio.volume', value),
+  stop: () => ask('audio.stop'),
+  state: () => ask('audio.state'),
   onChange(fn) {
     const unsubscribe = subscribe('audio', fn);
-    request('audio.subscribe').catch(error => { unsubscribe(); console.error('[atmos-sdk] cannot follow audio:', error.message); });
+    ask('audio.subscribe').catch(error => { unsubscribe(); console.error('[atmos-sdk] cannot follow audio:', error.message); });
     return unsubscribe;
   },
-};
+});
+
+// ── atmos.fetch() ────────────────────────────────────────────────────────────
+let nextFetch = 1;
+
+function abortReason(signal) {
+  return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+}
+
+/** The main process's answer as a Response, like fetch()'s own. */
+function toResponse({ url, status, statusText, headers, body, redirected }) {
+  const noBody = status === 101 || status === 103 || status === 204 || status === 205 || status === 304;
+  const clean = new Headers();
+  for (const [name, value] of headers || []) {
+    try { clean.append(name, value); } catch { /* not a header Response allows */ }
+  }
+  let response;
+  try {
+    response = new Response(noBody ? null : body, { status, statusText, headers: clean });
+  } catch {
+    response = new Response(noBody ? null : body, { status: status >= 200 && status <= 599 ? status : 502, headers: clean });
+  }
+  Object.defineProperties(response, { url: { value: url }, redirected: { value: redirected === true } });
+  return response;
+}
+
+/**
+ * fetch(), made by Atmos for the frame: for APIs the frame can't read
+ * itself because they send no CORS headers. Same arguments and result as
+ * fetch(). Only https://, only hosts in "permissions.network", never a
+ * private or local address; no cookies; 30 s, 5 MB up and 10 MB down per
+ * request. Rejects with a TypeError for network failures (like fetch()),
+ * an AtmosPermissionError for an undeclared host, and an AbortError when
+ * `signal` aborts it.
+ */
+async function atmosFetch(input, init = undefined) {
+  // Request does what fetch() does with its arguments: resolves the URL,
+  // checks the method, and turns the body into bytes with a content type.
+  const request = new Request(input, init);
+  const signal = request.signal;
+  if (signal.aborted) throw abortReason(signal);
+  const body = request.body === null ? null : await request.arrayBuffer();
+  const id = nextFetch++;
+  let stop = null;
+  const aborted = new Promise((_, reject) => {
+    stop = () => { notify('fetch.abort', id); reject(abortReason(signal)); };
+    signal.addEventListener('abort', stop, { once: true });
+  });
+  try {
+    const result = await Promise.race([
+      ask('fetch', { id, url: request.url, method: request.method, headers: [...request.headers], body, redirect: request.redirect }),
+      aborted,
+    ]);
+    return toResponse(result);
+  } finally {
+    signal.removeEventListener('abort', stop);
+    aborted.catch(() => {});
+  }
+}
+export { atmosFetch as fetch };
+
+// ── atmos.location ───────────────────────────────────────────────────────────
+/**
+ * The user's location as set in Atmos (Settings → Appearance → Location),
+ * read-only. Needs "invokes": ["service:location"].
+ *   get()          { lat, lon, label, mode } or null when none is set
+ *   onChange(fn)   the same (or null) whenever the user changes it
+ */
+const locationApi = Object.freeze({
+  get: () => ask('location.get'),
+  onChange(fn) {
+    const unsubscribe = subscribe('location', fn);
+    ask('location.subscribe').catch(error => { unsubscribe(); console.error('[atmos-sdk] cannot follow the location:', error.message); });
+    return unsubscribe;
+  },
+});
+export { locationApi as location };
+
+// ── atmos.lifecycle ──────────────────────────────────────────────────────────
+// A frame lives exactly as long as its surface: Core removes it when the
+// panel is switched away, the widget hidden, the layout changed. Anything it
+// hands to something that outlives it (a listener on another frame's
+// object, a timer in a shared worker, an open request) is cleaned up here.
+const lifecycleController = new AbortController();
+const lifecycleCleanups = new Set();
+const lifecycleTimers = new Set();
+if (typeof addEventListener === 'function') {
+  addEventListener('pagehide', () => {
+    if (lifecycleController.signal.aborted) return;
+    lifecycleController.abort(new DOMException('The frame is going away.', 'AbortError'));
+    for (const handle of lifecycleTimers) { clearTimeout(handle); clearInterval(handle); }
+    lifecycleTimers.clear();
+    for (const fn of [...lifecycleCleanups].reverse()) {
+      try { fn(); } catch (error) { console.error('[atmos-sdk] cleanup failed:', error); }
+    }
+    lifecycleCleanups.clear();
+  });
+}
+
+function onCleanup(fn) {
+  if (typeof fn !== 'function') throw new TypeError('atmos.lifecycle.onCleanup: expected a function');
+  if (lifecycleController.signal.aborted) { fn(); return () => {}; }
+  const entry = () => fn();
+  lifecycleCleanups.add(entry);
+  return () => lifecycleCleanups.delete(entry);
+}
+
+/**
+ * The frame's lifetime.
+ *   signal                       aborts as the frame goes (pass it to
+ *                                fetch(), addEventListener, your own work)
+ *   onCleanup(fn)                run fn as the frame goes (last added runs
+ *                                first); returns a function that cancels it
+ *   listen(target, type, fn, options)
+ *                                addEventListener, removed as the frame
+ *                                goes; returns a function that removes it
+ *   setTimeout / setInterval     cleared as the frame goes
+ */
+export const lifecycle = Object.freeze({
+  signal: lifecycleController.signal,
+  onCleanup,
+  listen(target, type, fn, options = {}) {
+    if (!target?.addEventListener) throw new TypeError('atmos.lifecycle.listen: target is not an EventTarget');
+    const base = typeof options === 'boolean' ? { capture: options } : { ...options };
+    const signal = base.signal ? AbortSignal.any([base.signal, lifecycleController.signal]) : lifecycleController.signal;
+    target.addEventListener(type, fn, { ...base, signal });
+    // Another realm's target (a background frame's object) may outlive this
+    // frame's signal, so remove it explicitly too.
+    const remove = onCleanup(() => target.removeEventListener(type, fn, base));
+    return () => { remove(); target.removeEventListener(type, fn, base); };
+  },
+  setTimeout(fn, delay, ...args) {
+    const handle = setTimeout((...values) => { lifecycleTimers.delete(handle); fn(...values); }, delay, ...args);
+    lifecycleTimers.add(handle);
+    return handle;
+  },
+  setInterval(fn, delay, ...args) {
+    const handle = setInterval(fn, delay, ...args);
+    lifecycleTimers.add(handle);
+    return handle;
+  },
+});
+
+// ── Experimental ─────────────────────────────────────────────────────────────
+
+/**
+ * System notifications (the Notification API doesn't work in frames).
+ * Needs "notifications" in "permissions.browser". Experimental: not yet
+ * seen working on Windows.
+ *   show({ title, body?, tag?, silent? })  resolves true once shown, false
+ *                                          where the system has none
+ *   onClick(({ tag }) => ...)              the user clicked one of this
+ *                                          extension's notifications; Atmos
+ *                                          comes to the front first. Every
+ *                                          frame of the extension hears it.
+ */
+export const notifications = Object.freeze({
+  show: options => ask('notifications.show', options),
+  onClick: fn => subscribe('notificationClick', fn),
+});
+
+// ── First-party ──────────────────────────────────────────────────────────────
+// For official extensions. Atmos refuses them to community ones (a drawer and
+// boot keys aren't given to them; background() and legacy.* are refused),
+// and they may change in a minor version.
 
 /**
  * A panel declared with "drawer": { "bar": 54 } lives in a drawer that
@@ -585,37 +755,21 @@ export const audio = {
  *                 var(--atmos-drawer-visible-h, calc(100vh - <bar>px)))
  *   onChange(fn) open/expanded/bar placement changes
  */
-export const drawer = {
+export const drawer = Object.freeze({
   get state() { return drawerState; },
   onChange: fn => subscribe('drawer', () => fn(drawerState)),
   onKey: fn => subscribe('drawerKey', fn),
-  open: () => request('drawer.command', 'open'),
-  close: () => request('drawer.command', 'close'),
+  open: () => ask('drawer.command', 'open'),
+  close: () => ask('drawer.command', 'close'),
   /** Raise fully open. */
-  expand: () => request('drawer.command', 'expand'),
+  expand: () => ask('drawer.command', 'expand'),
   /** Back down to just the bar. */
-  collapse: () => request('drawer.command', 'collapse'),
+  collapse: () => ask('drawer.command', 'collapse'),
   /** 'top' (bar leads the drawer) or 'bottom' (bar docked, browser revealed upward). */
-  setBarPlacement: placement => request('drawer.command', 'bar', placement),
+  setBarPlacement: placement => ask('drawer.command', 'bar', placement),
   /** 0 = fully open, 1 = bar only, 2 = hidden. Atmos remembers it; for carrying over an old position. */
-  setPlacement: placement => request('drawer.command', 'placement', placement),
-};
-
-/**
- * The clipboard. A frame that has focus can use navigator.clipboard itself;
- * an action chosen from an Atmos menu (contextMenu.open, setMenu) runs
- * while the Atmos page has focus, so copy through here instead.
- */
-export const clipboard = {
-  writeText: text => request('clipboard.write', { text: String(text) }),
-  /** A PNG Blob, optionally with plain text beside it. */
-  writeImage: (png, text) => request('clipboard.write', text == null ? { image: png } : { image: png, text: String(text) }),
-};
-
-/** This extension's panel. */
-export const panel = {
-  show: () => request('panel.show'),
-};
+  setPlacement: placement => ask('drawer.command', 'placement', placement),
+});
 
 /**
  * One-off migration for first-party extensions that moved into a frame:
@@ -623,23 +777,23 @@ export const panel = {
  * "legacyStorage": { "indexedDB": [...] }. Resolves with
  * { version, stores: { name: [[key, value], ...] } } or null.
  */
-export const legacy = {
-  readIndexedDB: name => request('legacy.readIndexedDB', name),
+export const legacy = Object.freeze({
+  readIndexedDB: name => ask('legacy.readIndexedDB', name),
   /** A state namespace listed in "legacyStorage": { "state": [...] }. Resolves its saved data or null. */
-  readState: namespace => request('legacy.readState', namespace),
+  readState: namespace => ask('legacy.readState', namespace),
   /** Keys listed in "legacyStorage": { "localStorage": [...] } ("prefix*" entries return every matching key). Resolves { key: value|null }. */
-  readLocalStorage: keys => request('legacy.readLocalStorage', keys),
+  readLocalStorage: keys => ask('legacy.readLocalStorage', keys),
   /** Delete the page databases listed in "legacyStorage": { "deleteIndexedDB": [...] } ("prefix*" allowed). Resolves the names deleted. */
-  deleteIndexedDB: () => request('legacy.deleteIndexedDB'),
-};
+  deleteIndexedDB: () => ask('legacy.deleteIndexedDB'),
+});
 
 /**
  * First-party extensions only: the `window` of this extension's own boot
  * frame, so a panel or widget can use live objects the boot frame holds
- * (a network client, say) instead of copying them through call(). Frames
- * of first-party extensions share one origin, so this is a same-origin
- * window in the same process. Anything read from it belongs to that realm,
- * where `instanceof` checks against this frame's classes fail.
+ * (a network client, say) instead of copying them through call(). An
+ * extension's frames share one origin, so this is a same-origin window in
+ * the same process. Anything read from it belongs to that realm, where
+ * `instanceof` checks against this frame's classes fail.
  * Resolves once the boot frame is up (waiting up to `timeout` ms), or
  * rejects.
  */
@@ -670,7 +824,9 @@ export async function background({ timeout = 15000 } = {}) {
 }
 
 const atmos = Object.freeze({
-  SDK_VERSION, ready, extension, surface, state, events, appearance, contextMenu,
-  invoke, listen, call, expose, library, notifications, wallpaper, audio, drawer, panel, legacy, background, clipboard,
+  SDK_VERSION, ready, extension, surface, state, events, appearance, contextMenu, clipboard, panel,
+  invoke, listen, call, expose, library, wallpaper, audio, fetch: atmosFetch, location: locationApi, lifecycle,
+  notifications,
+  drawer, legacy, background,
 });
 export default atmos;

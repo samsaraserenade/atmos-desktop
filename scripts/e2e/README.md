@@ -14,7 +14,8 @@ frames.
 | `matrix-chat.cjs` | Matrix Chat in frames against a fake homeserver (`fake-homeserver.cjs`): the one-time fresh start (the old device signed out, the page's old key store deleted, display preferences kept); the Rooms widget beside Chat only; signing in from the panel; opening a room from the widget; Atmos drawing the panel and composer glass; sending; an incoming message shown and pinging on the Audio service; the message menu's quick-reaction row reacting; Delete asking first; signed in again after a restart with no second fresh start. |
 | `finance-lifecycle.cjs` | Finance through the extension manager on a minimal Atmos (Core and the system services only) with a signed local source and the synthetic VPS: installing Finance brings Charting and Currency (required) and Market Data (optional, recommended); with Market Data removed Finance still runs, the chart switcher is hidden, a watchlist click opens nothing and Market Data is offered; installed from that offer, the charts are back; a Finance update changes only Finance; removing Finance keeps its connection and state, and reinstalling finds them; an official service whose `main.cjs` never finishes starting is failed after 10 s, the plugin that needs it skipped, the rest start and Settings says why; removing with Delete clears Finance's data folder. |
 | `first-run.cjs` | An installer's extensions made as `after-pack.cjs` makes them (system services built in, the rest signed packages, passed as `--seed-packages`): a first start shows the picker; Finance and Audio Player ticked install with only the services they need, as removable official extensions, and the rest stay Available from "Comes with Atmos"; "Start with none" installs nothing and the picker doesn't return; an upgrade from an Atmos that bundled everything installs it all at once, keeping a switched-off extension off. Then as a release build (no packages; `--setup-source` stands in for the GitHub release): unreachable, the picker offers Try again / Start with none and a restart still shows it; reachable, it installs what's ticked; an upgrade downloads everything in the background and opens Extensions waiting for a restart. |
-| `security.cjs` | The Atmos page's lock-down (no injected inline script or string-compiled code, a sandboxed window), approval, re-approval after a change, the `main.cjs` ban, nothing served for an extension waiting for approval, notifications from a frame (and one refused for another extension), tamper detection on a copy of the bundled extensions with `integrity.json`, link and `window.open` handling, browser permissions. |
+| `security.cjs` | The Atmos page's lock-down (no injected inline script or string-compiled code, a sandboxed window), approval, re-approval after a change, the `main.cjs` ban, nothing served for an extension waiting for approval, nothing served through a link out of an approved extension's folder, notifications from a frame (and one refused for another extension), tamper detection on a copy of the bundled extensions with `integrity.json`, link and `window.open` handling, browser permissions. |
+| `sdk.cjs` | SDK 1.0 from developer folders (`--dev-extension`): they load without approval as Community, and one whose `engines` needs a later Atmos doesn't; `atmos.fetch()` against a local HTTPS server that sends no CORS headers (`--fetch-test`), with a POST, a redirect, and the refusals (an undeclared host, a redirect to one, an address, plain http) and an abort; `atmos.location` before and after the location changes; `atmos.lifecycle` cleaning up as a frame goes; a saved file reloading the frame; a changed `extension.json` taking a new host without a restart; the extension template as `npm run new:extension` makes it, with its panel's glass and its widget's `atmos.fetch()`. |
 
 ## Running
 
@@ -33,6 +34,7 @@ node scripts/e2e/first-run.cjs # screenshots in .tmp/e2e/first-run
 node scripts/e2e/finance-lifecycle.cjs # screenshots in .tmp/e2e/finance-lifecycle (about 3 minutes)
 node scripts/e2e/audio-player.cjs # screenshots in .tmp/e2e/audio-player
 node scripts/e2e/matrix-chat.cjs  # screenshots in .tmp/e2e/matrix-chat
+node scripts/e2e/sdk.cjs          # screenshots in .tmp/e2e/sdk
 ```
 
 They use the Electron from `devDependencies`; set `ELECTRON_PATH` to use
@@ -106,6 +108,9 @@ The output is a JSON report, not pass/fail. What to expect:
   - `run1` shows `pending` and `blocked`, `sneakyMainRan` is `false`, and
     `pendingFiles` is `404` (nothing of an extension waiting for approval
     is served);
+  - `links` is `{ outFile: 404, outDir: 404, inside: 200 }`: links added to
+    an approved extension's folder (they aren't in its fingerprint) serve
+    nothing from outside it;
   - `run2` is `approved/active` with a boot frame; `notify` is `"shown true"`
     (`"shown false"` where the system has no notifications, as in a bare
     Linux container), `notifyClicks` is `[{ tag: "t1" }]` and
@@ -149,5 +154,8 @@ The output is a JSON report, not pass/fail. What to expect:
   widget and settings page. The panel probes the sandbox (see `panel.js`).
 - `fixtures/services/hello-service`: a third-party service whose `boot.js`
   exposes `greet()`.
+- `fixtures-sdk/sdk-probe`: the developer folder `sdk.cjs` loads; its panel
+  probes `atmos.fetch()`, `atmos.location` and `atmos.lifecycle`.
 
-Together they are also the smallest working examples of the Atmos SDK.
+For a working example to start from, use the extension template
+(`npm run new:extension`), which `sdk.cjs` also runs.

@@ -13,7 +13,7 @@ test('renderer and main-process capability registries stay aligned', () => {
   assert.deepEqual(names(mainSource), names(rendererSource));
 });
 
-test('sidebar sizing requirements do not prevent main-process activation', async () => {
+test('capabilities Core still has do not prevent main-process activation', async () => {
   const handlers = new Map();
   const host = createExtensionHost({ ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) } });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-extension-sidebar-capability-'));
@@ -22,7 +22,7 @@ test('sidebar sizing requirements do not prevent main-process activation', async
     fs.mkdirSync(plugin);
     fs.writeFileSync(path.join(plugin, 'extension.json'), JSON.stringify({
       apiVersion: 2,
-      requires: { 'sidebar.resizable-sections': 1 },
+      requires: { 'extensions.manifest': 1, 'lifecycle.context': 1 },
       permissions: { ipc: true },
     }));
     fs.writeFileSync(path.join(plugin, 'main.cjs'), `module.exports = context => context.handle('list-files', () => ['ok']);`);
@@ -177,12 +177,12 @@ test('main.cjs only receives what its permissions declare', async () => {
     write('declared', { ipc: true, electron: ['shell'], provides: ['thing'] },
       "global.permissionProbe.declared = { shell: !!context.shell, dialog: !!context.dialog, ipcMain: !!context.ipcMain, protocol: !!context.protocol }; context.handle('ok', () => 1); context.provide('thing', 1);");
     write('undeclared', {}, "context.handle('sneaky', () => 1);");
-    write('capability', { uses: [] }, "global.permissionProbe.capability = 'reached'; context.use('thing');");
+    write('capability', {}, "global.permissionProbe.capability = typeof context.use;");
     await host.activateRoot('plugin', root);
     assert.deepEqual(seen.declared, { shell: true, dialog: false, ipcMain: false, protocol: false });
     assert.equal(handlers.has('atmos-extension:plugin:declared:ok'), true);
     assert.equal(handlers.has('atmos-extension:plugin:undeclared:sneaky'), false);
-    assert.equal(seen.capability, 'reached');
+    assert.equal(seen.capability, 'undefined', 'main-process capabilities went with SDK 1.0');
   } finally {
     console.error = originalError;
     delete global.permissionProbe;
@@ -265,4 +265,20 @@ test('IPC handlers: every call carries its caller, and a refusal stops it before
   assert.equal(await handler({}, 'plugin:player', 'b.mp3'), 'read b.mp3', 'an extension it shares with; the caller is not passed on');
   assert.throws(() => handler({}, 'plugin:nosy', '/etc/passwd'), /doesn't share its 'read' handler/);
   assert.deepEqual(asked, [[null, 'service:tags', 'read'], ['plugin:player', 'service:tags', 'read'], ['plugin:nosy', 'service:tags', 'read']]);
+});
+
+test('compatibility: "engines.atmos" against this Atmos, then the extension API and capabilities', () => {
+  const { checkCompatibility, CORE_API_VERSION } = require('./extension-host.cjs');
+  const at = (manifest, appVersion = '0.15.0') => checkCompatibility(manifest, { appVersion });
+  assert.equal(CORE_API_VERSION, 4);
+  assert.equal(at({}).compatible, true);
+  assert.equal(at({ apiVersion: 3, requires: { 'extensions.frames': 3 } }).compatible, true, 'packages made before SDK 1.0 still run');
+  assert.equal(at({ apiVersion: 4, engines: { atmos: '>=0.15.0' } }).compatible, true);
+  assert.equal(at({ apiVersion: 4, engines: { atmos: '>=0.15.0' } }, '0.14.1').reason, 'Needs Atmos 0.15.0 or later; this is 0.14.1');
+  assert.match(at({ engines: { atmos: 'soon' } }).reason, /isn't a version range/);
+  assert.match(at({ engines: ['atmos'] }).reason, /must be an object/);
+  assert.equal(at({ engines: { node: '>=20' } }).compatible, true, 'other engines are not Atmos\'s business');
+  assert.match(at({ apiVersion: 5 }).reason, /Needs a newer Atmos/);
+  assert.match(at({ requires: { 'panel.pass-through': 1 } }).reason, /capability this Atmos doesn't have/);
+  assert.equal(checkCompatibility({ engines: { atmos: '>=9.0.0' } }).compatible, true, 'no known Atmos version: not checked');
 });

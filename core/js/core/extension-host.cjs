@@ -2,10 +2,13 @@ const fs = require('fs');
 const { CONTEXT_ELECTRON, normalizePermissions } = require('./extension-permissions.cjs');
 const path = require('path');
 const { normalizeDependencies } = require('./extension-dependencies.cjs');
+const { checkEngines } = require('./extension-version.cjs');
 
 // Main-process mirror of capabilities.js. Keep these values aligned so a
 // manifest receives the same decision before privileged and renderer loading.
-const CORE_API_VERSION = 3;
+// apiVersion 4 is SDK 1.0: "engines" and the SDK 1.0 calls. A manifest that
+// says 4 isn't loaded by Atmos 0.14 and older, which don't read "engines".
+const CORE_API_VERSION = 4;
 const CORE_CAPABILITIES = new Map(Object.entries({
   'extensions.manifest': 1,
   'events.namespaced': 1,
@@ -13,24 +16,16 @@ const CORE_CAPABILITIES = new Map(Object.entries({
   'renderer.capabilities': 1,
   'surface.workspace': 1,
   'context-menu.contributions': 1,
-  'panel.explicit-default': 1,
   'state.namespaced': 1,
-  'appearance.semantic-colors': 1,
   'settings.appearance-contributions': 1,
-  'sidebar.resizable-sections': 1,
-  'extensions.after': 1,
-  'extensions.tiers': 1,
-  'extensions.permissions': 1,
-  'extensions.frames': 3, // 2: listen, legacy localStorage, setWallpaper, fileDrops, shortcut; 3: header menus, legacy state/IndexedDB keys, legacyId, toggling shortcuts, menu ticks and selects, notifications, wallpaper, audio, drawers, menu controls and icons, boot keys
-  'panel.surface-presentation': 1,
-  'panel.pass-through': 1,
+  'extensions.frames': 3, // the SDK level before SDK 1.0 (2: listen, shortcut; 3: menus, notifications, wallpaper, audio, drawers, boot keys…)
 }));
 
 // How long a main.cjs activate() may take before Atmos gives up on it and
 // carries on starting without it (and without what needs it).
 const ACTIVATION_TIMEOUT_MS = 10_000;
 
-function readCompatibleManifest(extensionRoot) {
+function readCompatibleManifest(extensionRoot, options) {
   const manifestPath = path.join(extensionRoot, 'extension.json');
   if (!fs.existsSync(manifestPath)) return { compatible: true, manifest: null };
 
@@ -40,11 +35,15 @@ function readCompatibleManifest(extensionRoot) {
   } catch (error) {
     return { compatible: false, reason: `invalid extension.json: ${error.message}` };
   }
-  return checkCompatibility(manifest);
+  return checkCompatibility(manifest, options);
 }
 
-/** Whether this Core can run an extension with this manifest: { compatible, reason, manifest }. */
-function checkCompatibility(manifest) {
+/**
+ * Whether this Core can run an extension with this manifest: { compatible,
+ * reason, manifest }. "engines.atmos" against `appVersion` (this Atmos's
+ * version), then the older apiVersion and capability requirements.
+ */
+function checkCompatibility(manifest, { appVersion = null } = {}) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return { compatible: false, reason: 'extension.json root must be an object' };
   }
@@ -54,9 +53,11 @@ function checkCompatibility(manifest) {
   if (Number.isFinite(manifest.apiVersion) && manifest.apiVersion > CORE_API_VERSION) {
     return {
       compatible: false,
-      reason: `requires core API ${manifest.apiVersion}, current API is ${CORE_API_VERSION}`,
+      reason: `Needs a newer Atmos (extension API ${manifest.apiVersion}; this one has ${CORE_API_VERSION})`,
     };
   }
+  const engines = checkEngines(manifest, appVersion);
+  if (!engines.ok) return { compatible: false, reason: engines.reason };
 
   const requirements = Array.isArray(manifest.requires)
     ? manifest.requires.map(name => [name, 1])
@@ -67,7 +68,7 @@ function checkCompatibility(manifest) {
       : [];
   for (const [name, version] of requirements) {
     if ((CORE_CAPABILITIES.get(name) ?? 0) < version) {
-      return { compatible: false, reason: `requires capability '${name}' v${version}` };
+      return { compatible: false, reason: `Needs a capability this Atmos doesn't have ('${name}' ${version})` };
     }
   }
   return { compatible: true, manifest };
@@ -114,14 +115,13 @@ function orderExtensions(entries, warn = message => console.warn(message)) {
 
 function createExtensionHost(dependencies) {
   const resourceProviders = new Map();
-  const capabilities = new Map();
   const ipcChannels = new Set();
   // What each extension registered, so a failed one can be withdrawn:
-  // ref → { channels, capabilities, providers, revoked }.
+  // ref → { channels, providers, revoked }.
   const registrations = new Map();
   const registrationsOf = (kind, id) => {
     const ref = `${kind}:${id}`;
-    if (!registrations.has(ref)) registrations.set(ref, { channels: new Set(), capabilities: new Set(), providers: new Set(), revoked: false });
+    if (!registrations.has(ref)) registrations.set(ref, { channels: new Set(), providers: new Set(), revoked: false });
     return registrations.get(ref);
   };
 
@@ -135,8 +135,8 @@ function createExtensionHost(dependencies) {
   /**
    * The context handed to a main.cjs. It only carries what the extension's
    * `permissions` declare: the listed Electron objects (never ipcMain or
-   * protocol), IPC when "ipc" is true, and the named capabilities and
-   * resource providers. Anything else throws, so undeclared use fails loudly.
+   * protocol), IPC when "ipc" is true, and the named resource providers.
+   * Anything else throws, so undeclared use fails loudly.
    */
   function context(kind, id, root, manifest = null) {
     const permissions = normalizePermissions(manifest?.permissions);
@@ -180,16 +180,12 @@ function createExtensionHost(dependencies) {
         if (!webContents || typeof webContents.send !== 'function') throw new Error('Extension IPC target is unavailable');
         webContents.send(scopedChannel(kind, id, name), ...args);
       },
-      provide(name, value) {
+      // Main-process capabilities went with SDK 1.0 (nothing used one).
+      // Packages made before it still call provide() for what they
+      // declare, so it stays, and does nothing.
+      provide(name) {
         if (!permissions.provides.includes(name)) deny(`provide capability '${name}' ("provides")`);
         live();
-        if (capabilities.has(name)) throw new Error(`Capability already registered: ${name}`);
-        capabilities.set(name, value);
-        own.capabilities.add(name);
-      },
-      use(name) {
-        if (!permissions.uses.includes(name)) deny(`use capability '${name}' ("uses")`);
-        return capabilities.get(name);
       },
       registerResourceProvider(name, handler) {
         if (!permissions.resources.includes(name)) deny(`register resource provider '${name}' ("resources")`);
@@ -222,9 +218,8 @@ function createExtensionHost(dependencies) {
       try { dependencies.ipcMain?.removeHandler?.(channel); } catch { /* already gone */ }
       ipcChannels.delete(channel);
     }
-    for (const name of own.capabilities) capabilities.delete(name);
     for (const name of own.providers) resourceProviders.delete(name);
-    own.channels.clear(); own.capabilities.clear(); own.providers.clear();
+    own.channels.clear(); own.providers.clear();
   }
 
   /** activate(), or a rejection once `timeoutMs` passes without it settling. */
@@ -260,7 +255,7 @@ function createExtensionHost(dependencies) {
       if (exclude.has(id)) continue;
       const entryPath = path.join(extensionRoot, 'main.cjs');
       if (!fs.existsSync(entryPath)) continue;
-      const compatibility = readCompatibleManifest(extensionRoot);
+      const compatibility = readCompatibleManifest(extensionRoot, { appVersion: dependencies.appVersion });
       if (!compatibility.compatible) {
         console.warn(`[extensions] ${kind} '${id}' skipped: ${compatibility.reason}`);
         continue;
@@ -304,7 +299,7 @@ function createExtensionHost(dependencies) {
     const entries = typeof plugins === 'string' ? _foldersIn(plugins) : plugins;
     for (const { id: pluginId, path: extensionRoot } of entries) {
       if (exclude.has(pluginId)) continue;
-      const compatibility = readCompatibleManifest(extensionRoot);
+      const compatibility = readCompatibleManifest(extensionRoot, { appVersion: dependencies.appVersion });
       if (!compatibility.compatible) {
         console.warn(`[extensions] plugin '${pluginId}' cannot supersede services: ${compatibility.reason}`);
         continue;

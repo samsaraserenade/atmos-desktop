@@ -13,7 +13,15 @@
  *     verified    every file matches its signature
  *     tampered    the signature is broken or a file differs — not loaded
  *
+ *   any tier except system
+ *     incompatible  made for another Atmos: "engines.atmos" doesn't include
+ *                 this version, or it needs a newer extension API or a
+ *                 capability this Atmos lacks — not loaded
+ *
  *   third-party (installed, not officially signed)
+ *     developer   a folder Atmos was started with to develop it
+ *                 (--dev-extension): loads without approval, with the
+ *                 same limits as any community extension
  *     approved    the user approved exactly these files and permissions
  *     pending     never approved — not loaded
  *     changed     files or permissions changed since approval — not loaded
@@ -29,23 +37,28 @@
 
 const fs = require('fs');
 const path = require('path');
-const { normalizePermissions, describePermissions, normalizeExports } = require('./extension-permissions.cjs');
+const { normalizePermissions, describePermissions, normalizeExports, permissionsAdded } = require('./extension-permissions.cjs');
 const { createHasher, readIntegrityList, compareFiles } = require('./extension-integrity.cjs');
 const { verifyExtension, SIGNATURE_FILE } = require('./extension-signing.cjs');
 const { readJson, writeJson } = require('./json-files.cjs');
 
-const LOADABLE = new Set(['verified', 'unverified', 'approved']);
+const LOADABLE = new Set(['verified', 'unverified', 'approved', 'developer']);
 // Permissions only a main.cjs can use; third-party extensions cannot have one.
-const MAIN_PROCESS_KEYS = ['node', 'electron', 'ipc', 'provides', 'uses', 'resources'];
+const MAIN_PROCESS_KEYS = ['node', 'electron', 'ipc', 'provides', 'resources'];
 
 function isLoadable(status) {
   return LOADABLE.has(status);
 }
 
-/** Permissions requested now that the approved set did not include, as readable lines. */
+/**
+ * Permissions requested now that the approved set did not include, as
+ * readable lines naming every added host. Compared as data, so a fifth
+ * host swapped for another shows, where the lines ("… and 1 more") match.
+ */
 function newlyRequested(current, approved) {
-  const before = new Set(describePermissions(approved || {}));
-  return describePermissions(current).filter(line => !before.has(line) && line !== 'No special permissions');
+  const added = approved == null ? current : permissionsAdded(current, approved);
+  if (!added) return [];
+  return describePermissions(added, { everyHost: true }).filter(line => line !== 'No special permissions');
 }
 
 /**
@@ -55,7 +68,10 @@ function newlyRequested(current, approved) {
  * @param {(kind: 'plugins'|'services') => string|null} options.bundledRoot
  * @param {Map} [options.trustedKeys]      from loadTrustedKeys()
  */
-function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot, trustedKeys = new Map(), warn = message => console.warn(message) }) {
+function createExtensionTrust({
+  approvalsFile, hashCacheFile = null, bundledRoot, trustedKeys = new Map(), warn = message => console.warn(message),
+  compatibility = () => ({ compatible: true, reason: null }),
+}) {
   const hasher = createHasher(hashCacheFile);
   const integrityLists = new Map();
   const results = new Map();
@@ -112,7 +128,7 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
     return { status: 'tampered', reason: signature.reason || 'Its signature could not be checked', signature };
   }
 
-  function assessInstalled(entry, permissions) {
+  function assessInstalled(entry, permissions, { developer = false } = {}) {
     if (!entry.manifest) return { status: 'blocked', reason: 'It has no extension.json, so its permissions are unknown' };
     if (entry.manifest.invalid) return { status: 'blocked', reason: `Its extension.json is invalid: ${entry.manifest.error}` };
     if (!permissions) return { status: 'blocked', reason: `Its permissions are invalid: ${entry.permissionError}` };
@@ -123,6 +139,9 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
     if (mainOnly.length) {
       return { status: 'blocked', reason: `It asks for main-process permissions (${mainOnly.join(', ')}), which only official, signed extensions can have` };
     }
+    // Chosen by whoever started Atmos with --dev-extension: that is the
+    // consent, and its files change all the time.
+    if (developer) return { status: 'developer', reason: null };
     const { digest } = hasher.hashTree(entry.path);
     const approval = approvals()[`${entry.kind}:${entry.id}`];
     if (!approval) return { status: 'pending', reason: 'Needs your approval before it can load', fingerprint: digest, newPermissions: newlyRequested(permissions, null) };
@@ -147,12 +166,15 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
       entry = { ...entry, permissionError: error.message };
     }
     let result;
+    // Made for another Atmos: nothing else about it matters this session.
+    const fits = entry.source !== 'core' && entry.manifest && !entry.manifest.invalid ? compatibility(entry.manifest) : { compatible: true };
     try {
       // The system services are part of Atmos's own files, like the rest of Core.
-      result = entry.source === 'core' ? { status: 'verified', reason: null }
+      result = !fits.compatible ? { status: 'incompatible', reason: fits.reason }
+        : entry.source === 'core' ? { status: 'verified', reason: null }
         : entry.source === 'bundled' ? assessBundled(entry, kind)
         : entry.tier === 'first-party' ? assessSigned(entry)
-          : assessInstalled(entry, permissions);
+          : assessInstalled(entry, permissions, { developer: entry.source === 'developer' });
     } catch (error) {
       result = { status: entry.tier === 'third-party' ? 'blocked' : 'tampered', reason: `Could not check its files: ${error.message}` };
     }
@@ -174,7 +196,8 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
       loadable: isLoadable(result.status),
       exports: shared,
       permissions: permissions || normalizePermissions(undefined),
-      permissionSummary: describePermissions(permissions || {}, { hasMain }),
+      // Community extensions are approved on this list, so every host is named.
+      permissionSummary: describePermissions(permissions || {}, { hasMain, everyHost: entry.tier === 'third-party' }),
       hasMain,
     };
     return full;
@@ -215,6 +238,7 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
    */
   function approve(kind, entry, fingerprint) {
     if (!entry || entry.tier !== 'third-party') throw new Error('Only community extensions need approval');
+    if (entry.source === 'developer') throw new Error('A developer folder loads without approval');
     const fresh = assess(kind, entry);
     hasher.save();
     if (fresh.status === 'blocked') throw new Error(fresh.reason);
@@ -242,7 +266,14 @@ function createExtensionTrust({ approvalsFile, hashCacheFile = null, bundledRoot
     if (startup) startup.approvalChanged = startup.status === 'approved';
   }
 
-  return { assess, assessAll, get, approve, revoke };
+  /** Assess one extension again (a developer folder's manifest changed) and keep the result. */
+  function reassess(kind, entry) {
+    const result = assess(kind, entry);
+    results.set(`${entry.kind}:${entry.id}`, result);
+    return result;
+  }
+
+  return { assess, assessAll, reassess, get, approve, revoke };
 }
 
 module.exports = { createExtensionTrust };

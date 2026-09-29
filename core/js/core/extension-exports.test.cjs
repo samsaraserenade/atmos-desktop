@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { normalizeExports, levelAllows, reachOf, describePermissions } = require('./extension-permissions.cjs');
 
 test('exports: missing shares nothing; names map to "official" or "all"', () => {
-  assert.deepEqual(normalizeExports(undefined), { ipc: {}, events: {}, methods: {}, resources: {} });
+  assert.deepEqual(normalizeExports(undefined), { ipc: {}, events: {}, methods: {} });
   assert.deepEqual(normalizeExports({ ipc: { 'read-tags': 'official' }, methods: { greet: 'all' } }).ipc, { 'read-tags': 'official' });
   assert.throws(() => normalizeExports([]), /must be an object/);
   assert.throws(() => normalizeExports({ files: {} }), /unknown exports "files"/);
@@ -25,22 +25,22 @@ test('exports: "official" reaches system and official extensions, "all" communit
 test('reach: own extension everything, undeclared nothing, declared what is shared with its tier', () => {
   const target = {
     kind: 'service', id: 'media-metadata',
-    exports: { ipc: { 'read-file-bytes': 'official', 'read-tags': 'all' }, events: { changed: 'all' }, resources: { art: 'official' } },
+    exports: { ipc: { 'read-file-bytes': 'official', 'read-tags': 'all' }, events: { changed: 'all' } },
   };
   const own = { kind: 'service', id: 'media-metadata', tier: 'first-party', invokes: [] };
   assert.equal(reachOf(own, target), null);
 
   const official = { kind: 'plugin', id: 'audio-player', tier: 'first-party', invokes: ['service:media-metadata'] };
-  assert.deepEqual(reachOf(official, target), { ipc: ['read-file-bytes', 'read-tags'], events: ['changed'], methods: [], resources: ['art'] });
+  assert.deepEqual(reachOf(official, target), { ipc: ['read-file-bytes', 'read-tags'], events: ['changed'], methods: [] });
 
   const community = { kind: 'plugin', id: 'hello', tier: 'third-party', invokes: ['service:media-metadata'] };
-  assert.deepEqual(reachOf(community, target), { ipc: ['read-tags'], events: ['changed'], methods: [], resources: [] });
+  assert.deepEqual(reachOf(community, target), { ipc: ['read-tags'], events: ['changed'], methods: [] });
 
   const undeclared = { kind: 'plugin', id: 'hello', tier: 'first-party', invokes: [] };
-  assert.deepEqual(reachOf(undeclared, target), { ipc: [], events: [], methods: [], resources: [] });
+  assert.deepEqual(reachOf(undeclared, target), { ipc: [], events: [], methods: [] });
 
   const malformed = { ...target, exports: { ipc: { read: 'everyone' } } };
-  assert.deepEqual(reachOf(official, malformed), { ipc: [], events: [], methods: [], resources: [] });
+  assert.deepEqual(reachOf(official, malformed), { ipc: [], events: [], methods: [] });
 });
 
 test('the approval text says an extension uses what others share, not that it can call them', () => {
@@ -55,7 +55,7 @@ test('reach: an official extension with no "exports" yet shares everything with 
   const all = reachOf(finance, legacy);
   assert.deepEqual(all.ipc, ['*']);
   assert.equal(reaches(all.ipc, 'subscribe'), true);
-  assert.deepEqual(reachOf(community, legacy), { ipc: [], events: [], methods: [], resources: [] });
+  assert.deepEqual(reachOf(community, legacy), { ipc: [], events: [], methods: [] });
   // An empty block is a choice: nothing shared, even with official extensions.
   assert.deepEqual(reachOf(finance, { ...legacy, exports: {} }).ipc, []);
   assert.equal(reaches([], 'subscribe'), false);

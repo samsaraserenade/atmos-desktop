@@ -96,22 +96,23 @@ test('contributions come from the manifest or convention, as plain text and file
   ]);
 });
 
-test('panel shortcuts and file drops are opt-in, narrow and first-party where it matters', () => {
-  const files = ['panel.js', 'sidebar.js'];
-  const make = (tier, panel) => frames.describeContributions(entry(tier, { manifest: { contributes: { panel, sidebar: { fileDrops: true } } } }), files);
-  const [panel, sidebar] = make('first-party', { shortcut: '#', fileDrops: true });
+test('panel shortcuts are opt-in and narrow; drawers and boot keys are first-party', () => {
+  const files = ['panel.js', 'sidebar.js', 'boot.js'];
+  const make = (tier, panel) => frames.describeContributions(entry(tier, { manifest: { contributes: { panel, sidebar: {}, boot: { keys: ['Space'] } } } }), files);
+  const [panel, sidebar, boot] = make('first-party', { shortcut: '#', drawer: { bar: 60, keys: true } });
   assert.equal(panel.shortcut, '#');
-  assert.equal(panel.fileDrops, true);
-  assert.equal(sidebar.fileDrops, true);
   assert.equal(sidebar.shortcut, null);
   assert.equal(panel.shortcutToggles, false);
+  assert.deepEqual(panel.drawer, { bar: 60, keys: true });
+  assert.deepEqual(boot.keys, ['Space']);
+  assert.equal(panel.fileDrops, undefined, 'file drops are gone (SDK 1.0)');
   assert.equal(make('first-party', { shortcut: ']', shortcutToggles: true })[0].shortcutToggles, true);
   assert.equal(make('first-party', { shortcut: 'ab' })[0].shortcut, null);
   assert.equal(make('first-party', { shortcut: ' ' })[0].shortcut, null);
-  const [thirdPanel, thirdSidebar] = make('third-party', { shortcut: '#', fileDrops: true });
+  const [thirdPanel, , thirdBoot] = make('third-party', { shortcut: '#', drawer: { bar: 60, keys: true } });
   assert.equal(thirdPanel.shortcut, '#');
-  assert.equal(thirdPanel.fileDrops, false, 'third-party frames do not receive file paths yet');
-  assert.equal(thirdSidebar.fileDrops, false);
+  assert.equal(thirdPanel.drawer, null, 'a drawer takes the whole workspace\'s wheel and typing: official only');
+  assert.deepEqual(thirdBoot.keys, []);
 });
 
 test('first-party surfaces may keep the id they had before frames', () => {

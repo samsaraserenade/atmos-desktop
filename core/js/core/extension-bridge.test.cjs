@@ -341,3 +341,102 @@ test('audio: a call made before the Audio service has started waits for it', asy
   assert.equal((await subscribe).error, undefined);
   assert.deepEqual(calls.sort(), ['play', 'watch']);
 });
+
+test('fetch: declared https hosts only, stamped with the caller, abortable, cleaned up with the frame', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const calls = [];
+  const aborted = [];
+  let answer = { result: { url: 'https://api.test.example/x', status: 200, statusText: 'OK', headers: [['content-type', 'text/plain']], body: new Uint8Array([104, 105]), redirected: false } };
+  const deps = {
+    fetch: async (caller, requestId, request) => { calls.push({ caller, requestId, request }); return typeof answer === 'function' ? answer() : answer; },
+    fetchAbort: (caller, requestId) => aborted.push([caller, requestId]),
+  };
+  const { bridge, request } = harness(createExtensionBridge, {
+    extension: { tier: 'third-party', permissions: { network: ['api.test.example', '*.cdn.test.example'] } },
+    deps,
+  });
+  const ask = (url, extra = {}) => request('fetch', { id: 7, url, method: 'GET', headers: [['accept', 'text/plain']], body: null, redirect: 'follow', ...extra });
+
+  const ok = await ask('https://api.test.example/x');
+  assert.equal(ok.error, undefined);
+  assert.equal(ok.result.status, 200);
+  assert.ok(ok.result.body instanceof ArrayBuffer);
+  assert.equal(Buffer.from(ok.result.body).toString(), 'hi');
+  assert.equal(calls[0].caller, 'plugin:probe');
+  assert.match(calls[0].requestId, /^\d+:7$/);
+  assert.equal((await ask('https://img.cdn.test.example/a.png')).error, undefined, '"*." covers subdomains');
+
+  assert.equal((await ask('https://elsewhere.example/')).error.name, 'AtmosPermissionError');
+  assert.equal((await ask('https://cdn.test.example/')).error.name, 'AtmosPermissionError', '"*.x" is not x itself');
+  assert.equal((await ask('http://api.test.example/')).error.name, 'TypeError');
+  assert.equal((await ask('atmos-app://local/')).error.name, 'TypeError');
+  assert.equal((await ask('not a url')).error.name, 'TypeError');
+  assert.equal((await ask('https://api.test.example/', { method: 'TRACE' })).error.name, 'TypeError');
+  assert.equal((await ask('https://api.test.example/', { headers: [['a']] })).error.name, 'TypeError');
+  assert.equal((await ask('https://api.test.example/', { body: 'text' })).error.name, 'TypeError');
+  assert.equal(calls.length, 2, 'refused requests never reach the main process');
+
+  answer = { error: { name: 'TypeError', message: 'api.test.example is on a private or local network' } };
+  const refused = await ask('https://api.test.example/');
+  assert.deepEqual(refused.error, { name: 'TypeError', message: 'api.test.example is on a private or local network' });
+
+  // In flight: an abort goes through; a closed frame aborts what it left.
+  const releases = [];
+  answer = () => new Promise(resolve => { releases.push(resolve); });
+  const slow = request('fetch', { id: 8, url: 'https://api.test.example/slow', method: 'GET', headers: [], body: null });
+  await new Promise(resolve => setImmediate(resolve));
+  await bridge.receive({ method: 'fetch.abort', args: [8] });
+  await bridge.receive({ method: 'fetch.abort', args: [99] });
+  assert.equal(aborted.length, 1);
+  assert.match(aborted[0][1], /:8$/);
+  const leftOver = request('fetch', { id: 9, url: 'https://api.test.example/slow', method: 'GET', headers: [], body: null });
+  await new Promise(resolve => setImmediate(resolve));
+  bridge.dispose();
+  assert.equal(aborted.length, 3, 'both requests still in flight are aborted when the frame goes');
+  for (const release of releases) release({ error: { name: 'AbortError', message: 'aborted' } });
+  await Promise.allSettled([slow, leftOver]);
+});
+
+test('fetch: one frame has at most 32 requests in flight', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const releases = [];
+  const deps = {
+    fetch: () => new Promise(resolve => releases.push(resolve)),
+    fetchAbort: () => {},
+  };
+  const { request } = harness(createExtensionBridge, { extension: { tier: 'third-party', permissions: { network: ['api.test.example'] } }, deps });
+  const send = id => request('fetch', { id, url: 'https://api.test.example/', method: 'GET', headers: [], body: null });
+  const first = Array.from({ length: 32 }, (_, index) => send(index + 1));
+  while (releases.length < 32) await new Promise(resolve => setImmediate(resolve));
+  const refused = await send(33);
+  assert.equal(refused.error.name, 'TypeError');
+  assert.match(refused.error.message, /too many atmos\.fetch\(\) requests/);
+  for (const release of releases.splice(0)) release({ result: { url: 'https://api.test.example/', status: 204, statusText: '', headers: [], body: null, redirected: false } });
+  await Promise.all(first);
+  const again = send(34);
+  while (!releases.length) await new Promise(resolve => setImmediate(resolve));
+  releases[0]({ result: { url: 'https://api.test.example/', status: 204, statusText: '', headers: [], body: null, redirected: false } });
+  assert.equal((await again).error, undefined, 'room again once they finish');
+});
+
+test('location: read-only, only with "invokes": ["service:location"]', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  let listener = null;
+  const location = {
+    get: async () => ({ lat: 51.5, lon: -0.12, label: 'London', mode: 'manual' }),
+    subscribe: fn => { listener = fn; return () => { listener = null; }; },
+  };
+  const allowed = harness(createExtensionBridge, { extension: { tier: 'third-party', permissions: { invokes: ['service:location'] } }, deps: { location } });
+  assert.deepEqual((await allowed.request('location.get')).result, { lat: 51.5, lon: -0.12, label: 'London', mode: 'manual' });
+  await allowed.request('location.subscribe');
+  listener({ lat: 48.85, lon: 2.35, label: 'Paris', mode: 'manual' });
+  assert.deepEqual(allowed.posted.at(-1), { topic: 'location', payload: { lat: 48.85, lon: 2.35, label: 'Paris', mode: 'manual' } });
+  allowed.bridge.dispose();
+  assert.equal(listener, null, 'a closed frame stops following it');
+
+  const denied = harness(createExtensionBridge, { extension: { tier: 'third-party', permissions: {} }, deps: { location } });
+  const refusal = (await denied.request('location.get')).error;
+  assert.equal(refusal.name, 'AtmosPermissionError');
+  assert.match(refusal.message, /service:location/);
+  assert.equal((await denied.request('location.subscribe')).error.name, 'AtmosPermissionError');
+});

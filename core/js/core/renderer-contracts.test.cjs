@@ -27,10 +27,12 @@ test('capability contracts accept legacy extensions and reject unmet requirement
   const modules = tempModules(['core/capabilities.js']);
   const capabilities = await modules.import('core/capabilities.js');
   assert.equal(capabilities.checkExtensionCompatibility({}).compatible, true);
-  assert.equal(capabilities.hasCapability('panel.pass-through'), true);
+  assert.equal(capabilities.hasCapability('extensions.frames', 3), true);
   assert.equal(capabilities.hasCapability('panel.immediate-state'), false);
   assert.equal(capabilities.hasCapability('settings.appearance-contributions'), true);
-  assert.equal(capabilities.hasCapability('sidebar.resizable-sections'), true);
+  // The eight nothing required went with SDK 1.0.
+  assert.equal(capabilities.hasCapability('panel.pass-through'), false);
+  assert.equal(capabilities.hasCapability('sidebar.resizable-sections'), false);
   assert.equal(capabilities.checkExtensionCompatibility({ apiVersion: 999 }).compatible, false);
   assert.equal(capabilities.checkExtensionCompatibility({ requires: ['missing.feature'] }).compatible, false);
 });
@@ -282,7 +284,7 @@ test('plugin-specific player chrome does not become a Core panel convention', ()
 
   assert.doesNotMatch(html, /--seekbar-opacity|backdrop-filter:blur\(60px\)|click again to close/);
   assert.match(registry, /mount\(surfaceEl, context\)/);
-  assert.match(guide, /Core draws no header, toolbar or visual identity/);
+  assert.match(guide, /(Atmos|Core) draws no header, toolbar or visual identity/);
 });
 
 test('settings gives system capabilities their own destination', () => {

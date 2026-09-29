@@ -25,11 +25,11 @@ function world(t) {
   const root = (where, kind) => path.join(dir, where, kind);
 
   /** Publish kind/id@version (files) to the source folder, and re-sign the index. */
-  function publish(kind, id, version, { files = {}, dependencies = {}, key = official.privateKey, apiVersion = 3 } = {}) {
+  function publish(kind, id, version, { files = {}, dependencies = {}, key = official.privateKey, apiVersion = 3, engines = undefined } = {}) {
     const ext = path.join(dir, 'build', `${id}-${version}`);
     fs.rmSync(ext, { recursive: true, force: true });
     fs.mkdirSync(ext, { recursive: true });
-    const manifest = { apiVersion, version, publisher: 'atmos', displayName: id, dependencies, permissions: {} };
+    const manifest = { apiVersion, version, publisher: 'atmos', displayName: id, dependencies, permissions: {}, ...(engines ? { engines } : {}) };
     fs.writeFileSync(path.join(ext, 'extension.json'), JSON.stringify(manifest));
     for (const [name, content] of Object.entries({ 'boot.js': `export default '${version}';`, ...files })) fs.writeFileSync(path.join(ext, name), content);
     signExtension(ext, { kind, id, privateKey: key, hasher: createHasher(null) });
@@ -38,7 +38,7 @@ function world(t) {
     fs.writeFileSync(path.join(source, file), buffer);
     const indexFile = path.join(source, 'index.json');
     const packages = fs.existsSync(indexFile) ? JSON.parse(fs.readFileSync(indexFile, 'utf8')).packages : [];
-    packages.push({ kind, id, version, publisher: 'atmos', displayName: id, apiVersion, requires: {}, dependencies, file, size: buffer.length,
+    packages.push({ kind, id, version, publisher: 'atmos', displayName: id, apiVersion, requires: {}, ...(engines ? { engines } : {}), dependencies, file, size: buffer.length,
       sha256: crypto.createHash('sha256').update(buffer).digest('hex') });
     fs.writeFileSync(indexFile, JSON.stringify(signIndex({ format: 1, name: 'Test', generated: 'now', packages }, official.privateKey)));
   }
@@ -252,6 +252,16 @@ test('sources must be signed with an official key, and packages must match the i
   w.publish('plugin', 'future', '1.0.0', { apiVersion: 99 });
   status = await s.manager.checkForUpdates();
   assert.equal(status.packages.some(p => p.id === 'future'), false);
+});
+
+test('a package is offered only to an Atmos its "engines.atmos" includes', async t => {
+  const w = world(t);
+  w.publish('plugin', 'widget', '1.0.0', { apiVersion: 4, engines: { atmos: '>=0.15.0' } });
+  w.publish('plugin', 'widget', '2.0.0', { apiVersion: 4, engines: { atmos: '>=0.16.0' } });
+  const offered = async appVersion => (await w.start({ appVersion }).manager.checkForUpdates()).packages.filter(p => p.id === 'widget').map(p => p.version);
+  assert.deepEqual(await offered('0.15.0'), ['1.0.0'], 'the newest one this Atmos can run');
+  assert.deepEqual(await offered('0.16.2'), ['2.0.0']);
+  assert.deepEqual(await offered('0.14.1'), []);
 });
 
 test('user sources are validated and remembered', async t => {

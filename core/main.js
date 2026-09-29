@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, sess
 const fs   = require('fs');
 const path = require('path');
 
-const { createExtensionHost, ACTIVATION_TIMEOUT_MS } = require('./js/core/extension-host.cjs');
+const { createExtensionHost, checkCompatibility, ACTIVATION_TIMEOUT_MS } = require('./js/core/extension-host.cjs');
 const { createExtensionPreferences } = require('./js/core/extension-preferences.cjs');
 const { createExtensionCatalog } = require('./js/core/extension-catalog.cjs');
 const { createExtensionTrust } = require('./js/core/extension-trust.cjs');
@@ -12,6 +12,7 @@ const { createExtensionManager } = require('./js/core/extension-manager.cjs');
 const { createExtensionStateStore } = require('./js/core/extension-state.cjs');
 const { BASELINE_BROWSER, reachOf, reaches } = require('./js/core/extension-permissions.cjs');
 const { createLocationGate } = require('./js/core/location-gate.cjs');
+const { createExtensionFetch } = require('./js/core/extension-fetch.cjs');
 const frames = require('./js/core/extension-frames.cjs');
 const { resolveContainedPath } = require('./js/core/path-security.cjs');
 
@@ -101,8 +102,19 @@ function _mimeFor(filename) {
 
 /** Reads a regular file for a protocol response, or returns null when the
  *  path is missing or is not a file. */
-async function _readServableFile(filePath) {
+/**
+ * A file's bytes, or null. With `root`, only a file that really is inside
+ * it: a symbolic link (or junction) pointing out of an extension's folder
+ * would otherwise serve whatever it points at, and links aren't part of
+ * the fingerprint a community extension is approved on.
+ */
+async function _readServableFile(filePath, root = null) {
   try {
+    if (root) {
+      const [real, realRoot] = await Promise.all([fs.promises.realpath(filePath), fs.promises.realpath(root)]);
+      const inside = path.relative(realRoot, real);
+      if (!inside || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) return null;
+    }
     const stat = await fs.promises.stat(filePath);
     return stat.isFile() ? await fs.promises.readFile(filePath) : null;
   } catch (error) {
@@ -481,9 +493,10 @@ ipcMain.on('window-resize:end', event => {
 // ── Extension discovery ──────────────────────────────────────────────────
 // Bundled extensions ship with Atmos: resources/extensions/{plugins,services}
 // in a build, or the repo's plugins/ and services/ when running from source.
-// Launching with --extensions-root=<dir> (or ATMOS_EXTENSIONS_ROOT=<dir>)
-// bundles <dir>/plugins and <dir>/services instead. The system services are
-// not bundled extensions: they are part of Core (core/system).
+// Unpackaged, launching with --extensions-root=<dir> bundles <dir>/plugins
+// and <dir>/services instead (development and the end-to-end checks). The
+// system services are not bundled extensions: they are part of Core
+// (core/system).
 //
 // Installed extensions live in %APPDATA%/atmos/{plugins,services}. One
 // signed with an official key (core/trusted-keys.json) is first-party
@@ -494,9 +507,9 @@ ipcMain.on('window-resize:end', event => {
 const _installedRoots = {};
 
 function _bundledRoot(kind) {
-  const flag = process.argv.find(arg => arg.startsWith('--extensions-root='));
-  const override = flag ? flag.slice('--extensions-root='.length) : process.env.ATMOS_EXTENSIONS_ROOT;
-  if (override) return path.join(path.resolve(override), kind);
+  // Bundled extensions are official, so a packaged Atmos never takes them from elsewhere.
+  const flag = app.isPackaged ? null : process.argv.find(arg => arg.startsWith('--extensions-root='));
+  if (flag) return path.join(path.resolve(flag.slice('--extensions-root='.length)), kind);
   return app.isPackaged
     ? path.join(process.resourcesPath, 'extensions', kind)
     : path.join(__dirname, '..', kind);
@@ -583,14 +596,13 @@ function _activationTimeoutMs() {
 // build also carries its own as signed packages in
 // resources/extensions/packages (scripts/after-pack.cjs), "Comes with
 // Atmos", which then serve the first run and upgrades offline. Unpackaged,
-// --seed-packages=<dir> (or ATMOS_SEED_PACKAGES) stands in for those.
+// --seed-packages=<dir> stands in for those.
 function _seedSources() {
   let location = null;
   if (app.isPackaged) location = path.join(process.resourcesPath, 'extensions', 'packages');
   else {
     const flag = process.argv.find(arg => arg.startsWith('--seed-packages='));
-    const value = flag ? flag.slice('--seed-packages='.length) : process.env.ATMOS_SEED_PACKAGES;
-    if (value) location = path.resolve(value);
+    if (flag) location = path.resolve(flag.slice('--seed-packages='.length));
   }
   return location && fs.existsSync(path.join(location, 'index.json')) ? [{ location, name: 'Comes with Atmos' }] : [];
 }
@@ -674,9 +686,21 @@ function _atmosDownloadUrl() {
 // core/system/<id>, loaded by Core like the rest of its code.
 const _SYSTEM_ROOT = path.join(__dirname, 'system');
 
+// Extensions being written: --dev-extension=<folder> (a plugin) and
+// --dev-service=<folder>, each as often as needed. Loaded from where they
+// are, as community extensions without asking for approval, and reloaded
+// when their files change (_watchDeveloperFolders). Packaged builds accept
+// them too: they grant nothing a folder in %APPDATA%\atmos\plugins and an
+// approval wouldn't.
+function _developerFolders(kind) {
+  const flag = kind === 'plugins' ? '--dev-extension=' : '--dev-service=';
+  return process.argv.filter(arg => arg.startsWith(flag)).map(arg => path.resolve(arg.slice(flag.length)));
+}
+
 const _catalog = createExtensionCatalog({
   coreRoot: kind => (kind === 'services' ? _SYSTEM_ROOT : null),
   bundledRoot: _bundledRoot, installedRoot: _installedRoot, previousRoot: _manager.previousRoot, trustedKeys: _trustedKeys,
+  developerFolders: _developerFolders,
 });
 
 let _trust = null;
@@ -762,7 +786,7 @@ function _managerSummary(status = _manager.status()) {
     const trust = _trust?.get(entry);
     const name = entry.manifest?.displayName || entry.id;
     const deps = _dependencyState?.get(refOf(entry));
-    if (trust && !trust.loadable && ['tampered', 'blocked'].includes(trust.status)) problems.push({ kind: entry.kind, id: entry.id, name, reason: trust.reason });
+    if (trust && !trust.loadable && ['tampered', 'blocked', 'incompatible'].includes(trust.status)) problems.push({ kind: entry.kind, id: entry.id, name, reason: trust.reason });
     else if (_activationFailures.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _activationFailures.get(refOf(entry)) });
     else if (trust?.fellBackFrom) problems.push({ kind: entry.kind, id: entry.id, name, reason: `version ${trust.fellBackFrom.version} couldn't load` });
     else if (deps && !deps.ok && trust?.loadable) problems.push({ kind: entry.kind, id: entry.id, name, reason: deps.problems[0] });
@@ -929,10 +953,10 @@ function _entryOf(targetRef) {
   return kind === 'plugin' || kind === 'service' ? _catalog.find(`${kind}s`, id) : null;
 }
 
-/** What `entry` may use of the extension `targetRef`: { ipc, events, methods, resources }, or null for itself. */
+/** What `entry` may use of the extension `targetRef`: { ipc, events, methods }, or null for itself. */
 function _reachOf(entry, targetRef) {
   const target = _entryOf(targetRef);
-  const empty = { ipc: [], events: [], methods: [], resources: [] };
+  const empty = { ipc: [], events: [], methods: [] };
   if (!target) return empty;
   return reachOf(
     { kind: entry.kind, id: entry.id, tier: entry.tier, invokes: _trust?.get(entry)?.permissions.invokes || [] },
@@ -965,7 +989,7 @@ function _describeSharing(entry) {
     if (owner.tier === 'system' || (owner.manifest?.library === true && !_trust?.get(owner)?.hasMain)) continue;
     const reach = _reachOf(entry, target);
     if (reach.ipc.includes('*')) { lines.push(`${name}: everything (it doesn't list what it shares yet)`); continue; }
-    const parts = [...reach.ipc, ...reach.methods, ...reach.events.map(event => `${event} events`), ...reach.resources.map(provider => `${provider} files`)];
+    const parts = [...reach.ipc, ...reach.methods, ...reach.events.map(event => `${event} events`)];
     lines.push(parts.length
       ? `${name}: ${parts.join(', ')}`
       : `${name} shares nothing with ${entry.tier === 'third-party' ? 'community' : 'other'} extensions`);
@@ -1036,6 +1060,8 @@ function _describeExtension(entry, files, disabled) {
     manifest: entry.manifest,
     tier: entry.tier,
     source: entry.source,
+    developerRestart: _developerRestart.has(refOf(entry)),
+    developerIgnored: entry.developerIgnored || null,
     enabled: entry.tier === 'system' || !disabled.has(entry.id),
     active: _isActive(entry),
     ..._describeTrust(entry),
@@ -1150,6 +1176,46 @@ ipcMain.handle('extensions:notify', (event, kind, id, options) => {
   return true;
 });
 
+// atmos.fetch(): a framed extension's HTTP request, made here for it (no
+// CORS, no cookies, only its declared hosts, never a local address; see
+// extension-fetch.cjs). The page's bridge stamps the caller, as for invoke().
+// Unpackaged, --fetch-test=<file> ({ "hosts": { "name": { "address",
+// "port" } }, "ca": "<PEM>" }) points names at a local test server.
+function _fetchTestOptions() {
+  const flag = app.isPackaged ? null : process.argv.find(arg => arg.startsWith('--fetch-test='));
+  if (!flag) return {};
+  try {
+    const config = JSON.parse(fs.readFileSync(path.resolve(flag.slice('--fetch-test='.length)), 'utf8'));
+    return { testHosts: config.hosts || {}, ca: typeof config.ca === 'string' ? [config.ca] : null };
+  } catch (error) {
+    console.warn('[extensions] --fetch-test could not be read:', error.message);
+    return {};
+  }
+}
+const _extensionFetch = createExtensionFetch({ userAgent: `Atmos/${app.getVersion()}`, ..._fetchTestOptions() });
+const _fetchesInFlight = new Map(); // "caller requestId" -> AbortController
+
+ipcMain.handle('extensions:fetch', async (event, caller, requestId, request) => {
+  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+  const entry = typeof caller === 'string' ? _entryOf(caller) : null;
+  if (!entry || !_isActive(entry) || frames.resolveRuntime(entry) !== 'frame') {
+    return { error: { name: 'AtmosPermissionError', message: `${caller} is not running` } };
+  }
+  const key = `${caller} ${requestId}`;
+  const controller = new AbortController();
+  _fetchesInFlight.set(key, controller);
+  try {
+    return { result: await _extensionFetch.fetch(caller, _trust.get(entry)?.permissions.network || [], request, { signal: controller.signal }) };
+  } catch (error) {
+    return { error: { name: error?.name || 'TypeError', message: error?.message || String(error) } };
+  } finally {
+    _fetchesInFlight.delete(key);
+  }
+});
+ipcMain.on('extensions:fetch-abort', (event, caller, requestId) => {
+  if (_fromAtmosPage(event)) _fetchesInFlight.get(`${caller} ${requestId}`)?.abort();
+});
+
 ipcMain.handle('extensions:open-root', async (event, kind) => {
   if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   if (kind === 'plugins') return shell.openPath(_installedRoot('plugins'));
@@ -1198,19 +1264,11 @@ function _libraryOriginsFor(entry) {
 
 /**
  * atmos-resource:// providers a framed extension may load: those it
- * registers itself ("resources"), and those registered by extensions it
- * declares in "invokes".
+ * registers itself ("resources"). Another extension's are never shared
+ * (that went with SDK 1.0).
  */
 function _resourceProvidersFor(entry) {
-  const providers = new Set(_trust.get(entry)?.permissions.resources || []);
-  for (const target of _trust.get(entry)?.permissions.invokes || []) {
-    const owner = _entryOf(target);
-    if (!owner || !_isActive(owner)) continue;
-    // Another extension's providers: only those it shares ("exports.resources").
-    const shared = _reachOf(entry, target)?.resources || [];
-    for (const name of _trust.get(owner)?.permissions.resources || []) if (reaches(shared, name)) providers.add(name);
-  }
-  return [...providers];
+  return [...new Set(_trust.get(entry)?.permissions.resources || [])];
 }
 
 /** Whether a frame origin may fetch() a resource provider's responses. */
@@ -1297,14 +1355,68 @@ function _registerAtmosExtProtocol() {
       }
       if (!entry) return new Response('Not found', { status: 404 });
       const filePath = resolveContainedPath(entry.path, file);
-      const buf = filePath ? await _readServableFile(filePath) : null;
+      const buf = filePath ? await _readServableFile(filePath, entry.path) : null;
       if (!buf) return new Response('Not found', { status: 404 });
+      // A developer folder changes under Atmos: never serve a stale copy.
+      if (entry.source === 'developer') headers['Cache-Control'] = 'no-store';
       return new Response(buf, { headers: { ...headers, 'Content-Type': _mimeFor(filePath) } });
     } catch (e) {
       console.error('[main] atmos-ext protocol error:', e.message);
       return new Response('Error', { status: 500 });
     }
   });
+}
+
+// ── Developer folders (--dev-extension) ─────────────────────────────────────
+// A change to a file reloads the extension's frames; a changed extension.json
+// is read again first (permissions, network hosts). New or removed surfaces
+// need a restart, which Settings says.
+const _developerRestart = new Set(); // refs whose surfaces changed since start
+const _DEV_IGNORED = /(^|[\\/])(\.|node_modules([\\/]|$)|tests([\\/]|$))/;
+
+function _watchDeveloperFolders() {
+  for (const entry of [..._catalog.list('plugins'), ..._catalog.list('services')]) {
+    if (entry.source !== 'developer') continue;
+    const kind = `${entry.kind}s`;
+    let timer = null;
+    let manifestChanged = false;
+    const flush = () => {
+      timer = null;
+      let restart = false;
+      if (manifestChanged) {
+        manifestChanged = false;
+        const before = JSON.stringify(frames.describeContributions(entry, _walkRelativeFiles(entry.path)));
+        try {
+          const text = fs.readFileSync(path.join(entry.path, 'extension.json'), 'utf8');
+          const manifest = JSON.parse(text);
+          entry.manifest = manifest && typeof manifest === 'object' && !Array.isArray(manifest) ? manifest : { invalid: true, error: 'manifest root must be an object' };
+        } catch (error) {
+          entry.manifest = { invalid: true, error: error.message };
+        }
+        _trust.reassess(kind, entry);
+        restart = JSON.stringify(frames.describeContributions(entry, _walkRelativeFiles(entry.path))) !== before
+          || _trust.get(entry)?.loadable === false;
+        if (restart) _developerRestart.add(refOf(entry));
+        console.log(`[extensions] ${entry.kind} '${entry.id}': extension.json changed${restart ? '; restart Atmos to apply its surfaces' : ''}`);
+      }
+      const description = _describeExtension(entry, _walkRelativeFiles(entry.path), new Set());
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('extensions:developer-changed', { kind: entry.kind, id: entry.id, restart, extension: description });
+      }
+    };
+    try {
+      fs.watch(entry.path, { recursive: true }, (_event, filename) => {
+        const name = String(filename || '');
+        if (name && _DEV_IGNORED.test(name)) return;
+        if (name === 'extension.json') manifestChanged = true;
+        clearTimeout(timer);
+        timer = setTimeout(flush, 150);
+      });
+      console.log(`[extensions] developing ${entry.kind} '${entry.id}' from ${entry.path}`);
+    } catch (error) {
+      console.warn(`[extensions] can't watch ${entry.path} (${error.message}); restart Atmos to see changes`);
+    }
+  }
 }
 
 // ── Web hardening ─────────────────────────────────────────────────────────────
@@ -1573,6 +1685,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     hashCacheFile: path.join(userData, 'extension-hash-cache.json'),
     bundledRoot: _bundledRoot,
     trustedKeys: _trustedKeys,
+    // "engines.atmos", apiVersion and capabilities, against this Atmos.
+    compatibility: manifest => checkCompatibility(manifest, { appVersion: app.getVersion() }),
   });
   const trustStart = Date.now();
   _trust.assessAll(_catalog);
@@ -1583,9 +1697,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   _cleanUpRemovedData();
   console.log(`[main] checked extension integrity in ${Date.now() - trustStart}ms`);
-  const extensions = createExtensionHost({ app, BrowserWindow, ipcMain, dialog, shell, protocol, authorizeInvoke: _authorizeInvoke });
+  const extensions = createExtensionHost({ app, BrowserWindow, ipcMain, dialog, shell, protocol, authorizeInvoke: _authorizeInvoke, appVersion: app.getVersion() });
   const activePlugins = _catalog.list('plugins').filter(_isActive);
-  const supersededServices = extensions.supersededServices(activePlugins);
+  // Only official plugins may stand in for a service ("supersedesServices"):
+  // a community one could otherwise switch an official service off.
+  const supersededServices = extensions.supersededServices(activePlugins.filter(entry => entry.tier !== 'third-party'));
   const activeServices = _catalog.list('services')
     .filter(entry => _isActive(entry) && !supersededServices.has(entry.id));
   // A main.cjs that throws or takes longer than 10 s is failed and startup
@@ -1603,8 +1719,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       _resolveDependencyState();
     },
   };
-  await extensions.activateEntries('service', activeServices, activation);
-  await extensions.activateEntries('plugin', activePlugins.filter(_isActive), activation);
+  // main.cjs runs only for official and system extensions. Trust already
+  // blocks a community one that has a main.cjs; this doesn't rely on it.
+  const mayRunMain = entry => entry.tier !== 'third-party';
+  await extensions.activateEntries('service', activeServices.filter(mayRunMain), activation);
+  await extensions.activateEntries('plugin', activePlugins.filter(entry => _isActive(entry) && mayRunMain(entry)), activation);
   extensions.registerResourceProtocol(protocol, { allowOrigin: _originMayUseResource });
   _registerAtmosAppProtocol();
   _registerAtmosExtProtocol();
@@ -1613,6 +1732,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   await _moveToOwnOrigins();
   _installBrowserPermissions([...activePlugins, ...activeServices]);
   createWindow();
+  _watchDeveloperFolders();
   void _cleanUpSharedOriginStorage();
   // Check the sources soon after start and twice a day; this only reads
   // their indexes (nothing downloads until Install or Update is pressed).

@@ -55,7 +55,7 @@ function scanExtension(dir) {
   const exclude = Array.isArray(manifest.auditExclude) ? manifest.auditExclude : [];
   const used = {
     node: new Set(), electron: new Set(), ipc: false,
-    provides: new Set(), uses: new Set(), resources: new Set(),
+    provides: new Set(), resources: new Set(),
     browser: new Set(), network: new Set(), invokes: new Set(), handles: new Set(),
   };
   const where = {};
@@ -90,7 +90,6 @@ function scanExtension(dir) {
       const names = pattern => [...source.matchAll(pattern)].map(([, literal, identifier]) => literal || constant(identifier) || `<${identifier}>`);
       const ARG = String.raw`\(\s*(?:['"]([\w.-]+)['"]|([A-Za-z_$][\w$]*))`;
       for (const name of names(new RegExp(String.raw`\bcontext\.provide\??\.?` + ARG, 'g'))) { used.provides.add(name); note('provides', name, rel); }
-      for (const name of names(new RegExp(String.raw`\bcontext\.use\??\.?` + ARG, 'g'))) { used.uses.add(name); note('uses', name, rel); }
       for (const name of names(new RegExp(String.raw`\bregisterResourceProvider` + ARG, 'g'))) { used.resources.add(name); note('resources', name, rel); }
     } else if (!vendor) {
       // Vendored libraries are skipped: their unused code paths (e.g. a chat
@@ -144,7 +143,6 @@ function auditExtension(dir) {
   missing('electron', used.electron, value => declared.electron.includes(value));
   if (used.ipc && !declared.ipc) problems.push(`${id}: registers IPC handlers without "ipc": true (${where['ipc:true'].join(', ')})`);
   missing('provides', used.provides, value => declared.provides.includes(value));
-  missing('uses', used.uses, value => declared.uses.includes(value));
   missing('resources', used.resources, value => declared.resources.includes(value));
   missing('browser', used.browser, value => declared.browser.includes(value));
   missing('invokes', used.invokes, value => declared.invokes.includes(value));
@@ -161,20 +159,16 @@ function auditExtension(dir) {
   unused('node', declared.node, used.node);
   unused('electron', declared.electron, used.electron);
   unused('provides', declared.provides, used.provides);
-  unused('uses', declared.uses, used.uses);
   unused('resources', declared.resources, used.resources);
   unused('browser', declared.browser, used.browser);
   if (declared.ipc && !used.ipc) problems.push(`${id}: declares "ipc": true but registers no IPC handlers`);
 
-  // What it shares with other extensions must exist: IPC handlers it
-  // registers and resource providers it declares.
+  // What it shares with other extensions must exist: the IPC handlers it
+  // registers.
   let shared = null;
   try { shared = normalizeExports(manifest.exports); } catch (error) { problems.push(`${id}: ${error.message}`); }
   for (const name of Object.keys(shared?.ipc || {})) {
     if (!used.handles.has(name)) problems.push(`${id}: shares IPC handler '${name}' ("exports.ipc") but never registers it`);
-  }
-  for (const name of Object.keys(shared?.resources || {})) {
-    if (!declared.resources.includes(name)) problems.push(`${id}: shares resource provider '${name}' ("exports.resources") but doesn't declare it`);
   }
   return problems;
 }

@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/samsaraserenade/atmos-desktop/blob/main/core/js/sdk/extension.schema.json",
+  "title": "Atmos extension manifest (extension.json)",
+  "description": "What an Atmos extension is, what it contributes and what it may use. ATMOS_CORE_INTEGRATION.md, sections 2, 3 and 7.",
+  "type": "object",
+  "properties": {
+    "$schema": { "type": "string" },
+    "apiVersion": {
+      "description": "The extension API it targets: 4 for SDK 1.0. Atmos 0.14 and older don't load 4, since they don't read \"engines\".",
+      "type": "integer", "minimum": 1
+    },
+    "engines": {
+      "description": "Which Atmos it runs on.",
+      "type": "object",
+      "properties": {
+        "atmos": { "description": "A version range: \">=0.15.0\", \"^0.15.0\", \"~0.15.0\", \"0.15.2\" or \"*\".", "type": "string", "examples": [">=0.15.0"] }
+      }
+    },
+    "version": { "description": "The extension's own version, MAJOR.MINOR.PATCH.", "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$" },
+    "publisher": { "description": "Who publishes it (\"atmos\" is reserved for official extensions).", "type": "string" },
+    "displayName": { "description": "Its name in Settings, and the default label of its surfaces.", "type": "string", "maxLength": 60 },
+    "description": { "description": "One line for Settings and the extension manager.", "type": "string" },
+    "library": { "description": "true for a service that is a library: code other extensions import, with no lifecycle, UI or state.", "type": "boolean" },
+    "dependencies": {
+      "description": "Services (bare id) or plugins (\"plugin:<id>\") it needs, with version ranges.",
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "properties": {
+              "version": { "type": "string" },
+              "optional": { "type": "boolean" },
+              "recommended": { "type": "boolean" }
+            },
+            "required": ["version"]
+          }
+        ]
+      }
+    },
+    "contributes": {
+      "description": "Its surfaces. Without it, the conventional entry files (panel.js, sidebar.js, settings.js, boot.js) are used.",
+      "type": "object",
+      "properties": {
+        "panel": { "oneOf": [{ "type": "boolean" }, { "$ref": "#/definitions/panel" }] },
+        "sidebar": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "$ref": "#/definitions/sidebar" },
+            { "type": "array", "items": { "$ref": "#/definitions/sidebar" } }
+          ]
+        },
+        "settings": { "oneOf": [{ "type": "boolean" }, { "$ref": "#/definitions/surface" }] },
+        "boot": {
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "allOf": [{ "$ref": "#/definitions/surface" }],
+              "properties": { "keys": { "description": "First-party: KeyboardEvent.code values its frame hears anywhere in Atmos.", "type": "array", "items": { "type": "string" } } }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "permissions": {
+      "description": "Everything it uses. Omitted keys mean none.",
+      "type": "object",
+      "properties": {
+        "network": {
+          "description": "Hosts its frames and atmos.fetch() may reach: \"api.example.com\", \"*.example.com\" (its subdomains) or \"*\" (any public host). No scheme, port, path, IP address or local name (.localhost, .local, .lan, .internal, .home.arpa).",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(\\*|(\\*\\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\\.[a-z0-9-]*[a-z][a-z0-9-]*)$" }
+        },
+        "browser": {
+          "description": "Browser permissions (\"wasm\" lets its frames compile WebAssembly).",
+          "type": "array",
+          "items": { "enum": ["geolocation", "clipboard-read", "notifications", "media", "display-capture", "wasm"] }
+        },
+        "invokes": {
+          "description": "Other extensions it talks to: \"plugin:<id>\" or \"service:<id>\". The system services: \"service:audio\", \"service:wallpaper\", \"service:location\".",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(plugin|service):[a-z0-9][a-z0-9-]*$" }
+        },
+        "node": { "description": "Official extensions only: modules main.cjs requires.", "type": "array", "items": { "type": "string" } },
+        "electron": { "description": "Official extensions only: Electron APIs main.cjs uses.", "type": "array", "items": { "type": "string" } },
+        "ipc": { "description": "Official extensions only: main.cjs registers IPC handlers or sends events.", "type": "boolean" },
+        "resources": { "description": "Official extensions only: atmos-resource:// providers main.cjs registers (for its own frames).", "type": "array", "items": { "type": "string" } },
+        "provides": { "description": "Ignored since SDK 1.0 (kept so older packages load).", "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "exports": {
+      "description": "What it shares with other extensions: \"official\" (official extensions) or \"all\" (community ones too).",
+      "type": "object",
+      "properties": {
+        "ipc": { "$ref": "#/definitions/shared" },
+        "events": { "$ref": "#/definitions/shared" },
+        "methods": { "$ref": "#/definitions/shared" }
+      },
+      "additionalProperties": false
+    },
+    "isolation": { "description": "Official extensions: \"origin\" gives it an origin of its own.", "enum": ["origin"] },
+    "tier": { "description": "Ignored by Atmos (where the extension comes from decides).", "type": "string" },
+    "requires": { "description": "Before SDK 1.0: Core capabilities it needs. Use \"engines\" instead.", "type": ["object", "array"] },
+    "runtime": { "description": "Ignored since Atmos 0.12 (every extension runs in frames).", "type": "string" },
+    "legacyStorage": { "description": "First-party: data it kept elsewhere before moving into frames.", "type": "object" },
+    "auditExclude": { "description": "Folders the permission audit skips.", "type": "array", "items": { "type": "string" } },
+    "contract": { "description": "A service's own API contract (documentation; Atmos doesn't read it).", "type": "object" },
+    "after": { "description": "Start order only (prefer \"dependencies\").", "type": "array", "items": { "type": "string" } },
+    "supersedesServices": { "type": "array", "items": { "type": "string" } }
+  },
+  "definitions": {
+    "surface": {
+      "type": "object",
+      "properties": {
+        "entry": { "description": "Its entry file, relative to the extension.", "type": "string" },
+        "label": { "type": "string", "maxLength": 60 },
+        "icon": { "description": "An SVG file in the extension, drawn in the text colour.", "type": "string" },
+        "order": { "type": "number" }
+      }
+    },
+    "panel": {
+      "allOf": [{ "$ref": "#/definitions/surface" }],
+      "properties": {
+        "default": { "description": "The panel Atmos opens on.", "type": "boolean" },
+        "shortcut": { "description": "One printable key that opens it from anywhere in Atmos.", "type": "string", "maxLength": 2 },
+        "shortcutToggles": { "type": "boolean" },
+        "glass": { "description": "Atmos draws frosted glass under the frame where it says (atmos.surface.trackGlass).", "type": "boolean" },
+        "drawer": {
+          "description": "First-party: the panel lives in a drawer sliding up from the bottom of the workspace.",
+          "type": "object",
+          "properties": { "bar": { "type": "number" }, "keys": { "type": "boolean" } }
+        },
+        "legacyId": { "description": "First-party: the id it had before frames.", "type": "string" }
+      }
+    },
+    "sidebar": {
+      "allOf": [{ "$ref": "#/definitions/surface" }],
+      "properties": {
+        "id": { "description": "A second widget's own id.", "type": "string" },
+        "defaultEnabled": { "type": "boolean" },
+        "defaultHeight": { "type": "number" },
+        "resizable": { "type": "boolean" },
+        "showIn": { "description": "The panels it shows beside at first ([]: every panel).", "type": "array", "items": { "type": "string" } },
+        "legacyId": { "type": "string" }
+      }
+    },
+    "shared": {
+      "type": "object",
+      "additionalProperties": { "enum": ["official", "all"] }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "apiVersion": 4,
+  "engines": { "atmos": ">=0.15.0" },
+  "version": "1.0.0",
+  "displayName": "SDK Probe",
+  "permissions": {
+    "network": ["api.test.example"],
+    "invokes": ["service:location"]
+  },
+  "contributes": {
+    "panel": { "label": "SDK Probe" },
+    "sidebar": { "label": "SDK Probe", "showIn": [] }
+  }
+}

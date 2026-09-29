@@ -295,13 +295,11 @@ function describeContributions(entry, files) {
       // Core draws the panel's frosted glass under the frame where the frame
       // says (atmos.surface.setGlass), following the panel's blur and opacity.
       glass: surface === 'panel' && def?.glass === true,
-      // Files dropped from the desktop arrive with their paths (first-party
-      // only for now; see extension-drop-overlay.js).
-      fileDrops: (surface === 'panel' || surface === 'sidebar') && def?.fileDrops === true && entry.tier !== 'third-party',
       // A panel that lives in a drawer sliding up from the bottom of the
       // full workspace (Core moves it; see panel-drawer.js). "bar" is the
       // height of the strip that stays visible when the drawer is lowered.
-      drawer: surface === 'panel' && def?.drawer
+      // First-party: a drawer takes wheel and typing on the whole workspace.
+      drawer: surface === 'panel' && def?.drawer && entry.tier !== 'third-party'
         ? {
             bar: Math.round(Math.max(24, Math.min(200, Number(def.drawer?.bar) || 54))),
             // Characters typed on the workspace while it is open go to the frame.

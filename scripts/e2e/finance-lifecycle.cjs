@@ -283,8 +283,12 @@ const r = { home };
   r['5-defaultChoice'] = await s.page.evaluate(() => document.querySelector('.sm-manager-confirm input[type="radio"]:checked')?.value);
   // Offered: the services nothing else uses. Kept here (unticked); step 7 removes them.
   r['5-alsoOffered'] = await s.page.evaluate(() => [...document.querySelectorAll('.sm-manager-confirm input[data-also-remove]')].map(input => `${input.dataset.alsoRemove}${input.checked ? ' ✓' : ''}`));
-  await s.page.evaluate(() => document.querySelectorAll('.sm-manager-confirm input[data-also-remove]').forEach(input => { input.checked = false; }));
-  await press(s.page, 'plugin:finance', 'remove');
+  // Untick and press in one step: a background refresh of the page in
+  // between would draw the offer again, ticked (seen once, 29 September).
+  await s.page.evaluate(() => {
+    document.querySelectorAll('.sm-manager-confirm input[data-also-remove]').forEach(input => { input.checked = false; });
+    document.querySelector('.sm-manager-row[data-key="plugin:finance"] [data-manager-action="remove"]').click();
+  });
   await waitFor(s.page, () => /Remove, keeping its data/.test(document.getElementById('settings-menu-list').textContent));
   await s.app.close();
   s = await launch();

@@ -126,7 +126,19 @@ const frameLoaded = (page, id) => page.frames().some(f => f.url().includes(`ext=
   await s.app.close();
 
   // 2. Restart: the approved extension loads (in a frame).
+  // Links out of its folder are left out of its fingerprint, so one added
+  // after approval keeps it approved; Atmos must still serve none of them.
+  const outside = path.join(home, 'outside');
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'private');
+  fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(cfg, 'plugins/hello-third/leak.txt'));
+  fs.symlinkSync(outside, path.join(cfg, 'plugins/hello-third/leakdir'), 'dir');
+  fs.symlinkSync(path.join(cfg, 'plugins/hello-third/boot.js'), path.join(cfg, 'plugins/hello-third/alias.js'));
   s = await launch(repo);
+  r.links = await s.app.evaluate(async ({ session }) => {
+    const get = file => session.defaultSession.fetch(`atmos-ext://plugin-hello-third/plugins/hello-third/${file}`).then(res => res.status, () => 'error');
+    return { outFile: await get('leak.txt'), outDir: await get('leakdir/secret.txt'), inside: await get('alias.js') };
+  });
   r.run2 = (await list(s.page))['hello-third'];
   r.run2BootFrame = frameLoaded(s.page, 'hello-third');
   const helloBoot = s.page.frames().find(f => f.url().includes('ext=plugin%3Ahello-third') && f.url().includes('surface=boot'));
@@ -137,6 +149,8 @@ const frameLoaded = (page, id) => page.frames().some(f => f.url().includes(`ext=
   r.notifyClicks = await helloBoot?.evaluate(() => window.__clicks).catch(e => e.message);
   r.notifyFromPageForOther = await s.page.evaluate(() => window.atmosCore.showExtensionNotification('plugin', 'sneaky-main', { title: 'x' }).then(v => `shown ${v}`, e => 'refused'));
   await s.app.close();
+
+  for (const file of ['leak.txt', 'leakdir', 'alias.js']) fs.rmSync(path.join(cfg, 'plugins/hello-third', file), { force: true });
 
   // 3. Change its code and permissions: it needs approval again.
   fs.appendFileSync(path.join(cfg, 'plugins/hello-third/boot.js'), "\nwindow.__helloThird = 'changed';");

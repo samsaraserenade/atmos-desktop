@@ -29,7 +29,6 @@ import { onSemanticColorChange } from './semantic-colors.js';
 import { checkExtensionCompatibility } from './capabilities.js';
 import { getCapability, onCapabilityChange } from './renderer-capabilities.js';
 import { createExtensionBridge } from './extension-bridge.js';
-import { armFileDrop, disarmFileDrop } from './extension-drop-overlay.js';
 import { createPanelDrawer } from './panel-drawer.js';
 import { panelState } from './panel-state.js';
 
@@ -43,9 +42,12 @@ const APPEARANCE_VARS = [
   '--shell-blur', '--shell-opacity', '--default-panel-blur', '--default-panel-opacity',
 ];
 const BOOT_TIMEOUT_MS = 10000;
+// The SDK frames get (core/js/sdk/atmos-sdk.js SDK_VERSION; a test keeps them equal).
+export const SDK_VERSION = '1.0.0';
 
 const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>
+const _framed = new Map();   // "kind:id" -> the extension, as loadFramedExtensions() got it
 const SERVICE_WAIT_MS = 15000;
 const _exposed = new Map();        // "kind:id" -> { methods, call, owner }
 const _serviceWaiters = new Map(); // "kind:id" -> [resolve]
@@ -211,6 +213,28 @@ function _queueAppearanceBroadcast() {
   });
 }
 onAppearanceChange(_queueAppearanceBroadcast);
+// A developer folder changed (--dev-extension): take its new permissions
+// and reload its frames. Surfaces added or removed need a restart
+// (Settings says so).
+let _reloads = 0;
+window.atmosCore?.onDeveloperChange?.(({ kind, id, restart, extension: fresh }) => {
+  const extensionKey = `${kind}:${id}`;
+  const current = _framed.get(extensionKey);
+  if (current && fresh?.frame) {
+    current.manifest = fresh.manifest;
+    current.permissions = fresh.permissions;
+    current.frame = { ...current.frame, allow: fresh.frame.allow, reach: fresh.frame.reach, resourceProviders: fresh.frame.resourceProviders };
+  }
+  if (restart) console.warn(`[extensions] ${extensionKey}'s surfaces changed: restart Atmos to apply them`);
+  _reloads += 1;
+  for (const record of _frames.get(extensionKey) || []) {
+    const url = new URL(record.iframe.src);
+    url.searchParams.set('reload', String(_reloads));
+    if (current?.frame?.allow) record.iframe.setAttribute('allow', current.frame.allow);
+    record.iframe.src = url.href;
+  }
+});
+
 // A click on a notification a frame showed goes to every frame of its extension.
 window.atmosCore?.onExtensionNotificationClick?.((kind, id, tag) => {
   _broadcast(`${kind}:${id}`, 'notificationClick', { tag });
@@ -349,6 +373,25 @@ const _deps = {
     activatePanelPlugin(panel.id);
     return true;
   },
+  // atmos.fetch(): made by the main process for the frame (the bridge has
+  // checked the host; the main process checks everything again).
+  fetch: (caller, requestId, request) => window.atmosCore.extensionFetch(caller, requestId, request),
+  fetchAbort: (caller, requestId) => window.atmosCore.abortExtensionFetch?.(caller, requestId),
+  // atmos.location: read-only, from the Location system service.
+  location: {
+    async get() {
+      return _locationSummary((await _locationService()).getLocation());
+    },
+    /** Calls fn with the location whenever it changes. Returns the unsubscribe. */
+    subscribe(fn) {
+      let off = null;
+      let alive = true;
+      _locationService().then(service => {
+        if (alive) off = service.onLocationChange(value => fn(_locationSummary(value)));
+      }).catch(error => console.warn('[extensions] location unavailable:', error.message));
+      return () => { alive = false; off?.(); };
+    },
+  },
   readLegacyIndexedDB: _readLegacyIndexedDB,
   deleteLegacyIndexedDB: _deleteLegacyIndexedDB,
   readLegacyState: namespace => readSavedNamespace(namespace),
@@ -370,6 +413,20 @@ const _deps = {
     return out;
   },
 };
+
+// The Location system service (core/system/location), loaded by Core at
+// startup; imported here by the same URL, so it is the same module.
+let _locationModule = null;
+function _locationService() {
+  _locationModule ||= import(new URL('../../system/location/index.js', import.meta.url).href);
+  return _locationModule;
+}
+
+/** What a frame may know of the location: { lat, lon, label, mode }, or null when none is set. */
+function _locationSummary(value) {
+  if (!value || !Number.isFinite(value.lat) || !Number.isFinite(value.lon)) return null;
+  return { lat: value.lat, lon: value.lon, label: typeof value.label === 'string' ? value.label : null, mode: value.mode === 'manual' ? 'manual' : 'auto' };
+}
 
 /**
  * What a frame may know about the wallpaper: its mode and a small copy of
@@ -538,10 +595,6 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
       if (!window.atmosCore?.showExtensionNotification) return Promise.resolve(false);
       return window.atmosCore.showExtensionNotification(extension.kind, extension.id, options);
     },
-    armFileDrop() {
-      if (!surface.fileDrops) return;
-      armFileDrop(iframe, (topic, payload) => record.bridge?.post({ topic, payload }));
-    },
     // A panel in a drawer (full workspace) or shown pinned open (tile, window).
     drawer: drawer ? {
       command: (name, value) => drawer.command(name, value),
@@ -577,7 +630,7 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
     record.port = channel.port1;
     record.bridge = createExtensionBridge({
       extension,
-      surface: { type: surface.type, fileDrops: surface.fileDrops === true, drawer: !!surface.drawer, glass: surface.type === 'panel' && !!surface.glass },
+      surface: { type: surface.type, drawer: !!surface.drawer, glass: surface.type === 'panel' && !!surface.glass },
       post: message => channel.port1.postMessage(message),
       deps,
     });
@@ -585,10 +638,10 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
     iframe.contentWindow.postMessage({
       type: 'atmos:connect',
       init: {
-        sdkVersion: 3,
-        extension: { id: extension.id, kind: extension.kind, tier: extension.tier },
+        sdkVersion: SDK_VERSION,
+        extension: { id: extension.id, kind: extension.kind, tier: extension.tier, version: extension.version || null },
         surface: {
-          type: surface.type, id: surface.id, presentation: record.presentation, fileDrops: surface.fileDrops === true,
+          type: surface.type, id: surface.id, presentation: record.presentation,
           glass: surface.type === 'panel' && !!surface.glass,
           drawer: surface.drawer ? { bar: surface.drawer.bar, ...(drawer ? drawer.state() : _pinnedDrawerState(surface)) } : null,
         },
@@ -645,7 +698,6 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
       tickInLabel: true,
     })),
     dispose() {
-      disarmFileDrop(iframe);
       containerWatch?.disconnect();
       stopPanelVars?.();
       window.removeEventListener('message', onMessage);
@@ -942,6 +994,7 @@ export function loadFramedExtensions({ plugins = [], services = [] } = {}) {
   ].filter(extension => extension.runtime === 'frame'
     && extension.active !== false && extension.enabled !== false && extension.frame);
   for (const extension of framed) {
+    _framed.set(key(extension), extension);
     const compatibility = checkExtensionCompatibility(extension.manifest || {}, `${extension.kind} '${extension.id}'`);
     if (!compatibility.compatible) {
       console.warn(`[extension-frames] '${extension.id}' skipped: ${compatibility.reasons.join('; ')}`);

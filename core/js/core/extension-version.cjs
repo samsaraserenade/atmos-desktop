@@ -105,4 +105,47 @@ function satisfies(version, range) {
   return true;
 }
 
-module.exports = { isValidVersion, compareVersions, isValidRange, satisfies };
+/** A range in words, for "Needs Atmos …". */
+function describeRange(range) {
+  const text = String(range).trim();
+  if (text.startsWith('>=')) return `${text.slice(2).trim()} or later`;
+  const r = parseRange(text);
+  if (r?.exact) return text;
+  if (r?.min && r.max) return `${text} (${text.replace(/^[\^~]\s*/, '')} up to, not including, ${r.max.major}.${r.max.minor}.${r.max.patch})`;
+  return text;
+}
+
+/**
+ * An engines range with the version written short, as people do (">=0.15",
+ * "^1", "0.15"), in full: ">=0.15.0", "^1.0.0", and "0.15" as "~0.15.0"
+ * (any 0.15.x, as npm reads it). Anything else is returned as it is.
+ */
+function fullEngineRange(range) {
+  const match = typeof range === 'string' && range.trim().match(/^(\^|~|>=)?\s*(\d+)(?:\.(\d+))?$/);
+  if (!match) return range;
+  const [, operator = '', major, minor] = match;
+  if (minor === undefined) return operator === '>=' ? `>=${major}.0.0` : `^${major}.0.0`;
+  return `${operator || '~'}${major}.${minor}.0`;
+}
+
+/**
+ * Whether this Atmos (`appVersion`) is one the manifest says it runs on:
+ * "engines": { "atmos": "<range>" }, as npm and VS Code extensions do.
+ * { ok, reason }. No "engines" (or no "atmos" in it) is ok; a malformed one
+ * never is. An Atmos whose own version isn't known (a test) passes.
+ */
+function checkEngines(manifest, appVersion) {
+  const engines = manifest?.engines;
+  if (engines === undefined || engines === null) return { ok: true, reason: null };
+  if (typeof engines !== 'object' || Array.isArray(engines)) return { ok: false, reason: '"engines" must be an object, like { "atmos": ">=0.15.0" }' };
+  const range = fullEngineRange(engines.atmos);
+  if (range === undefined) return { ok: true, reason: null };
+  if (!isValidRange(range) || String(range).trim() === '') {
+    return { ok: false, reason: `"engines.atmos" isn't a version range (${JSON.stringify(range)}); use one like ">=0.15.0"` };
+  }
+  if (!isValidVersion(appVersion)) return { ok: true, reason: null };
+  if (satisfies(appVersion, range)) return { ok: true, reason: null };
+  return { ok: false, reason: `Needs Atmos ${describeRange(range)}; this is ${appVersion}` };
+}
+
+module.exports = { isValidVersion, compareVersions, isValidRange, satisfies, checkEngines, describeRange, fullEngineRange };

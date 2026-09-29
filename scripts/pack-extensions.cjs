@@ -283,6 +283,7 @@ function buildIndex(dir, privateKey, name = 'Atmos', { core = null } = {}) {
       description: manifest.description || null,
       apiVersion: manifest.apiVersion,
       requires: manifest.requires || {},
+      engines: manifest.engines || null,
       dependencies: manifest.dependencies || {},
       file,
       size: buffer.length,

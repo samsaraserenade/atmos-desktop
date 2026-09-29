@@ -734,17 +734,18 @@ function _extensionLabel(extension) {
 }
 
 // Trust states that keep an extension from loading (see extension-trust.cjs).
-const _UNTRUSTED = new Set(['pending', 'changed', 'blocked', 'tampered']);
+const _UNTRUSTED = new Set(['pending', 'changed', 'blocked', 'tampered', 'incompatible']);
 const _STATUS_TEXT = {
   pending: 'needs approval',
   changed: 'changed since approval',
   blocked: 'blocked',
   tampered: 'files modified',
+  incompatible: 'not for this Atmos',
 };
 
 /** Whether a restart would load or unload this extension. */
 function _needsRestart(extension) {
-  if (extension.approvalChanged) return true;
+  if (extension.approvalChanged || extension.developerRestart) return true;
   const wouldLoad = extension.enabled && !_UNTRUSTED.has(extension.status) && !(extension.dependencyProblems || []).length;
   return wouldLoad !== extension.active;
 }
@@ -755,6 +756,7 @@ function _hasPendingRestart() {
 
 function _extensionStatusText(extension) {
   if (extension.tier === 'system') return _UNTRUSTED.has(extension.status) ? _STATUS_TEXT[extension.status] : 'always on';
+  if (extension.status === 'developer' && !_needsRestart(extension)) return 'developer folder, reloads when you save';
   if (extension.approvalChanged) return 'restart required';
   if (_UNTRUSTED.has(extension.status) && extension.enabled) return _STATUS_TEXT[extension.status];
   if (extension.enabled && (extension.dependencyProblems || []).length && !_needsRestart(extension)) {
@@ -774,6 +776,13 @@ function _permissionList(lines, highlight = []) {
   return `<ul class="sm-permission-list">${(lines || []).map(line => (
     `<li${added.has(line) ? ' class="sm-permission-new"' : ''}>${escapeHtml(line)}${added.has(line) ? ' <span>new</span>' : ''}</li>`
   )).join('')}</ul>`;
+}
+
+/** The summary with what an update added (named host by host) after it, where the summary doesn't already say it. */
+function _withAdded(summary, added) {
+  const lines = [...(summary || [])];
+  for (const line of added || []) if (!lines.includes(line)) lines.push(line);
+  return lines;
 }
 
 /** What it can use of the other extensions it declares (their "exports"). */
@@ -814,7 +823,7 @@ function _extensionTrustHtml(extension) {
   if (extension.enabled && (extension.dependencyProblems || []).length && !_UNTRUSTED.has(status)) {
     return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${extension.dependencyProblems.map(escapeHtml).join('. ')}.</div>`;
   }
-  if (status === 'blocked') {
+  if (status === 'blocked' || status === 'incompatible') {
     return `<div class="sm-trust-note sm-trust-alert">Not loaded: ${escapeHtml(extension.statusReason)}.</div>`;
   }
   if ((status === 'pending' || status === 'changed') && extension.enabled) {
@@ -824,7 +833,7 @@ function _extensionTrustHtml(extension) {
     return `
       <div class="sm-trust-note sm-trust-review">
         <div>${title}</div>
-        ${_permissionList(summary, status === 'changed' ? extension.newPermissions : [])}
+        ${_permissionList(status === 'changed' ? _withAdded(summary, extension.newPermissions) : summary, status === 'changed' ? extension.newPermissions : [])}
         ${_sharingHtml(extension)}
         <p class="sm-trust-warning">${_SANDBOX_WARNING}</p>
         <div class="sm-trust-actions">
@@ -834,10 +843,16 @@ function _extensionTrustHtml(extension) {
         <div class="sm-trust-error" hidden></div>
       </div>`;
   }
+  // Started with --dev-extension: loaded from where it's being written.
+  const developer = status === 'developer'
+    ? `<div class="sm-trust-note">Loaded for development from ${escapeHtml(extension.path || '')}, without approval. Its frames reload when you save a file; new or removed surfaces need a restart. It has the same limits as any community extension.</div>`
+    : extension.developerIgnored
+      ? `<div class="sm-trust-note sm-trust-alert">The developer folder ${escapeHtml(extension.developerIgnored)} has this extension's id, so it wasn't loaded: it would have used this copy's data. Remove this copy to develop it, or rename the folder.</div>`
+      : '';
   const fellBack = extension.fellBackFrom
     ? `<div class="sm-trust-note sm-trust-alert">Version ${escapeHtml(extension.fellBackFrom.version || '')} couldn't load, so ${escapeHtml(extension.version || 'the bundled version')} is running instead. ${escapeHtml(extension.fellBackFrom.reason || extension.fellBackFrom.status)}.</div>`
     : '';
-  return `${fellBack}
+  return `${developer}${fellBack}
     <details class="sm-permissions">
       <summary>Details</summary>
       ${_packageDetailsHtml(extension)}
@@ -897,7 +912,7 @@ function _renderExtensionsPage() {
       <div class="sm-card-main">
         <div class="sm-icon">${_FALLBACK_ICON}</div>
         <div class="sm-card-text">
-          <div class="sm-card-name">${escapeHtml(label)} <span class="sm-tier-badge" data-tier="${escapeHtml(extension.tier || 'third-party')}">${tierLabel}</span></div>
+          <div class="sm-card-name">${escapeHtml(label)} <span class="sm-tier-badge" data-tier="${escapeHtml(extension.tier || 'third-party')}">${tierLabel}</span>${extension.source === 'developer' ? ' <span class="sm-tier-badge" data-tier="developer">Developer</span>' : ''}</div>
           <div class="sm-card-detail">${escapeHtml(extension.id)}${extension.version ? ` ${escapeHtml(extension.version)}` : ''} · ${escapeHtml(_extensionStatusText(extension))}</div>
         </div>
         ${system ? '' : _toggleHtml(extension.enabled, `Enable ${label}`)}

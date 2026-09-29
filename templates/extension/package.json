@@ -1,0 +1,10 @@
+{
+  "name": "{{id}}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An Atmos extension. Atmos reads extension.json; this file is only for its tests.",
+  "scripts": {
+    "test": "node --import ./.atmos-sdk/testing/register.mjs --test"
+  }
+}

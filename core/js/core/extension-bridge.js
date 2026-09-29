@@ -93,9 +93,27 @@ function cleanMenuItems(items) {
   });
 }
 
-/** Wallpaper and audio calls go to system services, declared like any other. */
+/** Wallpaper, audio and location calls go to system services, declared like any other. */
 const WALLPAPER = 'service:wallpaper';
 const AUDIO = 'service:audio';
+const LOCATION = 'service:location';
+
+/**
+ * Whether `host` is covered by a normalised "permissions.network" list
+ * (the main process's hostAllowed() in extension-permissions.cjs, which
+ * decides; this only fails early with a clearer message).
+ */
+function hostAllowed(host, network) {
+  const name = String(host || '').toLowerCase().replace(/\.$/, '');
+  return !!name && (network || []).some(entry => entry === '*' || entry === name || (entry.startsWith('*.') && name.endsWith(entry.slice(1))));
+}
+const FETCH_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+const MAX_FETCH_BODY = 5 * 1024 * 1024;
+// In flight from one frame at once (the main process runs 6 per extension
+// and queues 24 more); beyond this a frame is refused before its request
+// is copied any further.
+const MAX_FETCHES_PER_FRAME = 32;
+let _bridgeSerial = 0;
 
 function parseTarget(target) {
   const match = typeof target === 'string' && target.match(/^(plugin|service):([a-z0-9][a-z0-9-]*)$/);
@@ -116,9 +134,12 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
   const subscriptions = new Map(); // event name -> unsubscribe
   const mainListeners = new Map();  // "target channel" -> unsubscribe
   const outgoingCalls = new Map(); // call id -> { resolve, reject }
+  const fetches = new Set();       // this frame's atmos.fetch() requests in flight
+  const serial = ++_bridgeSerial;  // request ids are per frame; this makes them per page
   let nextCall = 1;
   let disposed = false;
   let wallpaperWatch = null;
+  let locationWatch = null;
 
   /** What a frame may ask its audio channel to load. */
   const audioSource = source => {
@@ -266,6 +287,58 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     'audio.subscribe': async () => {
       requireTarget(AUDIO, 'play audio through');
       await deps.audio.watch();
+    },
+
+    // The Location system service, read-only ("invokes": ["service:location"]):
+    // { lat, lon, label, mode }, or null when the user hasn't set one.
+    'location.get': () => {
+      requireTarget(LOCATION, 'read the location from');
+      return deps.location.get();
+    },
+    'location.subscribe': () => {
+      requireTarget(LOCATION, 'follow the location from');
+      if (!locationWatch) locationWatch = deps.location.subscribe(value => post({ topic: 'location', payload: value }));
+    },
+
+    // atmos.fetch(): an HTTP request the main process makes for the frame,
+    // to a declared host (see extension-fetch.cjs, which checks it all
+    // again). The SDK has turned the frame's arguments into a plain request.
+    'fetch': async request => {
+      const { id, url, method, headers, body, redirect } = plainObject(request, 'fetch request');
+      if (!Number.isInteger(id) || id < 1) throw new BridgeError('fetch request id', 'TypeError');
+      let parsed;
+      try { parsed = new URL(url); } catch { throw new BridgeError(`'${String(url).slice(0, 200)}' is not a URL`, 'TypeError'); }
+      if (parsed.protocol !== 'https:') throw new BridgeError(`atmos.fetch() only reaches https:// addresses (${parsed.protocol}//${parsed.host})`, 'TypeError');
+      if (!hostAllowed(parsed.hostname.replace(/^\[|\]$/g, ''), extension.permissions?.network)) {
+        throw new BridgeError(`${self} may not connect to ${parsed.hostname}; declare it in extension.json "permissions.network"`);
+      }
+      if (typeof method !== 'string' || !FETCH_METHODS.has(method)) throw new BridgeError(`atmos.fetch() doesn't send ${method} requests`, 'TypeError');
+      if (!Array.isArray(headers) || !headers.every(pair => Array.isArray(pair) && pair.length === 2 && pair.every(part => typeof part === 'string'))) {
+        throw new BridgeError('fetch headers must be [name, value] pairs', 'TypeError');
+      }
+      if (body != null && !(body instanceof ArrayBuffer)) throw new BridgeError('a fetch body arrives as an ArrayBuffer', 'TypeError');
+      if (body && body.byteLength > MAX_FETCH_BODY) throw new BridgeError('a request body is at most 5 MB', 'TypeError');
+      if (!deps.fetch) throw new BridgeError('atmos.fetch() is unavailable', 'Error');
+      if (fetches.size >= MAX_FETCHES_PER_FRAME) {
+        throw new BridgeError(`too many atmos.fetch() requests at once (at most ${MAX_FETCHES_PER_FRAME} from one frame)`, 'TypeError');
+      }
+      const requestId = `${serial}:${id}`;
+      fetches.add(requestId);
+      try {
+        const answer = await deps.fetch(self, requestId, {
+          url: parsed.href, method, headers, body: body ? new Uint8Array(body) : null,
+          redirect: ['follow', 'error', 'manual'].includes(redirect) ? redirect : 'follow',
+        });
+        if (answer?.error) throw new BridgeError(answer.error.message, answer.error.name || 'TypeError');
+        const { body: bytes, ...rest } = answer.result;
+        return { ...rest, body: bytes ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : null };
+      } finally {
+        fetches.delete(requestId);
+      }
+    },
+    'fetch.abort': id => {
+      const requestId = `${serial}:${id}`;
+      if (fetches.has(requestId)) deps.fetchAbort?.(self, requestId);
     },
 
     'contextMenu.open': (x, y, items) => {
@@ -446,10 +519,6 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     'drawer.wheel': (deltaY, deltaMode) => {
       if (surface.drawer && Number.isFinite(deltaY)) deps.drawer?.wheel(deltaY, deltaMode);
     },
-    'drop.arm': () => {
-      if (!surface.fileDrops) throw new BridgeError(`${self} ${surface.type} does not accept file drops ("fileDrops": true)`);
-      deps.armFileDrop?.();
-    },
   };
 
   function callFrame(method, args) {
@@ -493,6 +562,10 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     mainListeners.clear();
     wallpaperWatch?.();
     wallpaperWatch = null;
+    locationWatch?.();
+    locationWatch = null;
+    for (const requestId of fetches) deps.fetchAbort?.(self, requestId);
+    fetches.clear();
     for (const pending of outgoingCalls.values()) pending.reject(new BridgeError('service stopped', 'Error'));
     outgoingCalls.clear();
     if (deps.services.get(self)?.owner === bridge) deps.services.delete(self);

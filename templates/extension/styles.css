@@ -1,0 +1,32 @@
+/* Atmos gives every frame its theme as CSS variables (--ink-rgb,
+   --surface-rgb, --app-font-family, --color-positive…) and a transparent
+   background. */
+.hello-panel {
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.hello-card {
+  max-width: 420px;
+  padding: 28px 32px;
+  border-radius: 18px;
+  /* Transparent: Atmos draws the glass underneath (data-atmos-glass). */
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.1);
+}
+.hello-card h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+.hello-card p { margin: 0 0 20px; color: rgba(var(--ink-rgb), 0.7); line-height: 1.5; }
+.hello-card code { font-size: 12px; }
+.hello-count {
+  font: inherit;
+  color: inherit;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(var(--ink-rgb), 0.1);
+  cursor: pointer;
+}
+.hello-count:hover { background: rgba(var(--ink-rgb), 0.16); }
+.hello-widget { padding: 8px 12px 10px; display: grid; gap: 6px; }
+.hello-row { display: flex; justify-content: space-between; color: rgba(var(--ink-rgb), 0.7); }
+.hello-row strong { color: rgb(var(--ink-rgb)); font-weight: 600; }

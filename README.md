@@ -288,13 +288,21 @@ npm run build:portable
 
 ### Build an extension
 
-Put a folder in `%APPDATA%\atmos\plugins\<id>\` (or `services\<id>\`) with
-an `extension.json` declaring its permissions, write its panel, widgets or
-background work against the Atmos SDK, and restart Atmos. It appears in
-Settings waiting for your approval. The smallest working example is
-`scripts/e2e/fixtures/plugins/hello-frame`; the full API is in
-[ATMOS_CORE_INTEGRATION.md](ATMOS_CORE_INTEGRATION.md) (§ 4 the Atmos SDK,
-§ 7 security).
+In a clone of this repository:
+
+```bash
+npm install
+npm run new:extension -- ../my-widget
+```
+
+That makes an extension from the template: a panel, a sidebar widget, tests
+against a fake Atmos, and typings for your editor. Start Atmos with
+`--dev-extension=<folder>` to run it from where you write it: it reloads as
+you save, with no approval prompts. To share it, copy the folder into
+`%APPDATA%\atmos\plugins\` on another computer, where it waits in Settings
+for approval. The guide is
+[ATMOS_CORE_INTEGRATION.md](ATMOS_CORE_INTEGRATION.md): § 1 to get going,
+§ 4 the Atmos SDK, § 7 security.
 
 ### Repository layout
 
@@ -306,6 +314,7 @@ Atmos/
 ├── services/    # Capabilities extensions call into (charting, currency, fullscreen-viewer,
 │                #   market-data, media-metadata)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
+├── templates/   # The extension template (npm run new:extension)
 ├── .github/     # CI: npm run test:all on every push
 ├── release.json # What is released: exported to the public repo and packed as packages
 └── ATMOS_CORE_INTEGRATION.md   # The extension API
@@ -320,6 +329,7 @@ Atmos/
 | `npm run test:services` | Service contract tests |
 | `npm run test:permissions` | Checks each bundled extension's code against its declared permissions |
 | `npm run test:build` | The build hook (`scripts/after-pack.cjs`) |
+| `npm run test:sdk` | The extension template: it is made, its own tests pass, and the typings cover the SDK |
 | `cd plugins/audio-player && node --test tests/*.test.cjs` | Audio Player tests |
 | `cd plugins/matrix-chat && npm ci && npm test` | Matrix Chat tests (`npm run check:browser` adds the message-sanitizer attack checks in a browser; it uses Edge, so set `MATRIX_TEST_BROWSER` elsewhere) |
 | `npm run test:finance` | Finance and Markets tests |

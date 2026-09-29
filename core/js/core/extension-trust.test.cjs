@@ -16,7 +16,7 @@ function fixture(trustedKeys = new Map()) {
   };
   const bundled = kind => path.join(dir, 'bundled', kind);
   const installed = kind => path.join(dir, 'installed', kind);
-  const setup = () => {
+  const setup = (options = {}) => {
     const catalog = createExtensionCatalog({ bundledRoot: bundled, installedRoot: installed, trustedKeys, warn() {} });
     const trust = createExtensionTrust({
       approvalsFile: path.join(dir, 'user', 'approvals.json'),
@@ -24,6 +24,7 @@ function fixture(trustedKeys = new Map()) {
       bundledRoot: bundled,
       trustedKeys,
       warn() {},
+      ...options,
     });
     trust.assessAll(catalog);
     return { catalog, trust };
@@ -244,4 +245,109 @@ test('a bundled extension without integrity.json is checked against its own sign
   write('bundled/plugins/sounds/boot.js', '2');
   ({ catalog, trust } = setup());
   assert.equal(trust.get(catalog.find('plugins', 'sounds')).status, 'tampered');
+});
+
+test('an extension made for another Atmos is incompatible, and an official update that is falls back', () => {
+  const { checkCompatibility } = require('./extension-host.cjs');
+  const { write, setup, sign } = signedFixture();
+  const compatibility = manifest => checkCompatibility(manifest, { appVersion: '0.15.0' });
+  write('installed/plugins/later/extension.json', { apiVersion: 4, engines: { atmos: '>=0.16.0' }, permissions: {} });
+  write('installed/plugins/later/panel.js', 'export {};');
+  write('installed/plugins/fine/extension.json', { apiVersion: 4, engines: { atmos: '>=0.15' }, permissions: {} });
+  write('installed/plugins/fine/panel.js', 'export {};');
+  write('installed/plugins/future-api/extension.json', { apiVersion: 5, permissions: {} });
+  write('bundled/plugins/sounds/extension.json', { version: '1.0.0', publisher: 'atmos', permissions: {} });
+  write('installed/plugins/sounds/extension.json', { version: '1.1.0', publisher: 'atmos', engines: { atmos: '^0.16.0' }, permissions: {} });
+  sign('installed/plugins/sounds');
+  const { catalog, trust } = setup({ compatibility });
+
+  const later = trust.get(catalog.find('plugins', 'later'));
+  assert.equal(later.status, 'incompatible');
+  assert.equal(later.loadable, false);
+  assert.equal(later.reason, 'Needs Atmos 0.16.0 or later; this is 0.15.0');
+  assert.equal(later.fingerprint, undefined, 'nothing to approve');
+  assert.equal(trust.get(catalog.find('plugins', 'fine')).status, 'pending', 'a compatible community extension still needs approval');
+  assert.match(trust.get(catalog.find('plugins', 'future-api')).reason, /Needs a newer Atmos \(extension API 5/);
+
+  const sounds = catalog.find('plugins', 'sounds');
+  assert.equal(sounds.source, 'bundled', 'the update needs Atmos 0.16, so the bundled 1.0.0 runs');
+  assert.equal(trust.get(sounds).fellBackFrom.status, 'incompatible');
+});
+
+test('an update is compared with what was approved as data: a swapped host is named', () => {
+  const { dir, write, setup } = fixture();
+  const five = ['a.example.com', 'b.example.com', 'c.example.com', 'd.example.com', 'e.example.com'];
+  write('installed/plugins/hosts/extension.json', { apiVersion: 3, permissions: { network: five } });
+  write('installed/plugins/hosts/panel.js', 'export {};');
+  let { catalog, trust } = setup();
+  let hosts = trust.get(catalog.find('plugins', 'hosts'));
+  assert.deepEqual(hosts.permissionSummary, [`Connect to ${five.join(', ')}`], 'a community extension is approved on every host, named');
+  trust.approve('plugins', catalog.find('plugins', 'hosts'), hosts.fingerprint);
+
+  write('installed/plugins/hosts/extension.json', { apiVersion: 3, permissions: { network: [...five.slice(0, 4), 'evil.example'] } });
+  ({ catalog, trust } = setup());
+  hosts = trust.get(catalog.find('plugins', 'hosts'));
+  assert.equal(hosts.status, 'changed');
+  assert.match(hosts.reason, /now asks for more/);
+  assert.deepEqual(hosts.newPermissions, ['Connect to evil.example']);
+
+  // Narrowed: changed files, nothing more asked for.
+  write('installed/plugins/hosts/extension.json', { apiVersion: 3, permissions: { network: five.slice(0, 2) } });
+  ({ catalog, trust } = setup());
+  hosts = trust.get(catalog.find('plugins', 'hosts'));
+  assert.equal(hosts.reason, 'Its files changed since you approved it');
+  assert.deepEqual(hosts.newPermissions, []);
+
+  // An approval an older Atmos wrote, with a permission that no longer exists: readable, and everything is new.
+  const approvals = JSON.parse(fs.readFileSync(path.join(dir, 'user', 'approvals.json'), 'utf8'));
+  approvals['plugin:hosts'].permissions = { uses: ['old-capability'], network: five };
+  fs.writeFileSync(path.join(dir, 'user', 'approvals.json'), JSON.stringify(approvals));
+  ({ catalog, trust } = setup());
+  hosts = trust.get(catalog.find('plugins', 'hosts'));
+  assert.equal(hosts.status, 'changed');
+  assert.deepEqual(hosts.newPermissions, ['Connect to a.example.com, b.example.com']);
+});
+
+test('a developer folder loads as community without approval, and never stands in for an installed copy', () => {
+  const { dir, write } = fixture();
+  write('dev/weather/extension.json', { apiVersion: 4, permissions: { network: ['api.test.example'] } });
+  write('dev/weather/panel.js', 'export {};');
+  write('dev/sneaky/extension.json', { permissions: { ipc: true } });
+  write('dev/sneaky/main.cjs', 'module.exports = () => {};');
+  write('dev/alpha/extension.json', { permissions: {} });
+  write('installed/plugins/taken/extension.json', { permissions: {} });
+  write('dev/taken/extension.json', { permissions: { network: ['api.test.example'] } });
+  write('bundled/plugins/alpha/extension.json', { permissions: {} });
+  const catalog = createExtensionCatalog({
+    bundledRoot: kind => path.join(dir, 'bundled', kind),
+    installedRoot: kind => path.join(dir, 'installed', kind),
+    developerFolders: kind => (kind === 'plugins' ? ['weather', 'sneaky', 'alpha', 'taken', 'Not_An_Id'].map(name => path.join(dir, 'dev', name)) : []),
+    warn() {},
+  });
+  const trust = createExtensionTrust({ approvalsFile: path.join(dir, 'user', 'approvals.json'), bundledRoot: kind => path.join(dir, 'bundled', kind), warn() {} });
+  trust.assessAll(catalog);
+
+  const weather = catalog.find('plugins', 'weather');
+  assert.equal(weather.source, 'developer');
+  assert.equal(weather.tier, 'third-party');
+  assert.equal(weather.path, path.join(dir, 'dev', 'weather'));
+  assert.equal(trust.get(weather).status, 'developer');
+  assert.equal(trust.get(weather).loadable, true);
+  assert.throws(() => trust.approve('plugins', weather, 'x'), /without approval/);
+
+  assert.equal(trust.get(catalog.find('plugins', 'sneaky')).status, 'blocked', 'community rules still apply: no main.cjs');
+  assert.equal(catalog.find('plugins', 'alpha').source, 'bundled', 'an official copy wins');
+  assert.equal(catalog.find('plugins', 'alpha').developerIgnored, path.join(dir, 'dev', 'alpha'));
+  // An installed community copy wins too: the folder would otherwise run in
+  // its origin, with its storage and state, without being approved.
+  const taken = catalog.find('plugins', 'taken');
+  assert.equal(taken.source, 'installed');
+  assert.equal(taken.developerIgnored, path.join(dir, 'dev', 'taken'));
+  assert.equal(trust.get(taken).status, 'pending');
+
+  // A changed manifest is read again.
+  write('dev/weather/extension.json', { apiVersion: 4, permissions: { network: ['api.test.example', 'other.test.example'] } });
+  weather.manifest = JSON.parse(fs.readFileSync(path.join(dir, 'dev', 'weather', 'extension.json'), 'utf8'));
+  assert.deepEqual(trust.reassess('plugins', weather).permissions.network, ['api.test.example', 'other.test.example']);
+  assert.deepEqual(trust.get(weather).permissions.network, ['api.test.example', 'other.test.example']);
 });

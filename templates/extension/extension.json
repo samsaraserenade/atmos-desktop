@@ -1,0 +1,16 @@
+{
+  "$schema": "./.atmos-sdk/extension.schema.json",
+  "apiVersion": 4,
+  "engines": { "atmos": ">={{atmos}}" },
+  "version": "0.1.0",
+  "publisher": "{{publisher}}",
+  "displayName": "{{name}}",
+  "description": "A panel with a counter and a sidebar widget that asks GitHub for Atmos's stars.",
+  "contributes": {
+    "panel": { "label": "{{name}}", "icon": "icon.svg", "glass": true },
+    "sidebar": [{ "label": "{{name}}", "icon": "icon.svg", "showIn": [] }]
+  },
+  "permissions": {
+    "network": ["api.github.com"]
+  }
+}
