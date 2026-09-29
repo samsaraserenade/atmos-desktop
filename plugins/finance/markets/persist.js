@@ -64,7 +64,7 @@ if (chartDefaultsReset) onStateLoaded(save);
 export const watchlistState = registerStateNamespace('watchlist', {
   version: 1,
   defaults: {
-    tickers: [...DEFAULT_TICKERS], activeT: 'BTC', tickerSource: { XMR: 'coingecko' }, cgIdCache: {},
+    tickers: [...DEFAULT_TICKERS], activeT: 'BTC', tickerSource: {}, cgIdCache: {},
   },
   hydrate(namespace, saved) {
     const tickers = Array.isArray(saved.tickers) && saved.tickers.length
@@ -74,10 +74,10 @@ export const watchlistState = registerStateNamespace('watchlist', {
     namespace.activeT = tickers.includes(saved.activeT) ? saved.activeT : tickers[0] || null;
     namespace.tickerSource = objectCopy(saved.tickerSource);
     namespace.cgIdCache = objectCopy(saved.cgIdCache);
-    namespace.tickerSource.XMR = 'coingecko';
+    // Monero used to be pinned to CoinGecko (Binance had delisted it); it
+    // is probed like any other symbol now (see watchlist-data.js).
   },
 });
-watchlistState.tickerSource.XMR = 'coingecko';
 
 const queryListeners = new Set();
 /** Called with the new query whenever the main chart's query changes. */

@@ -35,6 +35,26 @@ function pollSave(delayMs = 800) {
   _pollSaveTimer = setTimeout(() => { _pollSaveTimer = null; save(); }, delayMs);
 }
 const BINANCE_FAIL_THRESHOLD = 2;
+
+// Where a symbol's price comes from is decided again each session, Binance
+// first. Before 1.0.10 two Binance failures in a row (the network not up yet
+// at login, say) moved a symbol to CoinGecko for good, and it never came
+// back. Now a symbol moved off Binance by failures tries Binance again after
+// BINANCE_RETRY_MS, and every CoinGecko choice is checked again at the start
+// of a session (a cached CoinGecko id makes that free for coins Binance
+// doesn't list).
+const BINANCE_RETRY_MS = 10 * 60_000;
+const binanceRetryAt = Object.create(null); // symbol -> when to try Binance again
+let sourcesCheckedThisSession = false;
+
+// CoinGecko's keyless API refuses callers that ask too often (a 403 from its
+// CDN, or a 429), sometimes for hours. Ask at most once a minute, and after a
+// refusal not again for ten minutes; the last prices stay meanwhile.
+const COINGECKO_EVERY_MS = 60_000;
+const COINGECKO_PAUSE_MS = 10 * 60_000;
+let coinGeckoNextAt = 0;
+const coinGeckoPaused = () => Date.now() < coinGeckoNextAt;
+function pauseCoinGecko() { coinGeckoNextAt = Date.now() + COINGECKO_PAUSE_MS; }
 // Symbols that failed Binance, CoinGecko, *and* DexScreener at least once
 // this session. Without this, fetchTickers()'s 15s loop would retry (and
 // re-fail, re-logging the same blocked/404 network error) forever for any
@@ -121,27 +141,38 @@ function notify() {
   }
 }
 
+/**
+ * A symbol's CoinGecko id: the cached one, or a search. null when CoinGecko
+ * knows no such coin; undefined when it couldn't be asked (paused, refused,
+ * unreachable), so the caller can try again later rather than give up.
+ */
 async function cgIdFor(symbol) {
   if (watchlistState.cgIdCache[symbol]) return watchlistState.cgIdCache[symbol];
+  if (coinGeckoPaused()) return undefined;
   try {
     const response = await financeFetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(symbol)}`);
+    if (!response.ok) { pauseCoinGecko(); return undefined; }
     const data = await response.json();
     const match = (data.coins || []).find(coin => coin.symbol.toUpperCase() === symbol);
     if (!match) return null;
     watchlistState.cgIdCache[symbol] = match.id;
     pollSave();
     return match.id;
-  } catch (_error) { return null; }
+  } catch (_error) { return undefined; }
 }
 
+/** One CoinGecko request for every symbol that uses it, at most once a minute. */
 async function fetchCoinGecko(symbols) {
-  if (!symbols.length) return;
+  if (!symbols.length || coinGeckoPaused()) return;
+  coinGeckoNextAt = Date.now() + COINGECKO_EVERY_MS;
   try {
-    const pairs = await Promise.all(symbols.map(async symbol => [symbol, await cgIdFor(symbol)]));
-    const ids = pairs.filter(([, id]) => id).map(([, id]) => id);
+    const pairs = symbols.map(symbol => [symbol, watchlistState.cgIdCache[symbol]]);
+    const ids = [...new Set(pairs.filter(([, id]) => id).map(([, id]) => id))];
     if (!ids.length) return;
     const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true`;
-    const data = await (await financeFetch(url)).json();
+    const response = await financeFetch(url);
+    if (!response.ok) { pauseCoinGecko(); return; }
+    const data = await response.json();
     for (const [symbol, id] of pairs) {
       if (id && data[id]) tickerData[symbol] = { price: data[id].usd, change: data[id].usd_24h_change ?? null };
     }
@@ -181,13 +212,37 @@ async function probeSource(symbol) {
   if (unresolvedSymbols.has(symbol)) return false;
   try {
     const data = await (await financeFetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}USDT`)).json();
-    if (data.price) { watchlistState.tickerSource[symbol] = 'binance'; return true; }
+    if (data.price) { watchlistState.tickerSource[symbol] = 'binance'; delete binanceRetryAt[symbol]; return true; }
   } catch (_error) { /* try CoinGecko */ }
   const id = await cgIdFor(symbol);
   if (id) { watchlistState.tickerSource[symbol] = 'coingecko'; return true; }
+  // CoinGecko couldn't be asked: try again later, rather than settle for a
+  // DexScreener pool that may be another token with the same ticker.
+  if (id === undefined) return false;
   if (await dexScreenerBestPair(symbol)) { watchlistState.tickerSource[symbol] = 'dexscreener'; return true; }
   unresolvedSymbols.add(symbol);
   return false;
+}
+
+/** Move a symbol to CoinGecko after Binance failures, until BINANCE_RETRY_MS has passed. */
+function leaveBinance(symbol) {
+  watchlistState.tickerSource[symbol] = 'coingecko';
+  binanceRetryAt[symbol] = Date.now() + BINANCE_RETRY_MS;
+}
+
+/** Symbols to decide the source of again: every CoinGecko one once a session, and those whose Binance retry is due. */
+function recheckSources(symbols) {
+  const now = Date.now();
+  for (const symbol of symbols) {
+    const source = watchlistState.tickerSource[symbol];
+    if (source !== 'coingecko') continue;
+    if (!sourcesCheckedThisSession || (binanceRetryAt[symbol] && now >= binanceRetryAt[symbol])) {
+      delete watchlistState.tickerSource[symbol];
+      delete binanceRetryAt[symbol];
+      binanceFailCount[symbol] = 0;
+    }
+  }
+  sourcesCheckedThisSession = true;
 }
 
 async function fetchBinance(symbols) {
@@ -205,12 +260,12 @@ async function fetchBinance(symbols) {
     }
     const missing = symbols.filter(symbol => !returned.has(symbol));
     if (missing.length) {
-      for (const symbol of missing) watchlistState.tickerSource[symbol] = 'coingecko';
-      await fetchCoinGecko(missing);
+      for (const symbol of missing) leaveBinance(symbol);
       pollSave();
     }
   } catch (_error) {
-    const fallback = [];
+    // One symbol Binance doesn't know fails the whole list, so ask for each.
+    let moved = false;
     await Promise.allSettled(symbols.map(async symbol => {
       try {
         const data = await (await financeFetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}USDT`)).json();
@@ -219,13 +274,10 @@ async function fetchBinance(symbols) {
         binanceFailCount[symbol] = 0;
       } catch (_innerError) {
         binanceFailCount[symbol] = (binanceFailCount[symbol] || 0) + 1;
-        if (binanceFailCount[symbol] >= BINANCE_FAIL_THRESHOLD) {
-          watchlistState.tickerSource[symbol] = 'coingecko';
-          fallback.push(symbol);
-        }
+        if (binanceFailCount[symbol] >= BINANCE_FAIL_THRESHOLD) { leaveBinance(symbol); moved = true; }
       }
     }));
-    if (fallback.length) { await fetchCoinGecko(fallback); pollSave(); }
+    if (moved) pollSave();
   }
 }
 
@@ -244,22 +296,16 @@ export async function fetchTickers() {
   }
   const symbols = trackedSymbols();
   if (!symbols.length) { notify(); return; }
-  const binance = symbols.filter(symbol => watchlistState.tickerSource[symbol] === 'binance');
-  const coinGecko = symbols.filter(symbol => watchlistState.tickerSource[symbol] === 'coingecko');
-  const dexScreener = symbols.filter(symbol => watchlistState.tickerSource[symbol] === 'dexscreener');
+  recheckSources(symbols);
   const unknown = symbols.filter(symbol => !watchlistState.tickerSource[symbol]);
-  const jobs = [fetchBinance(binance), fetchCoinGecko(coinGecko), fetchDexScreener(dexScreener)];
-  if (unknown.length) jobs.push((async () => {
-    await Promise.allSettled(unknown.map(async symbol => {
-      if (!await probeSource(symbol)) return;
-      const source = watchlistState.tickerSource[symbol];
-      if (source === 'binance') await fetchBinance([symbol]);
-      else if (source === 'dexscreener') await fetchDexScreener([symbol]);
-      else await fetchCoinGecko([symbol]);
-    }));
+  if (unknown.length) {
+    await Promise.allSettled(unknown.map(probeSource));
     pollSave();
-  })());
-  await Promise.all(jobs);
+  }
+  const from = source => symbols.filter(symbol => watchlistState.tickerSource[symbol] === source);
+  await Promise.all([fetchBinance(from('binance')), fetchDexScreener(from('dexscreener'))]);
+  // Last, so what Binance just gave up on is in the same single request.
+  await fetchCoinGecko(from('coingecko'));
   notify();
 }
 
