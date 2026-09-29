@@ -3,7 +3,7 @@ import { financeFetch } from '../../src/network.js';
 import { atmos, isEngine, SELF } from '../../src/host/frame.js';
 import { flushPendingSave } from '../../src/host/persist.js';
 import { watchlistState } from '../persist.js';
-import { getPortfolioComposition, getSpotScopePositions } from '../../src/totals.js';
+import { getPortfolioComposition, getSpotScopePositions, STABLECOIN_SYMBOLS } from '../../src/totals.js';
 
 // Building raw Spot scope rows re-walks every connection/holding and converts
 // currencies. Cache one snapshot for the current synchronous render pass so
@@ -54,6 +54,31 @@ const COINGECKO_EVERY_MS = 60_000;
 const COINGECKO_PAUSE_MS = 10 * 60_000;
 let coinGeckoNextAt = 0;
 const coinGeckoPaused = () => Date.now() < coinGeckoNextAt;
+
+// A pair Binance has stopped trading (delisted, status BREAK: XMRUSDT) still
+// answers, with its last price frozen. Only a 24h ticker whose window ends
+// about now counts as a price.
+const BINANCE_FRESH_MS = 60 * 60_000;
+const freshTicker = item => item != null && item.lastPrice != null && Number(item.closeTime) > Date.now() - BINANCE_FRESH_MS;
+
+/**
+ * A coin you hold is valued by your portfolio server, which sends a price
+ * with every holding. When no market source has a price for it (CoinGecko
+ * refusing the connection, or a coin no exchange lists), that one is shown,
+ * without a 24h change. null when the server has none in dollars.
+ */
+function portfolioPriceFor(symbol) {
+  const position = spotScopeSnapshot().find(item => item.symbol === symbol);
+  for (const { holding } of position?.holdings || []) {
+    const price = Number(holding?.price);
+    const currency = String(holding?.currency ?? '$').toUpperCase();
+    if (!(price > 0) || (currency !== '$' && currency !== 'USD')) continue;
+    // Exactly 1 on anything but a stablecoin is the server's "price unknown".
+    if (price === 1 && !STABLECOIN_SYMBOLS.has(symbol)) continue;
+    return price;
+  }
+  return null;
+}
 function pauseCoinGecko() { coinGeckoNextAt = Date.now() + COINGECKO_PAUSE_MS; }
 // Symbols that failed Binance, CoinGecko, *and* DexScreener at least once
 // this session. Without this, fetchTickers()'s 15s loop would retry (and
@@ -211,8 +236,8 @@ async function fetchDexScreener(symbols) {
 async function probeSource(symbol) {
   if (unresolvedSymbols.has(symbol)) return false;
   try {
-    const data = await (await financeFetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}USDT`)).json();
-    if (data.price) { watchlistState.tickerSource[symbol] = 'binance'; delete binanceRetryAt[symbol]; return true; }
+    const data = await (await financeFetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}USDT`)).json();
+    if (freshTicker(data)) { watchlistState.tickerSource[symbol] = 'binance'; delete binanceRetryAt[symbol]; return true; }
   } catch (_error) { /* try CoinGecko */ }
   const id = await cgIdFor(symbol);
   if (id) { watchlistState.tickerSource[symbol] = 'coingecko'; return true; }
@@ -253,6 +278,7 @@ async function fetchBinance(symbols) {
     if (!Array.isArray(data)) throw new Error('invalid Binance response');
     const returned = new Set();
     for (const item of data) {
+      if (!freshTicker(item)) continue; // no longer traded: treated as missing
       const symbol = item.symbol.replace(/USDT$/, '');
       tickerData[symbol] = { price: Number(item.lastPrice), change: Number(item.priceChangePercent) };
       binanceFailCount[symbol] = 0;
@@ -269,7 +295,7 @@ async function fetchBinance(symbols) {
     await Promise.allSettled(symbols.map(async symbol => {
       try {
         const data = await (await financeFetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}USDT`)).json();
-        if (!data.lastPrice) throw new Error('missing price');
+        if (!freshTicker(data)) throw new Error('no current price');
         tickerData[symbol] = { price: Number(data.lastPrice), change: Number(data.priceChangePercent) };
         binanceFailCount[symbol] = 0;
       } catch (_innerError) {
@@ -306,6 +332,12 @@ export async function fetchTickers() {
   await Promise.all([fetchBinance(from('binance')), fetchDexScreener(from('dexscreener'))]);
   // Last, so what Binance just gave up on is in the same single request.
   await fetchCoinGecko(from('coingecko'));
+  // Whatever you hold that still has no market price: your server's.
+  for (const symbol of symbols) {
+    if (tickerData[symbol] && tickerData[symbol].source !== 'portfolio') continue;
+    const price = portfolioPriceFor(symbol);
+    if (price != null) tickerData[symbol] = { price, change: null, source: 'portfolio' };
+  }
   notify();
 }
 

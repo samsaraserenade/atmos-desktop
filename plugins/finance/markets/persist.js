@@ -74,8 +74,9 @@ export const watchlistState = registerStateNamespace('watchlist', {
     namespace.activeT = tickers.includes(saved.activeT) ? saved.activeT : tickers[0] || null;
     namespace.tickerSource = objectCopy(saved.tickerSource);
     namespace.cgIdCache = objectCopy(saved.cgIdCache);
-    // Monero used to be pinned to CoinGecko (Binance had delisted it); it
-    // is probed like any other symbol now (see watchlist-data.js).
+    // Monero used to be pinned to CoinGecko (Binance delisted it). It is
+    // probed like any other symbol now: a pair Binance no longer trades
+    // doesn't count (watchlist-data.js), so it still ends up elsewhere.
   },
 });
 

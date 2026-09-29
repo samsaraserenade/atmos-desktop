@@ -32,14 +32,17 @@ async function load(file, context, imports) {
   return module.namespace;
 }
 
-const BINANCE = { SOL: 118.69, BTC: 64000, ETH: 3100, XMR: 352, ADA: 0.41 };
+const BINANCE = { SOL: 118.69, BTC: 64000, ETH: 3100, ADA: 0.41, XMR: 118.7 };
+// Pairs Binance no longer trades (status BREAK): they still answer, frozen.
+const DELISTED = new Set(['XMR']);
 
 /**
  * watchlist-data.js with a fake network: Binance lists BINANCE (unless
  * `binanceDown`), CoinGecko answers or refuses with a 403 (`coinGeckoRefuses`),
- * DexScreener knows nothing. `requests` records every URL asked for.
+ * DexScreener knows nothing. `holdings` are what the portfolio server
+ * reports: { SYMBOL: price }. `requests` records every URL asked for.
  */
-async function watchlist({ state, binanceDown = false, coinGeckoRefuses = false }) {
+async function watchlist({ state, binanceDown = false, coinGeckoRefuses = false, holdings = {} }) {
   const clock = { now: 1_000_000 };
   const network = { binanceDown, coinGeckoRefuses, requests: [] };
   class FakeDate extends Date { static now() { return clock.now; } }
@@ -56,8 +59,10 @@ async function watchlist({ state, binanceDown = false, coinGeckoRefuses = false 
         : [url.searchParams.get('symbol')];
       const known = wanted.map(pair => pair.replace(/USDT$/, '')).filter(symbol => symbol in BINANCE);
       if (known.length !== wanted.length) throw new TypeError('Failed to fetch');
-      if (url.pathname.endsWith('/ticker/price')) return answer(200, { symbol: wanted[0], price: String(BINANCE[known[0]]) });
-      const items = known.map(symbol => ({ symbol: `${symbol}USDT`, lastPrice: String(BINANCE[symbol]), priceChangePercent: '1.5' }));
+      const items = known.map(symbol => ({
+        symbol: `${symbol}USDT`, lastPrice: String(BINANCE[symbol]), priceChangePercent: '1.5',
+        closeTime: DELISTED.has(symbol) ? clock.now - 20 * 86_400_000 : clock.now,
+      }));
       return answer(200, url.searchParams.get('symbols') ? items : items[0]);
     }
     if (url.hostname === 'api.coingecko.com') {
@@ -75,7 +80,13 @@ async function watchlist({ state, binanceDown = false, coinGeckoRefuses = false 
     '../../src/network.js': synthetic(context, { financeFetch }),
     '../../src/host/frame.js': synthetic(context, { atmos: {}, isEngine: () => true, SELF: 'plugin:finance' }),
     '../persist.js': synthetic(context, { watchlistState }),
-    '../../src/totals.js': synthetic(context, { getPortfolioComposition: () => ({ total: 0 }), getSpotScopePositions: () => [] }),
+    '../../src/totals.js': synthetic(context, {
+      getPortfolioComposition: () => ({ total: 0 }),
+      getSpotScopePositions: () => Object.entries(holdings).map(([symbol, price]) => ({
+        symbol, value: 100, holdings: [{ connectionId: 'vps', holding: { symbol, price, currency: 'USD' } }],
+      })),
+      STABLECOIN_SYMBOLS: new Set(['USDT', 'USDC']),
+    }),
   });
   return { module, state: watchlistState, network, clock };
 }
@@ -92,11 +103,40 @@ test('coins stuck on CoinGecko go back to Binance at the start of a session', as
     },
   });
   await module.fetchTickers();
-  assert.deepEqual({ ...state.tickerSource }, { SOL: 'binance', BTC: 'binance', XMR: 'binance', DRIFT: 'coingecko' },
-    'Binance lists SOL, BTC and Monero; DRIFT keeps its cached CoinGecko id (no search)');
+  assert.deepEqual({ ...state.tickerSource }, { SOL: 'binance', BTC: 'binance', XMR: 'coingecko', DRIFT: 'coingecko' },
+    'Binance trades SOL and BTC; its XMR pair is delisted, and DRIFT keeps its cached CoinGecko id (no search)');
   assert.equal(module.tickerData.SOL.price, 118.69);
-  assert.equal(module.tickerData.XMR.price, 352, 'Monero is no longer pinned to CoinGecko');
+  assert.equal(module.tickerData.XMR, undefined, 'never the frozen price of a pair Binance no longer trades');
   assert.equal(network.requests.filter(url => url.includes('/search')).length, 0);
+});
+
+test('a pair Binance stops trading mid-session is dropped at once', async () => {
+  const { module, state } = await watchlist({ state: { tickers: ['XMR', 'SOL'], tickerSource: { XMR: 'binance', SOL: 'binance' }, cgIdCache: { XMR: 'monero' } } });
+  // The session's first poll re-probes CoinGecko choices only; XMR's saved
+  // "binance" is asked for with SOL, and comes back frozen.
+  await module.fetchTickers();
+  assert.equal(state.tickerSource.XMR, 'coingecko');
+  assert.equal(module.tickerData.XMR.price, 1, 'from CoinGecko');
+  assert.equal(module.tickerData.SOL.price, 118.69);
+});
+
+test('a coin you hold falls back to your portfolio server\'s price when no market source answers', async () => {
+  const { module, network, clock } = await watchlist({
+    coinGeckoRefuses: true,
+    holdings: { XMR: 352.34, PRCL: 0.0098, THL: 1, USDT: 1 },
+    state: { tickers: ['XMR', 'PRCL', 'THL', 'SOL'], tickerSource: {}, cgIdCache: { XMR: 'monero', PRCL: 'parcl', THL: 'thala', USDT: 'tether' } },
+  });
+  await module.fetchTickers();
+  assert.deepEqual({ ...module.tickerData.XMR }, { price: 352.34, change: null, source: 'portfolio' });
+  assert.equal(module.tickerData.PRCL.price, 0.0098);
+  assert.equal(module.tickerData.THL, undefined, 'a price of exactly 1 is the server\'s "unknown"…');
+  assert.equal(module.tickerData.USDT.price, 1, '…except for a stablecoin');
+  assert.equal(module.tickerData.SOL.price, 118.69, 'a market price where there is one');
+  // CoinGecko answering again replaces the server's price with a market one (and a 24h change).
+  network.coinGeckoRefuses = false;
+  clock.now += 11 * 60_000;
+  await module.fetchTickers();
+  assert.deepEqual({ ...module.tickerData.XMR }, { price: 1, change: 0 });
 });
 
 test('CoinGecko is asked at most once a minute, and not for ten minutes after it refuses', async () => {
