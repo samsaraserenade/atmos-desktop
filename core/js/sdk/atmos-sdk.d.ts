@@ -1,5 +1,5 @@
 /**
- * Types for the Atmos SDK 1.0 (`import atmos from 'atmos-sdk'`).
+ * Types for the Atmos SDK 1.1 (`import atmos from 'atmos-sdk'`).
  *
  * The SDK is what a framed extension uses to talk to Atmos; Atmos serves it
  * to every frame. These typings let an editor check and complete calls; point
@@ -206,9 +206,14 @@ export interface WallpaperSummary {
   opacity: number;
   /** A small JPEG data URL of the current image, or null. */
   thumbnail: string | null;
+  /** SDK 1.1: this extension set the image showing, and restore() would put back the one before. */
+  canRestore: boolean;
 }
 export interface WallpaperApi {
+  /** Make an image Atmos's wallpaper. Atmos keeps the one it replaces, and Settings says whose it is. */
   set(file: Blob): Promise<void>;
+  /** SDK 1.1: put back the wallpaper this extension's image replaced. False when the image showing isn't this extension's. */
+  restore(): Promise<boolean>;
   get(): Promise<WallpaperSummary | null>;
   onChange(fn: (wallpaper: WallpaperSummary | null) => void): Unsubscribe;
 }
@@ -216,20 +221,39 @@ export interface WallpaperApi {
 export declare const wallpaper: WallpaperApi;
 
 export interface AudioState {
-  type: 'source' | 'loaded' | 'play' | 'pause' | 'time' | 'ended' | 'volume' | 'error' | string;
+  /** What changed. */
+  type: 'source' | 'loaded' | 'play' | 'pause' | 'time' | 'ended' | 'volume' | 'error' | 'state';
+  /** SDK 1.1: the `id` given to load(), or null. */
+  id: string | null;
+  /** The same label as `id` (its name before SDK 1.1). */
   source: string | null;
+  /** SDK 1.1: whether it starts over at the end (load's `loop`). */
+  loop: boolean;
   playing: boolean;
+  /** Seconds. */
   currentTime: number;
+  /** Seconds; 0 until known. */
   duration: number;
   volume: number;
+  /** Never true while `loop` is on. */
   ended: boolean;
   error: string | null;
-  id?: string | null;
+}
+export interface AudioLoadOptions {
+  /** Your own label for it (a track key), reported back as `id`. */
+  id?: string;
+  /** Where to start, in seconds. */
+  position?: number;
+  /** Start playing once loaded. */
+  play?: boolean;
+  /** SDK 1.1: start over at the end, without a gap and without an 'ended' change. */
+  loop?: boolean;
 }
 export interface AudioApi {
-  /** A Blob/File, or an atmos-resource:// URL from a provider the extension registers. */
-  load(source: Blob | string, options?: { id?: string; position?: number; play?: boolean }): Promise<unknown>;
-  play(): Promise<unknown>;
+  /** A Blob/File, or an atmos-resource:// URL from a provider the extension registers. Resolves with the state. */
+  load(source: Blob | string, options?: AudioLoadOptions): Promise<AudioState>;
+  /** Resolves whether playback started (false when it was interrupted or refused). */
+  play(): Promise<boolean>;
   pause(): Promise<void>;
   seek(seconds: number): Promise<void>;
   setVolume(volume: number): Promise<void>;

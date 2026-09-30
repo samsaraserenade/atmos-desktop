@@ -56,6 +56,7 @@ function toResponse(answer) {
  * @param {object} [options.state]          the saved state to start from
  * @param {object|Function} [options.fetch] URL → answer, or (request) => answer
  * @param {object|null} [options.location]  { lat, lon, label, mode } or null
+ * @param {object|null} [options.wallpaper] { mode, opacity, thumbnail } to start from (a data URL thumbnail, say)
  * @param {object} [options.appearance]
  */
 export function createFakeAtmos(options = {}) {
@@ -75,6 +76,29 @@ export function createFakeAtmos(options = {}) {
 
   let saved = clone(options.state) || {};
   let location = options.location === undefined ? null : clone(options.location);
+  // What a system service call needs declared, refused as Atmos refuses it.
+  const needs = (target, what) => (declared(target) ? null
+    : new AtmosPermissionError(`${self} is not permitted to ${what} ${target}; declare it in extension.json "permissions.invokes"`));
+  // A subscription Atmos refuses doesn't throw: the SDK logs it.
+  const follow = (topic, target, what, label, fn) => {
+    const off = on(topic, fn);
+    const refused = needs(target, what);
+    if (refused) { off(); console.error(`[atmos-sdk] cannot follow ${label}:`, refused.message); }
+    return off;
+  };
+
+  // The audio channel, as the Audio service reports it (core/system/audio/engine.js).
+  let audioState = Object.freeze({ type: 'source', id: null, source: null, loop: false, playing: false, currentTime: 0, duration: 0, volume: 1, ended: false, error: null });
+  const setAudio = (patch, type) => {
+    audioState = Object.freeze({ ...audioState, ...clone(patch), type });
+    deliver('audio', audioState);
+    return audioState;
+  };
+  // The wallpaper as a frame sees it; `mine` is whether this extension set it.
+  let wallpaperNow = options.wallpaper === null ? null : { mode: 'wallpaper', opacity: 100, thumbnail: null, ...clone(options.wallpaper || {}) };
+  let wallpaperMine = false;
+  let wallpaperBefore = null;
+  const wallpaperSummary = () => (wallpaperNow ? { ...wallpaperNow, canRestore: wallpaperMine } : null);
   let exposed = {};
   const handlers = new Map(); // "target channel" -> fn
   const menuChoices = [];
@@ -97,6 +121,29 @@ export function createFakeAtmos(options = {}) {
     clipboard: [],
     /** Times atmos.panel.show() was called. */
     panelShown: 0,
+    /** The last image atmos.wallpaper.set() was given (null after restore()). */
+    wallpaper: null,
+    /** Change the wallpaper as the user would in Settings (onChange listeners hear it; restore() then does nothing). */
+    setWallpaper(next) {
+      wallpaperNow = next ? { mode: 'wallpaper', opacity: 100, thumbnail: null, ...clone(next) } : null;
+      wallpaperMine = false;
+      deliver('wallpaper', wallpaperSummary());
+    },
+    /** The audio channel: what load() was given, and playback steered from the test. */
+    audio: {
+      /** Each load(): { source, id, position, play, loop }. */
+      loads: [],
+      /** The channel's state now, as state() gives it. */
+      get state() { return audioState; },
+      /** Change the state as playback would, and tell onChange listeners (type: 'time', 'loaded', …). */
+      update(patch, type = 'time') { return setAudio(patch, type); },
+      /** The source reaches its end: with loop it starts over ('time'), otherwise it stops ('ended'). */
+      end() {
+        return audioState.loop
+          ? setAudio({ currentTime: 0 }, 'time')
+          : setAudio({ playing: false, ended: true, currentTime: audioState.duration }, 'ended');
+      },
+    },
     /** Change the state as another frame would (onChange listeners hear it). */
     setState(next) { saved = clone(next); deliver('state', saved); },
     /** Deliver an event, as another frame (or extension) emitting it would. */
@@ -146,7 +193,7 @@ export function createFakeAtmos(options = {}) {
   }
 
   const atmos = {
-    SDK_VERSION: '1.0.0',
+    SDK_VERSION: '1.1.0',
     ready: Promise.resolve({ extension }),
     extension,
     surface: {
@@ -209,19 +256,70 @@ export function createFakeAtmos(options = {}) {
       return `atmos-library://${target.split(':')[1]}/${file}`;
     },
     wallpaper: {
-      set: async file => { fake.wallpaper = file; },
-      get: async () => null,
-      onChange: fn => on('wallpaper', fn),
+      async set(file) {
+        const refused = needs('service:wallpaper', 'set the wallpaper through');
+        if (refused) throw refused;
+        if (!(file instanceof Blob) || !/^image\//.test(file.type || '')) throw new TypeError('wallpaper.set(file) needs an image File or Blob');
+        if (!wallpaperMine) wallpaperBefore = wallpaperNow;
+        fake.wallpaper = file;
+        wallpaperNow = { mode: wallpaperNow?.mode ?? 'wallpaper', opacity: wallpaperNow?.opacity ?? 100, thumbnail: null };
+        wallpaperMine = true;
+        deliver('wallpaper', wallpaperSummary());
+      },
+      async restore() {
+        const refused = needs('service:wallpaper', 'restore the wallpaper through');
+        if (refused) throw refused;
+        if (!wallpaperMine) return false;
+        wallpaperNow = wallpaperBefore;
+        wallpaperMine = false;
+        fake.wallpaper = null;
+        deliver('wallpaper', wallpaperSummary());
+        return true;
+      },
+      async get() {
+        const refused = needs('service:wallpaper', 'read the wallpaper of');
+        if (refused) throw refused;
+        return clone(wallpaperSummary());
+      },
+      onChange: fn => follow('wallpaper', 'service:wallpaper', 'follow the wallpaper of', 'the wallpaper', fn),
     },
-    audio: {
-      load: async () => {}, play: async () => {}, pause: async () => {}, seek: async () => {}, setVolume: async () => {}, stop: async () => {},
-      state: async () => ({ type: 'source', source: null, playing: false, currentTime: 0, duration: 0, volume: 1, ended: false, error: null }),
-      onChange: fn => on('audio', fn),
-    },
+    audio: (() => {
+      const check = () => { const refused = needs('service:audio', 'play audio through'); if (refused) throw refused; };
+      return {
+        async load(source, loadOptions) {
+          check();
+          if (!(source instanceof Blob) && !(typeof source === 'string' && source.startsWith('atmos-resource://'))) {
+            throw new TypeError('audio.load(source) takes a Blob, or an atmos-resource:// URL from a provider the extension registers or invokes');
+          }
+          const { id = null, position = 0, play = false, loop = false } = loadOptions && typeof loadOptions === 'object' ? loadOptions : {};
+          const label = id == null ? null : String(id).slice(0, 500);
+          fake.audio.loads.push({ source, id: label, position: Math.max(0, Number(position) || 0), play: play === true, loop: loop === true });
+          const loaded = setAudio({ id: label, source: label, loop: loop === true, playing: false, currentTime: 0, duration: 0, ended: false, error: null }, 'source');
+          if (play === true) setAudio({ playing: true }, 'play');
+          return loaded;
+        },
+        async play() { check(); if (audioState.source === null && !fake.audio.loads.length) return false; setAudio({ playing: true, ended: false }, 'play'); return true; },
+        async pause() { check(); setAudio({ playing: false }, 'pause'); },
+        async seek(seconds) {
+          check();
+          if (!Number.isFinite(seconds)) throw new TypeError('audio.seek(seconds)');
+          const target = Math.max(0, seconds);
+          setAudio({ currentTime: audioState.duration ? Math.min(target, audioState.duration) : target }, 'time');
+        },
+        async setVolume(value) {
+          check();
+          if (!Number.isFinite(value)) throw new TypeError('audio.setVolume(0–1)');
+          setAudio({ volume: Math.max(0, Math.min(1, value)) }, 'volume');
+        },
+        async stop() { check(); setAudio({ id: null, source: null, loop: false, playing: false, currentTime: 0, duration: 0, ended: false, error: null }, 'source'); },
+        async state() { check(); return { ...audioState, type: 'state' }; },
+        onChange: fn => follow('audio', 'service:audio', 'play audio through', 'audio', fn),
+      };
+    })(),
     fetch: fakeFetch,
     location: {
       get: async () => (declared('service:location') ? clone(location) : refuse(`${self} is not permitted to read the location from service:location; declare it in extension.json "permissions.invokes"`)),
-      onChange: fn => on('location', fn),
+      onChange: fn => follow('location', 'service:location', 'follow the location from', 'the location', fn),
     },
     lifecycle: {
       signal: controller.signal,

@@ -62,12 +62,15 @@ the list before they approve the extension.
 ## Share it
 
 Copy the folder (without `node_modules`, `tests` and `.atmos-sdk`, if you
-like) into `%APPDATA%\atmos\plugins\`. Atmos lists it under Settings →
-Plugins as Community, shows its permissions and loads it once approved. Any
+like) into `%APPDATA%\atmos\plugins\` and restart Atmos. The footer's
+Extensions button says it's waiting for approval; Review shows its
+permissions and what it shares, and it loads as soon as it's approved. Any
 change to its files asks for approval again.
 
 ## More
 
 `ATMOS_CORE_INTEGRATION.md` in the Atmos repository is the full guide:
-section 1 to get going, 3 for the manifest, 4 for the SDK, 7 for
-permissions and 8 for the typings and the test kit.
+section 1 to get going, 3 for the manifest, 4 for the SDK (and `ui.css`,
+Atmos's own Settings rows, for a settings page), 5 for the shared libraries
+(charts, currencies, a media viewer), 7 for permissions and 8 for the
+typings and the test kit.

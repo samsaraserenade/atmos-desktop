@@ -656,6 +656,11 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-permission-new span { margin-left: 4px; padding: 0 5px; border-radius: 6px; font-size: .55rem; background: rgba(251,191,36,.18); color: rgb(251,191,36); }
 .sm-trust-note { margin: -6px 0 10px; font-size: .64rem; line-height: 1.45; color: rgba(var(--ink-rgb),.5); }
 .sm-trust-alert { color: rgb(248,113,113); }
+/* The card "Review" (Extensions page) brought into view. */
+.sm-card.sm-card-highlight { background: rgba(var(--ink-rgb),.07); transition: background .4s; }
+/* Holds something sensitive and shares with every extension (the approval prompt and the card). */
+.sm-trust-caution { color: rgba(251,191,36,.95); }
+p.sm-trust-caution { margin: 0 0 8px; }
 .sm-trust-review { padding: 10px 12px; border: 1px solid rgba(var(--ink-rgb),.1); border-radius: 8px; background: rgba(var(--ink-rgb),.03); color: rgba(var(--ink-rgb),.7); }
 .sm-trust-warning { margin: 0 0 10px; padding: 7px 9px; border-radius: 6px; background: rgba(251,191,36,.1); color: rgba(251,191,36,.95); }
 .sm-trust-actions { display: flex; gap: 8px; }
@@ -867,6 +872,12 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-toggle input:focus-visible + .sm-toggle-track { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-positive, #34d399) 50%, transparent); }
 
 /* ── Panels page (plugin workspace switcher) ───────────────────────────── */
+.sm-shortcut-hint { margin-top: 14px; }
+.sm-shortcuts { display:flex; flex-direction:column; gap:6px; }
+.sm-shortcut-row { display:grid; grid-template-columns:34px 1fr; align-items:center; gap:4px 12px; padding:8px 12px; border:1px solid rgba(var(--ink-rgb),.07); border-radius:8px; background:rgba(var(--ink-rgb),.025); font-size:.7rem; color:rgba(var(--ink-rgb),.75); }
+.sm-shortcut-row kbd { display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:22px; padding:0 6px; border:1px solid rgba(var(--ink-rgb),.18); border-bottom-width:2px; border-radius:5px; font:inherit; font-size:.72rem; color:rgb(var(--ink-rgb)); }
+.sm-shortcut-row small { margin-left:8px; font-size:.62rem; color:rgba(var(--ink-rgb),.36); }
+.sm-shortcut-clash { grid-column:2; font-size:.62rem; color:rgba(251,191,36,.95); }
 .sm-panel-layouts { display:flex; flex-wrap:wrap; gap:6px; padding:10px 0 14px; }
 .sm-panel-section { display:grid; grid-template-columns:minmax(90px,.7fr) minmax(150px,1fr); align-items:center; gap:12px; padding:10px 12px; border:1px solid rgba(var(--ink-rgb),.07); border-radius:8px; background:rgba(var(--ink-rgb),.025); margin-bottom:7px; }
 .sm-panel-section-name { font-size:.66rem; color:rgba(var(--ink-rgb),.5); letter-spacing:.08em; text-transform:uppercase; }

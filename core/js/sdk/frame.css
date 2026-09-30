@@ -16,3 +16,9 @@ html, body {
 /* Panels fill their surface; sidebar widgets and settings are sized to their content. */
 html[data-atmos-surface="panel"], html[data-atmos-surface="panel"] body { height: 100%; }
 html[data-atmos-surface="sidebar"] body, html[data-atmos-surface="settings"] body { overflow: hidden; }
+/* The SDK measures <body> to size a widget or settings frame, so a
+   `height: 100%` (or 100vh) reset there would make the frame as tall as
+   itself: 0 px for a settings page, and never smaller for a widget.
+   Content decides their height. */
+html[data-atmos-surface="sidebar"], html[data-atmos-surface="sidebar"] body,
+html[data-atmos-surface="settings"], html[data-atmos-surface="settings"] body { height: auto !important; }

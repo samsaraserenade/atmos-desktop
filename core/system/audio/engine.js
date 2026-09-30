@@ -40,9 +40,13 @@ function createChannel(owner) {
   let revision = 0;         // a newer load() supersedes an older one's pending seek/play
   let lastError = null;
 
+  // `id` is the label the caller gave load(); `source` is the same label,
+  // the name it had before SDK 1.1 (Audio Player reads it).
   const snapshot = type => Object.freeze({
     type,
+    id: source,
     source,
+    loop: element.loop === true,
     playing: !element.paused && !element.ended,
     currentTime: finite(element.currentTime),
     duration: finite(element.duration),
@@ -91,12 +95,15 @@ function createChannel(owner) {
   return {
     /**
      * Load a source: a URL string (the caller has checked it) or a Blob.
-     * options: { id, position, play }. Resolves once the source is set.
+     * options: { id, position, play, loop }. Resolves once the source is set.
+     * With loop, the element starts over by itself at the end (no 'ended'),
+     * without the gap a seek(0) and play() from an 'ended' listener leaves.
      */
-    load(value, { id = null, position = 0, play = false } = {}) {
+    load(value, { id = null, position = 0, play = false, loop = false } = {}) {
       const request = ++revision;
       lastError = null;
       releaseObjectUrl();
+      element.loop = loop === true;
       if (typeof Blob !== 'undefined' && value instanceof Blob) {
         objectUrl = URL.createObjectURL(value);
         element.src = objectUrl;
@@ -128,6 +135,7 @@ function createChannel(owner) {
       element.pause();
       element.removeAttribute('src');
       element.load();
+      element.loop = false;
       releaseObjectUrl();
       source = null;
       lastError = null;

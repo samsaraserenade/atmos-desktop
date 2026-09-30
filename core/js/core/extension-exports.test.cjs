@@ -2,7 +2,7 @@
 // What extensions share with each other ("exports" in extension.json).
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeExports, levelAllows, reachOf, describePermissions } = require('./extension-permissions.cjs');
+const { normalizeExports, exportDetails, describeExports, sharingRisk, levelAllows, reachOf, describePermissions } = require('./extension-permissions.cjs');
 
 test('exports: missing shares nothing; names map to "official" or "all"', () => {
   assert.deepEqual(normalizeExports(undefined), { ipc: {}, events: {}, methods: {} });
@@ -10,8 +10,53 @@ test('exports: missing shares nothing; names map to "official" or "all"', () => 
   assert.throws(() => normalizeExports([]), /must be an object/);
   assert.throws(() => normalizeExports({ files: {} }), /unknown exports "files"/);
   assert.throws(() => normalizeExports({ ipc: ['read'] }), /exports\.ipc must be an object/);
-  assert.throws(() => normalizeExports({ ipc: { read: true } }), /must be "official" or "all"/);
+  assert.throws(() => normalizeExports({ ipc: { read: true } }), /must be "official", "all" or \{/);
+  assert.throws(() => normalizeExports({ ipc: { read: 'everyone' } }), /must be "official" or "all"/);
   assert.throws(() => normalizeExports({ ipc: { '../x': 'all' } }), /invalid name/);
+});
+
+test('exports: a name may say what it gives ({ with, description }), which only Settings uses', () => {
+  const block = {
+    methods: { palette: { with: 'all', description: '  The sky\'s   colours now,\nwithout your location ' }, paint: 'official' },
+    events: { sky: { with: 'official' } },
+  };
+  assert.deepEqual(normalizeExports(block), { ipc: {}, events: { sky: 'official' }, methods: { palette: 'all', paint: 'official' } });
+  assert.equal(exportDetails(block).methods.palette.description, 'The sky\'s colours now, without your location');
+  assert.equal(exportDetails(block).events.sky.description, null);
+  assert.throws(() => normalizeExports({ methods: { a: { with: 'all', desc: 'x' } } }), /unknown "desc"/);
+  assert.throws(() => normalizeExports({ methods: { a: { description: 'x' } } }), /\.with must be/);
+  assert.throws(() => normalizeExports({ methods: { a: { with: 'all', description: '' } } }), /1–200 characters/);
+  assert.throws(() => normalizeExports({ methods: { a: { with: 'all', description: 'x'.repeat(201) } } }), /1–200 characters/);
+  // Reach is decided by the level alone.
+  const target = { kind: 'plugin', id: 'skyloom', exports: block };
+  assert.deepEqual(reachOf({ kind: 'plugin', id: 'other', tier: 'third-party', invokes: ['plugin:skyloom'] }, target).methods, ['palette']);
+});
+
+test('exports: its own card says what it shares, with whom and what for', () => {
+  assert.equal(describeExports(undefined), null);
+  assert.deepEqual(describeExports({}), []);
+  assert.deepEqual(describeExports({
+    methods: { snapshot: { with: 'all', description: 'The sky now' }, paint: 'official' },
+    events: { sky: 'all' },
+    ipc: { 'read-tags': 'official' },
+  }), [
+    'Any extension can call snapshot(): The sky now',
+    'Any extension can hear its sky events',
+    'Official extensions can call paint()',
+    'Official extensions can use its read-tags handler',
+  ]);
+});
+
+test('exports: holding something sensitive and sharing with every extension is flagged', () => {
+  const shares = { methods: { snapshot: 'all' }, events: { sky: 'all' } };
+  assert.equal(sharingRisk({ invokes: ['service:location'] }, shares),
+    'It can know your location, and shares sky events and snapshot() with any extension, so what it shares could pass that on.');
+  assert.match(sharingRisk({ browser: ['media', 'clipboard-read'] }, { methods: { a: 'all' } }), /^It can read the clipboard and use your camera or microphone, and shares a\(\)/);
+  // Nothing sensitive, shared with official extensions only, or nothing shared: no flag.
+  assert.equal(sharingRisk({ network: ['api.example.com'] }, shares), null);
+  assert.equal(sharingRisk({ invokes: ['service:location'] }, { methods: { snapshot: 'official' } }), null);
+  assert.equal(sharingRisk({ invokes: ['service:location'] }, undefined), null);
+  assert.equal(sharingRisk({ invokes: ['service:location'] }, { methods: 'bad' }), null);
 });
 
 test('exports: "official" reaches system and official extensions, "all" community ones too', () => {

@@ -457,8 +457,9 @@ document.getElementById('sidebar-footer-settings')?.addEventListener('click', ev
 });
 
 // The Extensions button: opens Settings on the extension manager, and turns
-// the negative colour when an update is available, a change waits for a
-// restart, or an extension failed to load. The tooltip says which.
+// the negative colour when a community extension waits for approval, an
+// update is available, a change waits for a restart, or an extension failed
+// to load. The tooltip says which.
 const extensionsButton = document.getElementById('sidebar-footer-extensions');
 extensionsButton?.addEventListener('click', event => {
   event.stopPropagation();
@@ -469,6 +470,13 @@ extensionsButton?.addEventListener('click', event => {
 
 function describeExtensionAttention(summary) {
   const lines = [];
+  // A community extension copied in by hand shows nothing until approved.
+  const approvals = summary?.approvals || [];
+  if (approvals.length) {
+    lines.push(approvals.length === 1
+      ? `${approvals[0].name} needs your approval`
+      : `${approvals.length} extensions need your approval`);
+  }
   if (summary?.problems?.length) {
     lines.push(summary.problems.length === 1
       ? `${summary.problems[0].name} didn't load`

@@ -45,6 +45,7 @@ import {
 import {
   listSettingsPanels, mountSettingsPanel, unmountSettingsPanel,
 } from './settings-registry.js';
+import { listPanelShortcuts } from './extension-frame-host.js';
 
 // The first static page, handled directly by _renderNav()/_renderList().
 // Declared up top since _activeCategory's default below references it.
@@ -89,6 +90,8 @@ let _searchEl   = null;
 
 // Refreshed on every open; search filtering uses this in-memory inventory.
 let _extensions = { Plugins: [], Services: [] };
+// "kind:id" of community extensions approved and loaded this session.
+const _approvedThisSession = new Set();
 
 // Which Core-owned page is currently showing. Persists across opens/closes
 // within a session so re-opening
@@ -724,8 +727,50 @@ function _renderPanelsPage() {
     row.appendChild(select);
     _listEl.appendChild(row);
   }
+
+  // The keys panels open with ("shortcut"), and any two that asked for the same one.
+  const shortcuts = listPanelShortcuts();
+  if (shortcuts.length) {
+    _listEl.insertAdjacentHTML('beforeend', `
+      <div class="sm-sidebar-page-hint sm-shortcut-hint">Keys that open a panel from anywhere in Atmos, except while typing.</div>
+      <div class="sm-shortcuts">${shortcuts.map(item => `
+        <div class="sm-shortcut-row">
+          <kbd>${escapeHtml(item.key)}</kbd>
+          <span>${escapeHtml(item.label)}<small>${escapeHtml(item.name)}</small></span>
+          ${item.others.length ? `<span class="sm-shortcut-clash">${item.others.map(other => `${escapeHtml(other.name)}’s ${escapeHtml(other.label)}`).join(', ')} asked for it too and ${item.others.length === 1 ? 'doesn’t' : 'don’t'} get it</span>` : ''}
+        </div>`).join('')}
+      </div>`);
+  }
 }
 
+/** Its panel's key for its own card: which one, or who has it instead. */
+function _shortcutLine(extension) {
+  const ref = `${extension.kind}:${extension.id}`;
+  for (const item of listPanelShortcuts()) {
+    if (item.extension === ref) return `Its panel opens with the ${escapeHtml(item.key)} key`;
+    const lost = item.others.find(other => other.extension === ref);
+    if (lost) return `Asks for the ${escapeHtml(item.key)} key, which opens ${escapeHtml(item.name)}’s ${escapeHtml(item.label)} instead`;
+  }
+  return null;
+}
+
+
+/**
+ * An extension's own icon (its panel's, else its first surface's), drawn as
+ * a mask in the text colour like everywhere else in Atmos. Only for one that
+ * is running: Atmos serves nothing of an extension that isn't (one waiting
+ * for approval, say), so those keep the puzzle piece.
+ */
+function _extensionIconHtml(extension) {
+  const frame = extension?.frame;
+  if (!extension?.active || !frame?.origin || !Array.isArray(frame.contributions)) return _FALLBACK_ICON;
+  const withIcon = frame.contributions.find(item => item.surface === 'panel' && item.icon)
+    || frame.contributions.find(item => item.icon);
+  if (!withIcon) return _FALLBACK_ICON;
+  const src = `${frame.origin}${frame.base}${String(withIcon.icon).split('/').map(encodeURIComponent).join('/')}`;
+  const safe = src.replace(/['"()\\\s]/g, character => `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`);
+  return `<span class="atmos-extension-icon" aria-hidden="true" style="--atmos-extension-icon:url('${safe}')"></span>`;
+}
 
 function _extensionLabel(extension) {
   const declared = extension.manifest?.displayName || extension.manifest?.name;
@@ -763,6 +808,7 @@ function _extensionStatusText(extension) {
     return extension.activationFailed ? "didn't start" : 'missing a dependency';
   }
   if (_needsRestart(extension)) return 'restart required';
+  if (extension.active && _approvedThisSession.has(`${extension.kind}:${extension.id}`)) return 'loaded when you approved it';
   return extension.enabled ? 'loaded at startup' : 'not loaded';
 }
 
@@ -792,6 +838,19 @@ function _sharingHtml(extension) {
   return `<div class="sm-sharing-heading">From other extensions</div>${_permissionList(lines)}`;
 }
 
+/** What it shares with other extensions (its own "exports"), and with whom. */
+function _sharesHtml(extension) {
+  const lines = extension.shares || [];
+  if (!lines.length) return '';
+  return `<div class="sm-sharing-heading">Shares with other extensions</div>${_permissionList(lines)}`;
+}
+
+/** Holds something sensitive and shares with every extension: say so where it's seen. */
+function _sharingRiskHtml(extension, tag = 'div') {
+  if (!extension.sharingRisk) return '';
+  return `<${tag} class="sm-trust-note sm-trust-caution">${escapeHtml(extension.sharingRisk)}</${tag}>`;
+}
+
 /** Version, signer and dependencies, shown in the row's details. */
 function _packageDetailsHtml(extension) {
   const names = list => list.map(item => escapeHtml(item.name)).join(', ');
@@ -806,6 +865,8 @@ function _packageDetailsHtml(extension) {
   if (required.length) lines.push(`Needs ${names(required)}`);
   if (optional.length) lines.push(`Works better with ${names(optional)}${(extension.optionalMissing || []).length ? ` (not loaded: ${extension.optionalMissing.map(escapeHtml).join(', ')})` : ''}`);
   if ((extension.usedBy || []).length) lines.push(`Used by ${names(extension.usedBy)}`);
+  const shortcut = extension.active ? _shortcutLine(extension) : null;
+  if (shortcut) lines.push(shortcut);
   return lines.length ? `<ul class="sm-permission-list sm-package-details">${lines.map(line => `<li>${line}</li>`).join('')}</ul>` : '';
 }
 
@@ -814,7 +875,8 @@ function _extensionTrustHtml(extension) {
   const summary = extension.permissionSummary || [];
   const status = extension.status;
   if (extension.approvalChanged) {
-    return `<div class="sm-trust-note">${status === 'approved' ? 'Approval removed.' : 'Approved.'} Restart Atmos to apply.</div>`;
+    return `<div class="sm-trust-note">${status === 'approved' ? 'Approval removed.' : 'Approved.'} Restart Atmos to apply.
+      <button type="button" class="sm-trust-secondary" data-trust-action="restart">Restart now</button></div>`;
   }
   if (extension.tier !== 'third-party' && status === 'tampered') {
     const repair = extension.source === 'installed' ? 'Remove it and install it again.' : 'Reinstall Atmos to repair it.';
@@ -835,6 +897,8 @@ function _extensionTrustHtml(extension) {
         <div>${title}</div>
         ${_permissionList(status === 'changed' ? _withAdded(summary, extension.newPermissions) : summary, status === 'changed' ? extension.newPermissions : [])}
         ${_sharingHtml(extension)}
+        ${_sharesHtml(extension)}
+        ${_sharingRiskHtml(extension, 'p')}
         <p class="sm-trust-warning">${_SANDBOX_WARNING}</p>
         <div class="sm-trust-actions">
           <button type="button" class="sm-restart-button" data-trust-action="approve">Approve</button>
@@ -852,12 +916,17 @@ function _extensionTrustHtml(extension) {
   const fellBack = extension.fellBackFrom
     ? `<div class="sm-trust-note sm-trust-alert">Version ${escapeHtml(extension.fellBackFrom.version || '')} couldn't load, so ${escapeHtml(extension.version || 'the bundled version')} is running instead. ${escapeHtml(extension.fellBackFrom.reason || extension.fellBackFrom.status)}.</div>`
     : '';
-  return `${developer}${fellBack}
+  // Approved just now and loaded without a restart (_loadApprovedNow in main.js).
+  const loadedNow = _approvedThisSession.has(`${extension.kind}:${extension.id}`) && extension.active
+    ? '<div class="sm-trust-note">Approved. It\u2019s running now.</div>'
+    : '';
+  return `${developer}${fellBack}${loadedNow}${_sharingRiskHtml(extension)}
     <details class="sm-permissions">
       <summary>Details</summary>
       ${_packageDetailsHtml(extension)}
       ${_permissionList(summary)}
       ${_sharingHtml(extension)}
+      ${_sharesHtml(extension)}
       ${extension.tier === 'third-party' && status === 'approved'
         ? '<button type="button" class="sm-trust-secondary" data-trust-action="revoke">Remove approval</button>'
         : ''}
@@ -910,7 +979,7 @@ function _renderExtensionsPage() {
     card.dataset.key = `${kind}:${extension.id}`;
     card.innerHTML = `
       <div class="sm-card-main">
-        <div class="sm-icon">${_FALLBACK_ICON}</div>
+        <div class="sm-icon">${_extensionIconHtml(extension)}</div>
         <div class="sm-card-text">
           <div class="sm-card-name">${escapeHtml(label)} <span class="sm-tier-badge" data-tier="${escapeHtml(extension.tier || 'third-party')}">${tierLabel}</span>${extension.source === 'developer' ? ' <span class="sm-tier-badge" data-tier="developer">Developer</span>' : ''}</div>
           <div class="sm-card-detail">${escapeHtml(extension.id)}${extension.version ? ` ${escapeHtml(extension.version)}` : ''} · ${escapeHtml(_extensionStatusText(extension))}</div>
@@ -924,8 +993,19 @@ function _renderExtensionsPage() {
       const errorEl = card.querySelector('.sm-trust-error');
       button.disabled = true;
       try {
+        if (action === 'restart') {
+          window.atmosCore?.restartAtmos?.();
+          return;
+        }
         if (action === 'approve') {
-          await window.atmosCore?.approveExtension?.(kind, extension.id, extension.fingerprint);
+          const result = await window.atmosCore?.approveExtension?.(kind, extension.id, extension.fingerprint);
+          if (result?.loaded?.length) {
+            // Loaded at once (the frame host registers its surfaces, from
+            // the main process's extensions:loaded): say so on its card.
+            for (const item of result.loaded) _approvedThisSession.add(`${item.kind}:${item.id}`);
+            await _refreshExtensions();
+            return;
+          }
           extension.approvalChanged = true;
         } else if (action === 'revoke') {
           await window.atmosCore?.revokeExtensionApproval?.(kind, extension.id);
@@ -1065,7 +1145,26 @@ let _managerSubscribed = false;
 
 function _managerAttentionCount() {
   const summary = _manager?.summary;
-  return summary ? (summary.atmosUpdate ? 1 : 0) + (summary.updates || 0) + (summary.pending || 0) + (summary.problems?.length || 0) : 0;
+  return summary ? (summary.atmosUpdate ? 1 : 0) + (summary.updates || 0) + (summary.pending || 0) + (summary.problems?.length || 0) + (summary.approvals?.length || 0) : 0;
+}
+
+/** Settings on an extension's own card (from "Review" on the Extensions page, or elsewhere). */
+export function openExtensionCard(kind, id) {
+  _activeCategory = kind === 'plugin' ? _PLUGINS_PAGE_ID : _SERVICES_PAGE_ID;
+  _searchTerm = '';
+  if (_searchEl) _searchEl.value = '';
+  if (!_overlay?.classList.contains('open')) openSettingsMenu();
+  else _render();
+  const show = () => {
+    const card = _listEl?.querySelector(`[data-key="${CSS.escape(`${kind}:${id}`)}"]`);
+    if (!card) return false;
+    card.scrollIntoView({ block: 'center' });
+    card.classList.add('sm-card-highlight');
+    setTimeout(() => card.classList.remove('sm-card-highlight'), 1600);
+    return true;
+  };
+  // The list may still be arriving (openSettingsMenu refreshes it).
+  if (!show()) setTimeout(show, 250);
 }
 
 function _setManager(payload) {
@@ -1158,10 +1257,11 @@ function _groupByKind(items, render) {
 }
 
 function _managerRow({ key, name, detail, actions = '', extra = '', needs = '' }) {
+  const running = [..._extensions.Plugins, ..._extensions.Services].find(item => `${item.kind}:${item.id}` === key);
   return `
     <div class="sm-card sm-manager-row" data-key="${escapeHtml(key)}">
       <div class="sm-card-main sm-manager-main">
-        <div class="sm-icon">${_FALLBACK_ICON}</div>
+        <div class="sm-icon">${_extensionIconHtml(running)}</div>
         <div class="sm-card-text">
           <div class="sm-card-name">${name}</div>
           <div class="sm-card-detail">${detail}</div>
@@ -1262,6 +1362,23 @@ function _renderExtensionManagerPage() {
       detail: `You have ${escapeHtml(current || 'an older version')}. Download the new installer and run it; your settings and extensions stay.`,
       actions: download ? _button('download-atmos', 'Download', { key: 'atmos', primary: true, busyLabel: 'Opening…' }) : '',
     }));
+    sections.push('</div>');
+  }
+
+  // Community extensions copied in by hand wait for approval without
+  // showing anything; say which, and take the user to each one's card.
+  if (summary.approvals?.length) {
+    sections.push(`<div class="sm-manager-heading">Waiting for your approval</div><div class="sm-card-group">`);
+    for (const item of summary.approvals) {
+      sections.push(_managerRow({
+        key: `${item.kind}:${item.id}`,
+        name: `${escapeHtml(item.name)} <span class="sm-tier-badge" data-tier="third-party">${_TIER_LABELS['third-party']}</span>`,
+        detail: item.status === 'changed'
+          ? 'Its files changed since you approved it. It stays off until you review it again'
+          : 'Not loaded until you approve it. Review what it asks for',
+        actions: _button('review', 'Review', { key: `${item.kind}:${item.id}`, primary: true }),
+      }));
+    }
     sections.push('</div>');
   }
 
@@ -1395,6 +1512,7 @@ function _renderExtensionManagerPage() {
     const key = row?.dataset.key;
     const [kind, id] = (key || '').split(':');
     if (action === 'restart') return window.atmosCore?.restartAtmos?.();
+    if (action === 'review') return openExtensionCard(kind, id);
     if (action === 'check') return _managerRequest('check', api => api.checkForUpdates());
     if (action === 'download-atmos') return _managerRequest('atmos', api => api.openAtmosDownload());
     if (action === 'install') return _managerRequest(key, api => api.install(kind, id));

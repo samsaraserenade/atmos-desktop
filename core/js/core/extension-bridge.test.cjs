@@ -85,15 +85,19 @@ test('wallpaper: needs the Wallpaper service declared, and an image to set', asy
   const { createExtensionBridge } = await loadBridge(t);
   const set = [];
   const listeners = [];
+  const owners = [];
   const deps = { wallpaper: {
-    set: file => { set.push(file.type); },
-    get: async () => ({ mode: 'wallpaper', opacity: 100, thumbnail: 'data:image/jpeg;base64,x' }),
-    subscribe: fn => { listeners.push(fn); return () => listeners.splice(listeners.indexOf(fn), 1); },
+    // Each call names the extension making it: its image is its own, and only it can restore.
+    set: (file, owner) => { set.push(file.type); owners.push(['set', owner]); },
+    restore: async owner => { owners.push(['restore', owner]); return owner === 'plugin:probe'; },
+    get: async owner => ({ mode: 'wallpaper', opacity: 100, thumbnail: 'data:image/jpeg;base64,x', canRestore: owner === 'plugin:probe' }),
+    subscribe: (fn, owner) => { owners.push(['subscribe', owner]); listeners.push(fn); return () => listeners.splice(listeners.indexOf(fn), 1); },
   } };
   const allowed = harness(createExtensionBridge, { extension: { permissions: { invokes: ['service:wallpaper'] } }, deps });
   assert.equal((await allowed.request('wallpaper.set', new Blob(['x'], { type: 'image/png' }))).error, undefined);
   assert.equal((await allowed.request('wallpaper.set', new Blob(['x'], { type: 'text/html' }))).error.name, 'TypeError');
   assert.equal((await allowed.request('wallpaper.get')).result.mode, 'wallpaper');
+  assert.equal((await allowed.request('wallpaper.restore')).result, true);
   await allowed.request('wallpaper.subscribe');
   await allowed.request('wallpaper.subscribe');
   assert.equal(listeners.length, 1);
@@ -105,10 +109,12 @@ test('wallpaper: needs the Wallpaper service declared, and an image to set', asy
   const denied = harness(createExtensionBridge, { deps });
   assert.equal((await denied.request('wallpaper.set', new Blob(['x'], { type: 'image/png' }))).error.name, 'AtmosPermissionError');
   assert.equal((await denied.request('wallpaper.get')).error.name, 'AtmosPermissionError');
+  assert.equal((await denied.request('wallpaper.restore')).error.name, 'AtmosPermissionError');
   // The old Background id no longer grants anything.
   const old = harness(createExtensionBridge, { extension: { permissions: { invokes: ['plugin:background'] } }, deps });
   assert.equal((await old.request('wallpaper.set', new Blob(['x'], { type: 'image/png' }))).error.name, 'AtmosPermissionError');
   assert.deepEqual(set, ['image/png']);
+  assert.deepEqual([...new Set(owners.map(([, owner]) => owner))], ['plugin:probe']);
 });
 
 test('audio: own channel only, declared service, sources limited to Blobs and declared providers', async t => {
@@ -131,6 +137,8 @@ test('audio: own channel only, declared service, sources limited to Blobs and de
   });
   assert.equal((await request('audio.load', 'atmos-resource://audio-player-media/C:/Music/a.mp3', { id: 'k1', position: 12, play: true, extra: 1 })).result.source, 'k1');
   assert.equal((await request('audio.load', new Blob(['x'], { type: 'audio/mpeg' }))).error, undefined);
+  assert.equal((await request('audio.load', new Blob(['x'], { type: 'audio/wav' }), { id: 'rain', loop: true })).error, undefined);
+  assert.equal((await request('audio.load', new Blob(['x'], { type: 'audio/wav' }), { loop: 'yes' })).error, undefined);
   assert.equal((await request('audio.load', 'atmos-resource://media-library/secret')).error.name, 'TypeError');
   assert.equal((await request('audio.load', 'https://example.com/a.mp3')).error.name, 'TypeError');
   assert.equal((await request('audio.load', 'file:///etc/passwd')).error.name, 'TypeError');
@@ -143,8 +151,10 @@ test('audio: own channel only, declared service, sources limited to Blobs and de
   await request('audio.subscribe');
   assert.equal(watched, 1);
   assert.deepEqual(calls, [
-    ['load', 'atmos-resource://audio-player-media/C:/Music/a.mp3', { id: 'k1', position: 12, play: true }],
-    ['load', 'blob', { id: null, position: 0, play: false }],
+    ['load', 'atmos-resource://audio-player-media/C:/Music/a.mp3', { id: 'k1', position: 12, play: true, loop: false }],
+    ['load', 'blob', { id: null, position: 0, play: false, loop: false }],
+    ['load', 'blob', { id: 'rain', position: 0, play: false, loop: true }],
+    ['load', 'blob', { id: null, position: 0, play: false, loop: false }],
     ['play'], ['pause'], ['seek', 30], ['volume', 0.5], ['stop'],
   ]);
 

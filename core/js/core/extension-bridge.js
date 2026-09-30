@@ -247,15 +247,21 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       if (!(typeof Blob !== 'undefined' && file instanceof Blob) || !/^image\//.test(file.type || '')) {
         throw new BridgeError('wallpaper.set(file) needs an image File or Blob', 'TypeError');
       }
-      return deps.wallpaper.set(file);
+      return deps.wallpaper.set(file, self);
+    },
+    // Put back what this extension's wallpaper replaced; false when the
+    // wallpaper showing isn't its own (the user or another extension changed it).
+    'wallpaper.restore': () => {
+      requireTarget(WALLPAPER, 'restore the wallpaper through');
+      return deps.wallpaper.restore(self);
     },
     'wallpaper.get': () => {
       requireTarget(WALLPAPER, 'read the wallpaper of');
-      return deps.wallpaper.get();
+      return deps.wallpaper.get(self);
     },
     'wallpaper.subscribe': () => {
       requireTarget(WALLPAPER, 'follow the wallpaper of');
-      if (!wallpaperWatch) wallpaperWatch = deps.wallpaper.subscribe(value => post({ topic: 'wallpaper', payload: value }));
+      if (!wallpaperWatch) wallpaperWatch = deps.wallpaper.subscribe(value => post({ topic: 'wallpaper', payload: value }), self);
     },
 
     // The background layer's Audio service: this extension's own channel
@@ -263,11 +269,12 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     // deps.audio.channel() waits for the Audio service if it hasn't started yet.
     'audio.load': async (source, options) => {
       requireTarget(AUDIO, 'play audio through');
-      const { id = null, position = 0, play = false } = options && typeof options === 'object' ? options : {};
+      const { id = null, position = 0, play = false, loop = false } = options && typeof options === 'object' ? options : {};
       return (await deps.audio.channel()).load(audioSource(source), {
         id: id == null ? null : String(id).slice(0, 500),
         position: Math.max(0, Number(position) || 0),
         play: play === true,
+        loop: loop === true,
       });
     },
     'audio.play': async () => { requireTarget(AUDIO, 'play audio through'); return (await deps.audio.channel()).play(); },

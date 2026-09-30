@@ -18,12 +18,12 @@ import { readSavedNamespace, forgetStateNamespaces, scheduleSave } from '../pers
 import { emit, on } from './events.js';
 import { openMenu, closeOpenMenu, openMenuOwner } from './context-menu.js';
 import {
-  registerPanelPlugin, activatePanelPlugin, isPanelPluginRegistered,
+  registerPanelPlugin, activatePanelPlugin, isPanelPluginRegistered, listPanelPlugins, ensureDefaultPanelPlugin, restorePanelWorkspace,
   getActivePanelPluginId, getPreviousPanelPluginId, activatePreviousPanelPlugin, activateDefaultPanelPlugin,
 } from './panel-registry.js';
 import { registerSection } from './sidebar-registry.js';
 import { registerSettingsPanel } from './settings-registry.js';
-import { registerBootHook } from './boot-registry.js';
+import { registerBootHook, runBootHooks } from './boot-registry.js';
 import { onAppearanceChange, appearanceState, getAppFont } from './appearance.js';
 import { onSemanticColorChange } from './semantic-colors.js';
 import { checkExtensionCompatibility } from './capabilities.js';
@@ -43,7 +43,7 @@ const APPEARANCE_VARS = [
 ];
 const BOOT_TIMEOUT_MS = 10000;
 // The SDK frames get (core/js/sdk/atmos-sdk.js SDK_VERSION; a test keeps them equal).
-export const SDK_VERSION = '1.0.0';
+export const SDK_VERSION = '1.1.0';
 
 const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>
@@ -82,6 +82,56 @@ const key = extension => `${extension.kind}:${extension.id}`;
 const _isTyping = target => !!target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
 // Keys that open a framed panel ("shortcut"); typing them never goes to a drawer.
 const _panelShortcuts = new Set();
+// key -> [{ panelId, label, extension, name, tier, toggles }], the one that
+// has the key first. Official (and system) extensions come before community
+// ones, then first come first served (start order). The others are listed
+// so Settings can say who asked for a key and didn't get it.
+const _shortcutClaims = new Map();
+const _TIER_RANK = { system: 0, 'first-party': 0, 'third-party': 1 };
+
+function _claimShortcut(extension, surface) {
+  const claim = {
+    panelId: surface.id, label: surface.label || surface.id, extension: key(extension),
+    name: _displayName(key(extension)), tier: extension.tier || 'third-party', toggles: !!surface.shortcutToggles,
+  };
+  const claims = _shortcutClaims.get(surface.shortcut) || [];
+  const at = claims.findIndex(other => (_TIER_RANK[other.tier] ?? 1) > (_TIER_RANK[claim.tier] ?? 1));
+  if (at === -1) claims.push(claim); else claims.splice(at, 0, claim);
+  _shortcutClaims.set(surface.shortcut, claims);
+  _panelShortcuts.add(surface.shortcut);
+  if (claims.length > 1) {
+    const [kept, ...rest] = claims;
+    console.warn(`[extension-frames] the "${surface.shortcut}" key opens ${kept.name}'s ${kept.label}; ${rest.map(other => `${other.name}'s ${other.label}`).join(', ')} asked for it too and doesn't get it`);
+  }
+}
+
+// One listener for every panel key: the key's first claim opens its panel.
+// Keys typed inside a frame never reach this document, so a frame can't
+// have typed it into a field of its own.
+document.addEventListener('keydown', event => {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
+  const claim = _shortcutClaims.get(event.key)?.find(item => isPanelPluginRegistered(item.panelId));
+  if (!claim) return;
+  if (event.target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+  if (claim.toggles && getActivePanelPluginId() === claim.panelId) {
+    if (getPreviousPanelPluginId()) activatePreviousPanelPlugin();
+    else activateDefaultPanelPlugin();
+  } else {
+    activatePanelPlugin(claim.panelId);
+  }
+});
+
+/**
+ * Panel keys for Settings: [{ key, panelId, label, name, extension,
+ * others: [{ label, name, extension }] }], `others` being the panels that
+ * asked for the same key and don't get it.
+ */
+export function listPanelShortcuts() {
+  return [..._shortcutClaims].map(([shortcut, [kept, ...others]]) => ({
+    key: shortcut, panelId: kept.panelId, label: kept.label, name: kept.name, extension: kept.extension,
+    others: others.map(({ label, name, extension }) => ({ label, name, extension })),
+  })).sort((a, b) => a.key.localeCompare(b.key));
+}
 
 // Core's own markup for a ticked menu row (frames send plain data only).
 const MENU_TICK = '<span class="ctx-ico" style="color:var(--color-positive, #34d399)" aria-hidden="true">✓</span>';
@@ -235,6 +285,15 @@ window.atmosCore?.onDeveloperChange?.(({ kind, id, restart, extension: fresh }) 
   }
 });
 
+// Community extensions approved while Atmos runs (main.js _loadApprovedNow):
+// start them now rather than at the next start.
+window.atmosCore?.onExtensionsLoaded?.(list => {
+  import('./extension-list.js').then(module => module.forgetInstalledLists()).catch(() => {});
+  loadApprovedExtensions(Array.isArray(list) ? list : [])
+    .then(count => console.log(`[extension-frames] ${count} approved extension${count === 1 ? '' : 's'} loaded`))
+    .catch(error => console.error('[extension-frames] approved extensions failed to load:', error));
+});
+
 // A click on a notification a frame showed goes to every frame of its extension.
 window.atmosCore?.onExtensionNotificationClick?.((kind, id, tag) => {
   _broadcast(`${kind}:${id}`, 'notificationClick', { tag });
@@ -337,25 +396,32 @@ const _deps = {
   events: { emit, on },
   appearance: _appearance,
   appFontData: _appFontData,
+  // `owner` is the calling extension ("plugin:<id>"): the image it sets is
+  // recorded as its own, so Atmos keeps what it replaced and only it (or
+  // the user, in Settings) can put that back.
   wallpaper: {
-    async set(file) {
+    async set(file, owner) {
       const wallpaper = await _whenCapability('visual.wallpaper', 'Wallpaper');
-      if (!wallpaper?.setWallpaper) throw new Error('the Wallpaper service is not running');
+      if (!wallpaper?.setWallpaperFor) throw new Error('the Wallpaper service is not running');
       const named = file instanceof File ? file : new File([file], 'wallpaper', { type: file.type });
-      await wallpaper.setWallpaper(named);
+      await wallpaper.setWallpaperFor(owner, _displayName(owner), named);
     },
-    get: _wallpaperSummary,
+    async restore(owner) {
+      const wallpaper = await _whenCapability('visual.wallpaper', 'Wallpaper');
+      return wallpaper.restorePrevious(owner);
+    },
+    get: owner => _wallpaperSummary(owner),
     /** Calls fn with the summary now and whenever the image or mode changes. */
-    subscribe(fn) {
+    subscribe(fn, owner) {
       const wallpaper = getCapability('visual.wallpaper');
       if (!wallpaper?.subscribe) return () => {};
       let last = '';
       let alive = true;
       const off = wallpaper.subscribe(state => {
-        const signature = `${state.mode}|${state.opacity}|${state.image}`;
+        const signature = `${state.mode}|${state.opacity}|${state.image}|${state.setBy === owner && !!state.previous}`;
         if (signature === last) return;
         last = signature;
-        _wallpaperSummary().then(summary => { if (alive && signature === last) fn(summary); });
+        _wallpaperSummary(owner).then(summary => { if (alive && signature === last) fn(summary); });
       });
       return () => { alive = false; off?.(); };
     },
@@ -432,7 +498,7 @@ function _locationSummary(value) {
  * What a frame may know about the wallpaper: its mode and a small copy of
  * the image (the page's own blob: URL means nothing inside a frame).
  */
-async function _wallpaperSummary() {
+async function _wallpaperSummary(owner = null) {
   const wallpaper = getCapability('visual.wallpaper');
   if (!wallpaper) return null;
   const state = wallpaper.getState();
@@ -440,7 +506,18 @@ async function _wallpaperSummary() {
     mode: state.mode,
     opacity: state.opacity,
     thumbnail: await wallpaper.getThumbnail?.(320) ?? null,
+    // This extension set the image showing, and Atmos kept the one before.
+    canRestore: owner !== null && state.setBy === owner && !!state.previous,
   };
+}
+
+/** What Settings calls an extension ("plugin:<id>"): its displayName, else its id in words. */
+function _displayName(ref) {
+  const extension = _framed.get(ref);
+  const declared = extension?.manifest?.displayName;
+  if (typeof declared === 'string' && declared.trim()) return declared.trim();
+  const id = String(ref).split(':')[1] || String(ref);
+  return id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }
 
 /**
@@ -898,23 +975,7 @@ function _registerContribution(extension, surface) {
         context?.onCleanup?.(frame.dispose);
       },
     });
-    if (surface.shortcut) {
-      _panelShortcuts.add(surface.shortcut);
-      // Keys typed inside a frame never reach this document, so a frame
-      // can't have typed it into a field of its own.
-      document.addEventListener('keydown', event => {
-        if (event.key !== surface.shortcut || event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
-        const target = event.target;
-        if (target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
-        if (!isPanelPluginRegistered(surface.id)) return;
-        if (surface.shortcutToggles && getActivePanelPluginId() === surface.id) {
-          if (getPreviousPanelPluginId()) activatePreviousPanelPlugin();
-          else activateDefaultPanelPlugin();
-        } else {
-          activatePanelPlugin(surface.id);
-        }
-      });
-    }
+    if (surface.shortcut) _claimShortcut(extension, surface);
   } else if (surface.surface === 'sidebar') {
     const mounted = new Map();
     registerSection(surface.id, {
@@ -987,7 +1048,37 @@ function _registerContribution(extension, surface) {
 export function loadFramedExtensions({ plugins = [], services = [] } = {}) {
   // Only libraries that load this session can be imported: one switched off,
   // missing a dependency or failed is absent, so optional consumers can tell.
-  _libraryBases = new Map(services.filter(service => service.libraryBase && service.active !== false && service.enabled !== false).map(service => [service.id, service.libraryBase]));
+  _libraryBases = new Map();
+  return _registerFramed({ plugins, services });
+}
+
+/**
+ * Community extensions the user approved while Atmos runs (the main
+ * process's _loadApprovedNow() decided which, and made their files
+ * servable): register their surfaces as startup would, then start their
+ * background frames. Resolves how many were loaded.
+ */
+export async function loadApprovedExtensions(list = []) {
+  const plugins = list.filter(item => item.kind === 'plugin' && !_framed.has(key(item)));
+  const services = list.filter(item => item.kind === 'service' && !_framed.has(key(item)));
+  const hadPanels = listPanelPlugins().length > 0;
+  const count = _registerFramed({ plugins, services });
+  // The first panel there is: out of the empty state onto it, as startup
+  // does when there are panels (core/app.js).
+  if (!hadPanels && listPanelPlugins().length) {
+    document.getElementById('media-fullscreen')?.classList.remove('panel-host-empty');
+    ensureDefaultPanelPlugin();
+    restorePanelWorkspace();
+    (await import('./task-view.js')).initTaskView();
+  }
+  await runBootHooks(); // only the new ones: the rest have run
+  return count;
+}
+
+function _registerFramed({ plugins = [], services = [] }) {
+  for (const service of services) {
+    if (service.libraryBase && service.active !== false && service.enabled !== false) _libraryBases.set(service.id, service.libraryBase);
+  }
   const framed = [
     ...services.map(service => ({ ...service, kind: 'service' })),
     ...plugins.map(plugin => ({ ...plugin, kind: 'plugin' })),

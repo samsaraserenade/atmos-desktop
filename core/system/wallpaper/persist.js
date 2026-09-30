@@ -17,6 +17,12 @@ export const wallpaperState = registerStateNamespace('wallpaper', {
     positionX: 50,
     positionY: 50,
     wallpaperRemoved: false,
+    // Set by an extension (atmos.wallpaper.set): which one ("plugin:<id>"),
+    // its name for Settings, and what it replaced ('own', 'default' or
+    // 'none'; an own image is kept as the 'wallpaper:previous' asset).
+    setBy: null,
+    setByName: null,
+    previous: null,
   },
 });
 

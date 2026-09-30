@@ -6,6 +6,8 @@ import { applyWallpaperPresentation, isTransparentWindowActive } from './interac
 const events = createEventScope('wallpaper');
 const temporary = new Map();
 const ASSET_KEY = 'wallpaper:image';
+// The image an extension replaced, kept so it can be put back (restorePrevious).
+const PREVIOUS_KEY = 'wallpaper:previous';
 // Where the image was kept before: as the Background plugin, and before that.
 const LEGACY_ASSET_KEYS = ['background:wallpaper', 'background'];
 
@@ -125,17 +127,82 @@ export function setState(patch) {
   paint();
 }
 
-export async function setWallpaper(file) {
+function checkImage(file) {
   if (!(file instanceof Blob)) throw new TypeError('wallpaper: wallpaper must be an image Blob');
   if (file.type && !file.type.startsWith('image/')) throw new TypeError('wallpaper: wallpaper must be an image');
+}
+
+/** The user chose something themselves: what an extension replaced is theirs to lose. */
+async function forgetPrevious() {
+  if (!wallpaperState.setBy && !wallpaperState.previous) return;
+  await deleteAsset(PREVIOUS_KEY);
+  updateWallpaperState({ setBy: null, setByName: null, previous: null });
+}
+
+/** The user's own image (Settings, a paste). */
+export async function setWallpaper(file) {
+  checkImage(file);
   if (!await saveAsset(ASSET_KEY, file)) throw new Error('wallpaper: wallpaper could not be saved');
+  await forgetPrevious();
   updateWallpaperState({ wallpaperRemoved: false });
   replacePersistentObjectUrl(file);
   paint();
 }
 
+/**
+ * An extension's image (atmos.wallpaper.set). What it replaces is kept,
+ * once: after several extensions in a row, the one kept is still what the
+ * user had. `owner` is "plugin:<id>", `name` what Settings calls it.
+ */
+export async function setWallpaperFor(owner, name, file) {
+  if (typeof owner !== 'string' || !owner) throw new TypeError('wallpaper: an extension wallpaper needs its owner');
+  checkImage(file);
+  let previous = wallpaperState.previous;
+  if (!wallpaperState.setBy || !previous) {
+    previous = imageKind();
+    if (previous === 'own') {
+      const current = await loadAsset(ASSET_KEY);
+      if (!current || !await saveAsset(PREVIOUS_KEY, current)) throw new Error('wallpaper: the current wallpaper could not be kept, so it was not replaced');
+    } else {
+      await deleteAsset(PREVIOUS_KEY);
+    }
+  }
+  if (!await saveAsset(ASSET_KEY, file)) throw new Error('wallpaper: wallpaper could not be saved');
+  updateWallpaperState({ wallpaperRemoved: false, setBy: owner, setByName: String(name || owner), previous });
+  replacePersistentObjectUrl(file);
+  paint();
+}
+
+/**
+ * Put back what an extension's wallpaper replaced. `owner` given (a frame
+ * asking): only if that extension set the current one. Resolves whether
+ * anything was put back.
+ */
+export async function restorePrevious(owner = null) {
+  const { setBy, previous } = wallpaperState;
+  if (!setBy || !previous || (owner !== null && owner !== setBy)) return false;
+  if (previous === 'own') {
+    const blob = await loadAsset(PREVIOUS_KEY);
+    if (!blob) throw new Error('wallpaper: the previous wallpaper is no longer there');
+    if (!await saveAsset(ASSET_KEY, blob)) throw new Error('wallpaper: wallpaper could not be saved');
+    replacePersistentObjectUrl(blob);
+    updateWallpaperState({ wallpaperRemoved: false });
+  } else {
+    if (!await deleteAsset(ASSET_KEY)) throw new Error('wallpaper: wallpaper could not be restored');
+    if (persistentObjectUrl) URL.revokeObjectURL(persistentObjectUrl);
+    persistentObjectUrl = null;
+    persistentImage = previous === 'default' ? DEFAULT_IMAGE : '';
+    updateWallpaperState({ wallpaperRemoved: previous === 'none' });
+  }
+  await deleteAsset(PREVIOUS_KEY);
+  updateWallpaperState({ setBy: null, setByName: null, previous: null });
+  paint();
+  return true;
+}
+
 export async function removeWallpaper() {
   if (!await deleteAsset(ASSET_KEY)) throw new Error('wallpaper: wallpaper could not be removed');
+  await forgetPrevious();
   for (const legacyKey of LEGACY_ASSET_KEYS) await deleteAsset(legacyKey);
   if (persistentObjectUrl) URL.revokeObjectURL(persistentObjectUrl);
   persistentObjectUrl = null;
@@ -147,6 +214,7 @@ export async function removeWallpaper() {
 /** Back to Atmos's default image: your own is deleted, and the wallpaper shows again. */
 export async function useDefaultWallpaper() {
   if (!await deleteAsset(ASSET_KEY)) throw new Error('wallpaper: wallpaper could not be reset');
+  await forgetPrevious();
   for (const legacyKey of LEGACY_ASSET_KEYS) await deleteAsset(legacyKey);
   if (persistentObjectUrl) URL.revokeObjectURL(persistentObjectUrl);
   persistentObjectUrl = null;
@@ -208,6 +276,6 @@ export function getThumbnail(width = 320) {
 }
 
 export const wallpaperApi = Object.freeze({
-  getState, getPersistentState, setState, setWallpaper, removeWallpaper, useDefaultWallpaper, imageKind,
+  getState, getPersistentState, setState, setWallpaper, setWallpaperFor, restorePrevious, removeWallpaper, useDefaultWallpaper, imageKind,
   setTemporaryEffects, clearTemporaryEffects, subscribe, getThumbnail,
 });

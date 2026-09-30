@@ -107,3 +107,22 @@ test('Blob sources get an object URL that is released on the next load and on st
   assert.equal(elements[0].getAttribute('src'), null);
   assert.equal(channel.state().source, null);
 });
+
+test('the label comes back as id (and source), and loop is the element\'s own, reported and cleared', async t => {
+  const { engine, elements } = await loadEngine(t);
+  const channel = engine.channel('plugin:skyloom');
+  const [element] = elements;
+  const loaded = channel.load(new Blob(['x'], { type: 'audio/wav' }), { id: 'rain', loop: true });
+  assert.equal(loaded.id, 'rain');
+  assert.equal(loaded.source, 'rain');
+  assert.equal(loaded.loop, true);
+  assert.equal(element.loop, true, 'the element starts over by itself: no ended, no gap');
+  assert.deepEqual(Object.keys(channel.state()).sort(),
+    ['currentTime', 'duration', 'ended', 'error', 'id', 'loop', 'playing', 'source', 'type', 'volume']);
+  channel.load(new Blob(['y'], { type: 'audio/wav' }), { id: 'song' });
+  assert.equal(element.loop, false, 'a load without loop plays once');
+  channel.load(new Blob(['z'], { type: 'audio/wav' }), { loop: true });
+  channel.stop();
+  assert.equal(element.loop, false);
+  assert.deepEqual({ id: channel.state().id, loop: channel.state().loop }, { id: null, loop: false });
+});

@@ -15,11 +15,15 @@ changes and frame reloads. The extension still decides *what* plays (its
 queue, library, shuffle and repeat); the channel only:
 
 - loads a source (an `atmos-resource://` URL from a provider the extension
-  may use, or a `Blob`/`File`), optionally at a position and playing;
+  may use, or a `Blob`/`File`), optionally at a position, playing, and
+  looping (1.1: the element starts over by itself, with no `ended` and no
+  frame involved, so a soundscape keeps looping with its panel closed);
 - plays, pauses, seeks, sets the volume, stops;
-- reports `{ type, source, playing, currentTime, duration, volume, ended, error }`
-  on every change (`type` is `source`, `loaded`, `play`, `pause`, `time`,
-  `ended`, `volume` or `error`).
+- reports `{ type, id, source, loop, playing, currentTime, duration, volume,
+  ended, error }` on every change (`type` is `source`, `loaded`, `play`,
+  `pause`, `time`, `ended`, `volume` or `error`; `state()` gives `state`).
+  `id` is the label given to `load()`; `source` is the same label, its name
+  before 1.1.
 
 From a frame: `atmos.audio` in the SDK, with `"invokes": ["service:audio"]`.
 Every frame of the extension hears its channel's changes, so a panel and

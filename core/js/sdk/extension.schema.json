@@ -7,7 +7,7 @@
   "properties": {
     "$schema": { "type": "string" },
     "apiVersion": {
-      "description": "The extension API it targets: 4 for SDK 1.0. Atmos 0.14 and older don't load 4, since they don't read \"engines\".",
+      "description": "The extension API it targets: 4 for SDK 1.x. Atmos 0.14 and older don't load 4, since they don't read \"engines\".",
       "type": "integer", "minimum": 1
     },
     "engines": {
@@ -93,7 +93,7 @@
       "additionalProperties": false
     },
     "exports": {
-      "description": "What it shares with other extensions: \"official\" (official extensions) or \"all\" (community ones too).",
+      "description": "What it shares with other extensions: \"official\" (official extensions) or \"all\" (community ones too), or { \"with\", \"description\" }.",
       "type": "object",
       "properties": {
         "ipc": { "$ref": "#/definitions/shared" },
@@ -150,7 +150,21 @@
     },
     "shared": {
       "type": "object",
-      "additionalProperties": { "enum": ["official", "all"] }
+      "additionalProperties": {
+        "oneOf": [
+          { "description": "Who may use it: \"official\" (official extensions) or \"all\" (community ones too).", "enum": ["official", "all"] },
+          {
+            "description": "Atmos 0.16 (SDK 1.1): who may use it, and what it gives in plain words, shown in Settings and the approval prompt.",
+            "type": "object",
+            "properties": {
+              "with": { "enum": ["official", "all"] },
+              "description": { "type": "string", "minLength": 1, "maxLength": 200 }
+            },
+            "required": ["with"],
+            "additionalProperties": false
+          }
+        ]
+      }
     }
   }
 }

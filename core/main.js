@@ -10,7 +10,7 @@ const { loadTrustedKeys } = require('./js/core/extension-signing.cjs');
 const { resolveDependencies, dependentsOf, normalizeDependencies, refOf } = require('./js/core/extension-dependencies.cjs');
 const { createExtensionManager } = require('./js/core/extension-manager.cjs');
 const { createExtensionStateStore } = require('./js/core/extension-state.cjs');
-const { BASELINE_BROWSER, reachOf, reaches } = require('./js/core/extension-permissions.cjs');
+const { BASELINE_BROWSER, reachOf, reaches, exportDetails, describeExports, sharingRisk } = require('./js/core/extension-permissions.cjs');
 const { createLocationGate } = require('./js/core/location-gate.cjs');
 const { createExtensionFetch } = require('./js/core/extension-fetch.cjs');
 const frames = require('./js/core/extension-frames.cjs');
@@ -778,13 +778,21 @@ function _describePackage(entry) {
 
 // ── Extension manager (Settings → Extensions, the footer icon) ───────────
 
-/** What the footer icon needs: updates, changes waiting for a restart, and problems. */
+/** What the footer icon needs: approvals, updates, changes waiting for a restart, and problems. */
 function _managerSummary(status = _manager.status()) {
   const problems = [];
+  const approvals = [];
+  const switchedOff = { plugin: _extensionPreferences?.disabledIds('plugin') ?? new Set(), service: _extensionPreferences?.disabledIds('service') ?? new Set() };
   for (const entry of [..._catalog.list('plugins'), ..._catalog.list('services')]) {
     if (_isStartupDisabled(entry)) continue;
     const trust = _trust?.get(entry);
     const name = entry.manifest?.displayName || entry.id;
+    // Community extensions waiting for the user (switched off since: no).
+    if (entry.tier === 'third-party' && ['pending', 'changed'].includes(trust?.status)
+      && !trust.approvalChanged && !switchedOff[entry.kind].has(entry.id)) {
+      approvals.push({ kind: entry.kind, id: entry.id, name, status: trust.status });
+      continue;
+    }
     const deps = _dependencyState?.get(refOf(entry));
     if (trust && !trust.loadable && ['tampered', 'blocked', 'incompatible'].includes(trust.status)) problems.push({ kind: entry.kind, id: entry.id, name, reason: trust.reason });
     else if (_activationFailures.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _activationFailures.get(refOf(entry)) });
@@ -793,7 +801,7 @@ function _managerSummary(status = _manager.status()) {
     else if (_moveProblems.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _moveProblems.get(refOf(entry)) });
   }
   return {
-    updates: status.updates, pending: status.pending.length, problems, checkedAt: status.checkedAt,
+    updates: status.updates, pending: status.pending.length, problems, approvals, checkedAt: status.checkedAt,
     atmosUpdate: status.core?.available ? { version: status.core.available, current: status.core.current, download: _atmosDownloadUrl() !== null } : null,
   };
 }
@@ -989,7 +997,18 @@ function _describeSharing(entry) {
     if (owner.tier === 'system' || (owner.manifest?.library === true && !_trust?.get(owner)?.hasMain)) continue;
     const reach = _reachOf(entry, target);
     if (reach.ipc.includes('*')) { lines.push(`${name}: everything (it doesn't list what it shares yet)`); continue; }
-    const parts = [...reach.ipc, ...reach.methods, ...reach.events.map(event => `${event} events`)];
+    // With what each gives, where the owner says (SDK 1.1 descriptions).
+    let details = null;
+    try { details = exportDetails(owner.manifest?.exports); } catch { details = null; }
+    const said = (kind, item, label) => {
+      const description = details?.[kind]?.[item]?.description;
+      return description ? `${label} (${description})` : label;
+    };
+    const parts = [
+      ...reach.ipc.map(item => said('ipc', item, item)),
+      ...reach.methods.map(item => said('methods', item, item)),
+      ...reach.events.map(event => said('events', event, `${event} events`)),
+    ];
     lines.push(parts.length
       ? `${name}: ${parts.join(', ')}`
       : `${name} shares nothing with ${entry.tier === 'third-party' ? 'community' : 'other'} extensions`);
@@ -1016,6 +1035,24 @@ function _authorizeInvoke(event, caller, { kind, id, name }) {
   return null;
 }
 
+/**
+ * What it shares with others, for its own card and approval prompt (null:
+ * no "exports" block), and a warning when it holds something sensitive and
+ * shares anything with every extension.
+ */
+function _describeOwnExports(entry) {
+  const declared = entry.manifest && !entry.manifest.invalid ? entry.manifest.exports : undefined;
+  let shares = null;
+  try { shares = describeExports(declared); } catch { shares = []; }
+  // A community extension without a block shares with official extensions only.
+  if (shares === null && entry.tier !== 'system') {
+    let offers = !!_trust?.get(entry)?.hasMain;
+    try { offers ||= frames.describeContributions(entry, _walkRelativeFiles(entry.path)).some(item => item.surface === 'boot'); } catch { /* no surfaces to speak of */ }
+    shares = offers ? ['Official extensions can use everything it offers (it doesn\u2019t list what it shares)'] : [];
+  }
+  return { shares: shares || [], sharingRisk: sharingRisk(entry.manifest?.permissions, declared) };
+}
+
 function _describeTrust(entry) {
   const trust = _trust?.get(entry);
   if (!trust) return {};
@@ -1025,6 +1062,7 @@ function _describeTrust(entry) {
     permissions: trust.permissions,
     permissionSummary: trust.permissionSummary,
     sharing: _describeSharing(entry),
+    ..._describeOwnExports(entry),
     newPermissions: trust.newPermissions || [],
     hasMain: trust.hasMain,
     fingerprint: trust.fingerprint || null,
@@ -1114,15 +1152,81 @@ ipcMain.handle('extensions:set-enabled', async (event, kind, id, enabled) => {
   if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (entry?.tier === 'system' && enabled === false) throw new Error(`'${id}' is a system extension and cannot be disabled`);
-  return _extensionPreferences.setEnabled(kind, id, enabled);
+  const result = _extensionPreferences.setEnabled(kind, id, enabled);
+  _broadcastManager(); // "Keep disabled" ends a wait for approval
+  return result;
 });
 
+/**
+ * A community extension approved while Atmos runs loads at once, with any
+ * community extension that was waiting only for it (a plugin that needs a
+ * service just approved). They run only in frames, so there is no main.cjs
+ * to start: what a start does for them is trust (reassessed here), their
+ * dependencies (resolved again), their files served and browser
+ * permissions granted (both follow _isActive), and their surfaces, which
+ * the page registers from the descriptions this returns. An official
+ * extension that could now load too waits for a restart. Returns null,
+ * and changes nothing, when the approved one can't load this session
+ * (switched off at startup, or a dependency that isn't loading).
+ */
+function _loadApprovedNow(folder, entry) {
+  if (!entry || entry.tier !== 'third-party' || entry.source === 'developer') return null;
+  const all = [..._catalog.list('plugins'), ..._catalog.list('services')];
+  const before = new Set(all.filter(_isActive).map(refOf));
+  // This one, and any approved earlier this session that couldn't load then
+  // (it needed this one), as they are now.
+  const assessed = new Map([[entry, _trust.assess(folder, entry)]]);
+  for (const item of all) {
+    const trust = _trust.get(item);
+    if (item !== entry && item.tier === 'third-party' && item.source !== 'developer' && trust?.approvalChanged && !trust.loadable) {
+      assessed.set(item, _trust.assess(`${item.kind}s`, item));
+    }
+  }
+  const usable = item => (assessed.has(item)
+    ? assessed.get(item).loadable && !_isStartupDisabled(item) && !_activationFailures.has(refOf(item))
+    : _isUsableAlone(item));
+  const fresh = resolveDependencies(all, usable);
+  let loading = all.filter(item => !before.has(refOf(item)) && item.tier === 'third-party' && item.source !== 'developer'
+    && usable(item) && fresh.get(refOf(item))?.ok);
+  // Each needs what it requires to be loading already, or loading with it.
+  for (let changed = true; changed;) {
+    changed = false;
+    const refs = new Set([...before, ...loading.map(refOf)]);
+    const next = loading.filter(item => normalizeDependencies(item.manifest).list.every(dep => dep.optional || refs.has(dep.ref)));
+    if (next.length !== loading.length) { loading = next; changed = true; }
+  }
+  if (!loading.includes(entry)) return null;
+  for (const item of loading) if (assessed.has(item)) _trust.reassess(`${item.kind}s`, item);
+  for (const item of loading) _dependencyState.set(refOf(item), fresh.get(refOf(item)));
+  _installBrowserPermissions(_activeEntries());
+  console.log(`[extensions] approved ${entry.kind} '${entry.id}'; loading ${loading.map(refOf).join(', ')} now`);
+  // Services before plugins, each in start order, as at startup.
+  const disabled = { plugin: _extensionPreferences?.disabledIds('plugin') ?? new Set(), service: _extensionPreferences?.disabledIds('service') ?? new Set() };
+  const order = [..._catalog.list('services'), ..._catalog.list('plugins')];
+  return order.filter(item => loading.includes(item)).map(item => _describeExtension(item,
+    item.kind === 'plugin' ? fs.readdirSync(item.path, { withFileTypes: true }).filter(file => file.isFile()).map(file => file.name) : _walkRelativeFiles(item.path),
+    disabled[item.kind]));
+}
+
 // Third-party approval: the renderer passes the fingerprint it showed the
-// user; approval is refused if the files changed since. Takes effect on restart.
+// user; approval is refused if the files changed since. It loads at once
+// when it can (_loadApprovedNow), otherwise at the next start.
 ipcMain.handle('extensions:approve', async (event, kind, id, fingerprint) => {
   if (!_fromAtmosPage(event)) throw new Error('Not allowed');
   const folder = kind === 'plugin' ? 'plugins' : 'services';
-  return _trust.approve(folder, _catalog.find(folder, id), fingerprint);
+  const entry = _catalog.find(folder, id);
+  const result = _trust.approve(folder, entry, fingerprint);
+  let loaded = null;
+  try { loaded = _loadApprovedNow(folder, entry); }
+  catch (error) { console.warn(`[extensions] ${kind} '${id}' approved; it loads at the next start (${error.message})`); }
+  // The page registers their surfaces and starts their background frames.
+  if (loaded) {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('extensions:loaded', loaded);
+    }
+  }
+  _broadcastManager();
+  return loaded ? { ...result, restartRequired: false, loaded } : { ...result, loaded: [] };
 });
 
 ipcMain.handle('extensions:revoke', async (event, kind, id) => {
@@ -1130,6 +1234,7 @@ ipcMain.handle('extensions:revoke', async (event, kind, id) => {
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (!entry || entry.tier !== 'third-party') throw new Error('Only community extensions have approvals');
   _trust.revoke(entry);
+  _broadcastManager();
   return { restartRequired: true };
 });
 
@@ -1225,7 +1330,8 @@ ipcMain.handle('extensions:open-root', async (event, kind) => {
 
 // ── Framed extensions (atmos-ext://) ─────────────────────────────────────────
 const _SDK_DIR = path.join(__dirname, 'js', 'sdk');
-const _SDK_FILES = { '/__atmos/sdk.js': 'atmos-sdk.js', '/__atmos/frame.js': 'frame.js', '/__atmos/frame.css': 'frame.css' };
+// ui.css: Atmos's Settings rows and controls, for frames that opt in (SDK 1.1).
+const _SDK_FILES = { '/__atmos/sdk.js': 'atmos-sdk.js', '/__atmos/frame.js': 'frame.js', '/__atmos/frame.css': 'frame.css', '/__atmos/ui.css': 'ui.css' };
 
 function _originOf(url) {
   try {

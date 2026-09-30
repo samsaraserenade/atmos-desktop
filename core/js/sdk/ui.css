@@ -1,0 +1,135 @@
+/*
+ * Atmos UI for extension frames (SDK 1.1): the rows and controls of Atmos's
+ * own Settings → Appearance page, so an extension's settings page looks like
+ * the sections around it. Opt in from a stylesheet or a module:
+ *
+ *   @import url("/__atmos/ui.css");
+ *
+ *   <section class="atmos-section">
+ *     <div class="atmos-row">
+ *       <span class="atmos-label">Stars <small>Shown over the sky</small></span>
+ *       <span class="atmos-control"><input type="checkbox" class="atmos-switch" aria-label="Stars"></span>
+ *     </div>
+ *   </section>
+ *
+ * Everything follows Atmos's theme variables (--ink-rgb, --surface-rgb,
+ * --color-positive…), which the SDK keeps up to date in the frame. Classes
+ * only: nothing here styles an element you didn't mark. Sizes are in px, the
+ * same as Atmos's own rows (a frame's rem is its own 13 px root).
+ *
+ * MIT licence, like the SDK.
+ */
+
+/* A group of rows, and a heading like Atmos's own section headings. */
+.atmos-section { padding: 2px 0 10px; }
+.atmos-section + .atmos-section { border-top: 1px solid rgba(var(--ink-rgb), .07); }
+.atmos-heading {
+  font-size: 9.6px; letter-spacing: .14em; text-transform: uppercase;
+  color: rgba(var(--ink-rgb), .4); padding: 14px 14px 6px;
+}
+
+/* A row: its label (and an optional hint under it) left, its control right. */
+.atmos-row {
+  display: grid; grid-template-columns: minmax(120px, 40%) 1fr;
+  align-items: center; gap: 14px; padding: 5px 14px; min-height: 32px;
+}
+.atmos-label { font-size: 11.52px; color: rgba(var(--ink-rgb), .7); letter-spacing: .01em; min-width: 0; }
+.atmos-label small {
+  display: block; margin-top: 1px; font-size: 9.6px; letter-spacing: .01em;
+  color: rgba(var(--ink-rgb), .32);
+}
+.atmos-control { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+
+/* Buttons. */
+.atmos-button {
+  padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(var(--ink-rgb), .12);
+  background: rgba(var(--ink-rgb), .06); color: rgba(var(--ink-rgb), .75);
+  font: inherit; font-size: 10.56px; line-height: 1.4; cursor: pointer; white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.atmos-button:hover { background: rgba(var(--ink-rgb), .11); color: rgb(var(--ink-rgb)); }
+.atmos-button:disabled { opacity: .4; cursor: default; }
+.atmos-button[hidden] { display: none; }
+
+/* A choice of a few: <span class="atmos-segmented"><button class="active">…</button><button>…</button></span>. */
+.atmos-segmented { display: inline-flex; border: 1px solid rgba(var(--ink-rgb), .12); border-radius: 6px; overflow: hidden; }
+.atmos-segmented button {
+  background: transparent; border: 0; padding: 4px 11px; cursor: pointer;
+  font: inherit; font-size: 10.56px; color: rgba(var(--ink-rgb), .5);
+  transition: background .12s, color .12s;
+}
+.atmos-segmented button + button { border-left: 1px solid rgba(var(--ink-rgb), .12); }
+.atmos-segmented button:hover { color: rgba(var(--ink-rgb), .85); }
+.atmos-segmented button.active, .atmos-segmented button[aria-checked="true"] { background: rgba(var(--ink-rgb), .13); color: rgb(var(--ink-rgb)); }
+
+/* Dropdowns and text fields. */
+.atmos-select {
+  min-width: 0; max-width: 170px; padding: 4px 6px; border-radius: 5px;
+  border: 1px solid rgba(var(--ink-rgb), .12); background: rgba(var(--ink-rgb), .06);
+  color: inherit; font: inherit; font-size: 10.88px;
+}
+.atmos-select option { background: rgb(var(--surface-rgb)); color: rgb(var(--ink-rgb)); }
+.atmos-input {
+  min-width: 0; padding: 4px 8px; border-radius: 5px;
+  border: 1px solid rgba(var(--ink-rgb), .12); background: rgba(var(--ink-rgb), .05);
+  color: rgb(var(--ink-rgb)); font: inherit; font-size: 10.88px; outline: none;
+}
+.atmos-input::placeholder { color: rgba(var(--ink-rgb), .3); }
+.atmos-input:focus { border-color: rgba(var(--ink-rgb), .3); }
+
+/* An on/off switch: <input type="checkbox" class="atmos-switch">. */
+input[type="checkbox"].atmos-switch {
+  appearance: none; -webkit-appearance: none;
+  position: relative; flex-shrink: 0; width: 34px; height: 20px; margin: 0;
+  border-radius: 999px; background: var(--color-neutral, #9ca3af);
+  cursor: pointer; transition: background .15s ease;
+}
+input[type="checkbox"].atmos-switch::before {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: rgb(var(--ink-rgb)); box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  transition: transform .15s cubic-bezier(.22, 1, .36, 1);
+}
+input[type="checkbox"].atmos-switch:checked { background: var(--color-positive, #34d399); }
+input[type="checkbox"].atmos-switch:checked::before { transform: translateX(14px); }
+input[type="checkbox"].atmos-switch:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-positive, #34d399) 50%, transparent); }
+input[type="checkbox"].atmos-switch:disabled { opacity: .4; cursor: default; }
+
+/* A slider, with its value: <span class="atmos-slider"><input type="range" class="atmos-range"><output>40%</output></span>. */
+.atmos-slider { display: flex; align-items: center; gap: 10px; width: 100%; }
+.atmos-slider input { flex: 1; min-width: 0; }
+.atmos-slider output {
+  min-width: 38px; text-align: right; font-size: 10.56px;
+  color: rgba(var(--ink-rgb), .45); font-variant-numeric: tabular-nums;
+}
+input[type="range"].atmos-range {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 3px; margin: 0;
+  background: rgba(var(--ink-rgb), .12); border-radius: 2px; outline: none; cursor: pointer;
+}
+input[type="range"].atmos-range::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 9px; height: 9px; border-radius: 50%;
+  background: rgba(var(--ink-rgb), .88); box-shadow: 0 0 5px rgba(var(--ink-rgb), .25);
+  cursor: pointer; transition: transform .1s, background .1s;
+}
+input[type="range"].atmos-range::-webkit-slider-thumb:hover { background: rgb(var(--ink-rgb)); transform: scale(1.18); }
+input[type="range"].atmos-range:disabled { opacity: .35; cursor: default; }
+
+/* A line of status under a row: .ok and .err colour it. */
+.atmos-status { padding: 0 14px; font-size: 10.24px; color: rgba(var(--ink-rgb), .4); }
+.atmos-status.ok { color: var(--color-positive, #34d399); }
+.atmos-status.err { color: var(--color-negative, #f87171); }
+
+/* Rows that fold away: <details class="atmos-details"><summary>More <small>…</small></summary>rows</details>. */
+.atmos-details > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px; font-size: 11.52px; color: rgba(var(--ink-rgb), .7);
+}
+.atmos-details > summary::-webkit-details-marker { display: none; }
+.atmos-details > summary::after {
+  content: ''; margin-left: auto; width: 6px; height: 6px;
+  border-right: 1.5px solid rgba(var(--ink-rgb), .45); border-bottom: 1.5px solid rgba(var(--ink-rgb), .45);
+  transform: rotate(45deg); transition: transform .15s;
+}
+.atmos-details[open] > summary::after { transform: rotate(225deg); }
+.atmos-details > summary small { font-size: 9.6px; color: rgba(var(--ink-rgb), .32); }
+.atmos-details > summary:hover { color: rgb(var(--ink-rgb)); }

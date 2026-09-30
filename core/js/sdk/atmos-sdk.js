@@ -1,5 +1,5 @@
 /**
- * Atmos SDK 1.0 — the only way a framed extension talks to Atmos.
+ * Atmos SDK 1.1 — the only way a framed extension talks to Atmos.
  *
  *   import atmos from 'atmos-sdk';
  *
@@ -13,7 +13,7 @@
  * frames or Electron. See ATMOS_CORE_INTEGRATION.md, section 4, and the
  * typings beside this file (atmos-sdk.d.ts).
  *
- * What SDK 1.0 promises (semver: a later 1.x only adds):
+ * What SDK 1.x promises (semver: a later 1.x only adds):
  *
  *   stable        extension, surface (type, id, presentation, setMenu,
  *                 setGlass, trackGlass), state, events, appearance,
@@ -28,7 +28,7 @@
  * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = '1.0.0';
+export const SDK_VERSION = '1.1.0';
 
 let port = null;
 let nextId = 1;
@@ -203,13 +203,36 @@ function loadAppFont(font) {
 
 let measureSize = null; // Core asks again when the frame's container changes
 
-function watchSize() {
+/** Whether the body has something visible in it (for the 0 px warning). */
+function hasVisibleContent() {
+  for (const element of document.body.querySelectorAll('*')) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return true;
+  }
+  return false;
+}
+
+function watchSize(type) {
   let last = -1;
   let queued = false;
+  let warned = false;
+  let warnTimer = null;
   const report = () => {
     queued = false;
     const height = Math.ceil(document.body.getBoundingClientRect().height);
     if (height !== last) { last = height; notify('surface.resize', height); }
+    // A frame measured at 0 px with something in it is invisible (all of
+    // it positioned out of the flow, say). Say so once, after it settles.
+    clearTimeout(warnTimer);
+    if (height === 0 && !warned) {
+      warnTimer = setTimeout(() => {
+        if (warned || Math.ceil(document.body.getBoundingClientRect().height) !== 0 || !hasVisibleContent()) return;
+        warned = true;
+        console.warn(`[atmos-sdk] This ${type === 'settings' ? 'settings page' : 'widget'} measures 0 px tall, so Atmos shows nothing of it. `
+          + 'Its height is the height of <body>\'s content; content that is position: absolute or fixed, or floated, doesn\'t count. '
+          + 'See ATMOS_CORE_INTEGRATION.md § 2, "Files and surfaces".');
+      }, 1000);
+    }
   };
   // Chromium stops rendering a frame it considers hidden (a collapsed
   // sidebar section, the closed sidebar), and ResizeObserver waits for
@@ -297,7 +320,7 @@ export function __connect() {
         // Lets this extension's own views find this frame (see background()).
         Object.defineProperty(window, '__atmosBackground', { value: `${extension.kind}:${extension.id}` });
       }
-      if (surface.type === 'sidebar' || surface.type === 'settings') watchSize();
+      if (surface.type === 'sidebar' || surface.type === 'settings') watchSize(surface.type);
       forwardKeys();
       if (surface.drawer) {
         drawerState = Object.freeze({ ...surface.drawer });
@@ -528,13 +551,18 @@ export function library(target, file) {
 
 /**
  * The background layer's Wallpaper service. Needs "invokes": ["service:wallpaper"].
- *   set(file)      an image File/Blob becomes Atmos's wallpaper
- *   get()          { mode, opacity, thumbnail }: thumbnail is a small JPEG
- *                  data URL of the current image (null when there is none)
+ *   set(file)      an image File/Blob becomes Atmos's wallpaper; Atmos keeps
+ *                  the one it replaced, and Settings says whose it is
+ *   restore()      put back the one this extension's image replaced;
+ *                  resolves false when the image showing isn't its own
+ *   get()          { mode, opacity, thumbnail, canRestore }: thumbnail is a
+ *                  small JPEG data URL of the current image (null when there
+ *                  is none); canRestore, whether restore() would do anything
  *   onChange(fn)   the same, whenever the image or mode changes
  */
 export const wallpaper = Object.freeze({
   set: file => ask('wallpaper.set', file),
+  restore: () => ask('wallpaper.restore'),
   get: () => ask('wallpaper.get'),
   onChange(fn) {
     const unsubscribe = subscribe('wallpaper', fn);
@@ -548,11 +576,14 @@ export const wallpaper = Object.freeze({
  * channel, living in Atmos for the whole session (it keeps playing whatever
  * frames come and go). Needs "invokes": ["service:audio"].
  *
- *   load(source, { id, position, play })  source: a Blob/File, or an
+ *   load(source, { id, position, play, loop })  source: a Blob/File, or an
  *        atmos-resource:// URL from a provider the extension registers;
- *        id: your own label for it (a track key), reported back
+ *        id: your own label for it (a track key), reported back as `id`;
+ *        loop: start over at the end, without a gap and without 'ended'
  *   play() pause() seek(seconds) setVolume(0–1) stop()
- *   state()       { type, source, playing, currentTime, duration, volume, ended, error }
+ *   state()       { type, id, source, loop, playing, currentTime, duration,
+ *                 volume, ended, error } (source: the same label as id, its
+ *                 name before SDK 1.1)
  *   onChange(fn)  the same on every change, in every frame of the extension
  *                 (type: source, loaded, play, pause, time, ended, volume, error)
  */

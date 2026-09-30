@@ -58,6 +58,12 @@ contextBridge.exposeInMainWorld('atmosCore', {
     ipcRenderer.on('extensions:developer-changed', listener);
     return () => ipcRenderer.removeListener('extensions:developer-changed', listener);
   },
+  // Community extensions approved while Atmos runs, loading now: [description].
+  onExtensionsLoaded: callback => {
+    const listener = (_event, list) => callback(list);
+    ipcRenderer.on('extensions:loaded', listener);
+    return () => ipcRenderer.removeListener('extensions:loaded', listener);
+  },
   onExtensionNotificationClick: callback => {
     const listener = (_event, kind, id, tag) => callback(kind, id, tag);
     ipcRenderer.on('extensions:notification-click', listener);

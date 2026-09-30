@@ -298,11 +298,13 @@ npm run new:extension -- ../my-widget
 That makes an extension from the template: a panel, a sidebar widget, tests
 against a fake Atmos, and typings for your editor. Start Atmos with
 `--dev-extension=<folder>` to run it from where you write it: it reloads as
-you save, with no approval prompts. To share it, copy the folder into
-`%APPDATA%\atmos\plugins\` on another computer, where it waits in Settings
-for approval. The guide is
+you save, with no approval prompts. Atmos from source runs on Linux and
+macOS as well as Windows (as root on Linux, add `--no-sandbox`). To share it,
+copy the folder into `%APPDATA%\atmos\plugins\` on another computer: the
+footer's Extensions button says it's waiting for approval, and it loads as
+soon as it's approved. The guide is
 [ATMOS_CORE_INTEGRATION.md](ATMOS_CORE_INTEGRATION.md): § 1 to get going,
-§ 4 the Atmos SDK, § 7 security.
+§ 4 the Atmos SDK, § 5 the shared libraries, § 7 security.
 
 ### Repository layout
 

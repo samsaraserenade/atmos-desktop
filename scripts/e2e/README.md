@@ -16,6 +16,9 @@ frames.
 | `first-run.cjs` | An installer's extensions made as `after-pack.cjs` makes them (system services built in, the rest signed packages, passed as `--seed-packages`): a first start shows the picker; Finance and Audio Player ticked install with only the services they need, as removable official extensions, and the rest stay Available from "Comes with Atmos"; "Start with none" installs nothing and the picker doesn't return; an upgrade from an Atmos that bundled everything installs it all at once, keeping a switched-off extension off. Then as a release build (no packages; `--setup-source` stands in for the GitHub release): unreachable, the picker offers Try again / Start with none and a restart still shows it; reachable, it installs what's ticked; an upgrade downloads everything in the background and opens Extensions waiting for a restart. |
 | `security.cjs` | The Atmos page's lock-down (no injected inline script or string-compiled code, a sandboxed window), approval, re-approval after a change, the `main.cjs` ban, nothing served for an extension waiting for approval, nothing served through a link out of an approved extension's folder, notifications from a frame (and one refused for another extension), tamper detection on a copy of the bundled extensions with `integrity.json`, link and `window.open` handling, browser permissions. |
 | `sdk.cjs` | SDK 1.0 from developer folders (`--dev-extension`): they load without approval as Community, and one whose `engines` needs a later Atmos doesn't; `atmos.fetch()` against a local HTTPS server that sends no CORS headers (`--fetch-test`), with a POST, a redirect, and the refusals (an undeclared host, a redirect to one, an address, plain http) and an abort; `atmos.location` before and after the location changes; `atmos.lifecycle` cleaning up as a frame goes; a saved file reloading the frame; a changed `extension.json` taking a new host without a restart; the extension template as `npm run new:extension` makes it, with its panel's glass and its widget's `atmos.fetch()`. |
+| `contract.cjs` | The SDK contract (`scripts/sdk-contract/contract.js`) in the panels of two developer folders, one declaring the system services and notifications and one declaring nothing, compared with `scripts/sdk-contract/expected.json` and with the fake Atmos running the same script. |
+| `approval.cjs` | Two community extensions copied in by hand (Skyloom reads the location and shares a snapshot with every extension; Sky Reader needs it and asks for the same panel key): the footer and Settings → Extensions say they wait for approval, Review opens Skyloom's card with what it shares and the location warning; Sky Reader approved alone waits for a restart, and approving Skyloom loads both at once; the key opens Skyloom's panel and Settings → Panels says Sky Reader asked for it too; Sky Reader gets Skyloom's snapshot but not the location; both load after a restart. |
+| `system-services.cjs` | From a developer folder: an audio channel with `loop: true` (silence at the loop point measured at the element's output, next to the seek-and-play workaround), `id` reported back; a wallpaper the extension sets, shown in Settings → Appearance as its own and restored there; a settings page and a widget with an `html, body { height: 100% }` reset sized to their content (the widget growing and shrinking); a widget whose content is all out of the flow warning in its console; `/__atmos/ui.css` giving a settings row Atmos's own padding, sizes and switch. |
 
 ## Running
 
@@ -35,6 +38,9 @@ node scripts/e2e/finance-lifecycle.cjs # screenshots in .tmp/e2e/finance-lifecyc
 node scripts/e2e/audio-player.cjs # screenshots in .tmp/e2e/audio-player
 node scripts/e2e/matrix-chat.cjs  # screenshots in .tmp/e2e/matrix-chat
 node scripts/e2e/sdk.cjs          # screenshots in .tmp/e2e/sdk
+node scripts/e2e/contract.cjs     # reports in .tmp/e2e/contract
+node scripts/e2e/approval.cjs     # screenshots in .tmp/e2e/approval
+node scripts/e2e/system-services.cjs # screenshots in .tmp/e2e/system-services
 ```
 
 They use the Electron from `devDependencies`; set `ELECTRON_PATH` to use
@@ -103,6 +109,51 @@ The output is a JSON report, not pass/fail. What to expect:
   - `rescanStatuses` ends with `"✓ 3 tracks imported"`;
   - `afterRestart` keeps the track (not playing), `volume: 0.4`, `bar: "bottom"`, `wallpaperMode: "wallpaper"`, `coverSize: "140px"`;
   - `errors` and `errorsAfterRestart` are empty, apart from Finance's "VPS unavailable" warning (there is no portfolio server in this run).
+- `contract.cjs`: every list under `all` and `none` is empty (the runtime,
+  the fake and `expected.json` agree), and `errors` is empty. When Atmos
+  changes what a call gives on purpose, update `expected.json` from
+  `.tmp/e2e/contract/*-runtime.json`, and `npm run test:sdk` shows where the
+  fake must follow.
+- `approval.cjs`:
+  - `before` is both `pending/off`; `footerBefore` is `attention: true`,
+    "Extensions: 2 extensions need your approval";
+  - `managerWaiting` lists Skyloom and Sky Reader with Review, and
+    `reviewOpened` is `{ highlighted: true, page: "Plugins" }`;
+  - `skyloomPrompt` has "Know your location, as set in Atmos", "Shares with
+    other extensions", "Any extension can call snapshot(): The sky's colours
+    now, without your location" and the warning, which is `skyloomCaution`;
+  - `readerAlone` says "Approved. Restart Atmos to apply." and
+    `afterReaderAlone` is still both `pending/off`;
+  - `afterSkyloom` is both `approved/active`, `panels` has `skyloom` and
+    `sky-reader`, `bootFrame` is `true`;
+  - `skyloomCard` and `readerCard` say "Approved. It’s running now.";
+    `readerDetails` has "Asks for the ^ key, which opens Skyloom’s Sky
+    instead" and "Skyloom: snapshot (The sky's colours now, without your
+    location), sky events"; `skyloomDetails` has "Its panel opens with the ^
+    key";
+  - `icons.skyloom` is `true` (Sky Reader has no icon: `false`);
+    `footerAfter.attention` is `false`;
+  - `shortcuts` is "^ Sky Skyloom Sky Reader’s Reader asked for it too and
+    doesn’t get it" (spacing aside);
+  - `readerPanel` is `{ snapshot: { palette: […] }, location:
+    "AtmosPermissionError" }` and `afterKey` is `"skyloom"`;
+  - `afterRestart` is both `approved/active`, and every `errors*` is empty.
+- `system-services.cjs`:
+  - `loopLoad` is `{ id: "tone", source: "tone", loop: true }`; `loop` has
+    `longestSilenceMs` of a block or two (about 6–12) and `loopState` has
+    `playing: true`, `ended: false`, `endedEvents: 0`; `workaround` has
+    `restarts` of 3 (its silence is as small: measured at the element's
+    output, neither shows the ~100 ms that `captureStream()` reports at
+    every loop point);
+  - `wallpaperSet.canRestore` is `true`; `wallpaperRow` is "Set by Sky
+    Probe" with the Restore button, titled "Put back the Atmos default";
+    `afterRestore` is `{ kind: "default", status: "The Atmos default",
+    restoreShown: false }` and `canRestoreAfter` is `false`;
+  - `settingsHeight` is over 100; `uiCss` matches `atmosRow` (padding
+    `5px 14px`, label `11.52px`) with `rowDisplay: "grid"`, a `34px`
+    switch with `switchAppearance: "none"`;
+  - `widgetTall` is 120 and `widgetShrunk` 40; `ghostWarning` is the SDK's
+    "This widget measures 0 px tall" line; `errors` is empty.
 - `security.cjs`:
   - `pageLockdown` is `{ inlineScript: "blocked", stringTimer: "blocked", sandboxed: true }`;
   - `run1` shows `pending` and `blocked`, `sneakyMainRan` is `false`, and
@@ -111,6 +162,8 @@ The output is a JSON report, not pass/fail. What to expect:
   - `links` is `{ outFile: 404, outDir: 404, inside: 200 }`: links added to
     an approved extension's folder (they aren't in its fingerprint) serve
     nothing from outside it;
+  - `afterApprove` is already `approved/active` (approving loads a
+    community extension at once);
   - `run2` is `approved/active` with a boot frame; `notify` is `"shown true"`
     (`"shown false"` where the system has no notifications, as in a bare
     Linux container), `notifyClicks` is `[{ tag: "t1" }]` and

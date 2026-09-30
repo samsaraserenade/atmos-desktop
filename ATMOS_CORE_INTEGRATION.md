@@ -71,6 +71,10 @@ npm start -- --dev-extension="C:\path\to\weather"
   the first to the front.
 - Add `--devtools` to open the developer tools (F12) and see your frames'
   consoles.
+- Atmos from source also runs on Linux and macOS (`npm start -- …` as
+  above). As root on Linux, add `--no-sandbox`. `--remote-debugging-port=9222`
+  lets Playwright or Chrome's DevTools attach, for tests that drive the real
+  Atmos.
 - For a service, use `--dev-service=<folder>`. Either flag can be given more
   than once.
 - If you've also installed an extension with the same id, Atmos loads the
@@ -96,9 +100,12 @@ details.
 
 Copy the folder (you can leave out `node_modules`, `tests` and
 `.atmos-sdk`) into `%APPDATA%\atmos\plugins\` on the other computer, or
-`services\` for a service, and restart Atmos. It appears in Settings →
-Plugins as **Community**, lists its permissions, and loads once approved.
-Any later change to its files asks for approval again (section 7).
+`services\` for a service, and restart Atmos. Nothing of it shows yet: the
+footer's Extensions button turns red ("Weather needs your approval"), and
+Settings → Extensions lists it under **Waiting for your approval** with a
+Review button that opens its card in Settings → Plugins. The card lists its
+permissions and what it shares; **Approve** loads it at once, with no second
+restart. Any later change to its files asks for approval again (section 7).
 
 Installing from a link, and updates for community extensions, aren't
 there yet.
@@ -165,6 +172,15 @@ Atmos makes a frame for each entry file:
 | `settings.js` | settings page | the extension's settings, on Settings → Appearance |
 | `boot.js` | background | hidden, running for the whole session |
 
+**How tall a frame is.** A panel's frame fills the panel. A sidebar
+widget's and a settings page's frame is as tall as the content of its
+`<body>`: the SDK measures `<body>` and Atmos sizes the frame to match, as
+the content changes. Atmos sets `html` and `body` to `height: auto` in those
+frames (a `height: 100%` reset would make the frame as tall as itself, and
+a settings page 0 px), and content that is `position: absolute` or `fixed`,
+or floated, doesn't count. A frame that measures 0 px with something in it
+says so in its console.
+
 A frame lives exactly as long as its surface: switching panels, hiding a
 widget or changing the layout removes it, and showing it again makes a new
 one. Only the background frame lasts all session (see section 4, "Keeping
@@ -195,7 +211,7 @@ file other than the conventional one). A second sidebar widget needs an
 |---|---|---|
 | `"order": 10` | panel, widget | Where it goes among the others (lower first) |
 | `"default": true` | panel | Makes it the panel Atmos opens by default (one extension at most) |
-| `"shortcut": "#"` | panel | One printable key that opens the panel from anywhere in Atmos, except while typing in a field. Atmos listens for it, so it works without a frame open |
+| `"shortcut": "#"` | panel | One printable key that opens the panel from anywhere in Atmos, except while typing in a field. Atmos listens for it, so it works without a frame open. One panel per key: official extensions' panels first, then the first in start order. Settings → Panels lists every key, and names a panel that asked for one it didn't get |
 | `"shortcutToggles": true` | panel | The same key closes it again, back to the previous panel |
 | `"glass": true` | panel | Atmos draws its frosted glass under the frame where the frame asks (`atmos.surface.trackGlass`, section 4), following the panel's blur and opacity. A frame's own `backdrop-filter` can't blur the wallpaper behind it |
 | `"defaultHeight": 120` | widget | Its height before the user resizes it |
@@ -315,14 +331,14 @@ Every extension has an `extension.json`. A typical community one:
 
 | Key | Meaning | See |
 |---|---|---|
-| `apiVersion` | The extension API it's written for: `4` for SDK 1.0 | below |
+| `apiVersion` | The extension API it's written for: `4` for SDK 1.x | below |
 | `engines` | The Atmos versions it runs on: `{ "atmos": ">=0.15.0" }` | below |
 | `version` | Its own version, `MAJOR.MINOR.PATCH`. Needed to be packaged, and for others to depend on it | below |
 | `publisher` | Who publishes it. `"atmos"` for official extensions, and it must match the key that signs them | 7 |
 | `displayName`, `description` | Its name in Settings (and default label), and one line about it | 2 |
 | `contributes` | Its surfaces: labels, icons, entry files and options | 2 |
 | `permissions` | Everything it uses: network hosts, browser permissions, other extensions | 7 |
-| `exports` | What it shares with other extensions, and with whom | 7 |
+| `exports` | What it shares with other extensions, with whom, and (Atmos 0.16) what each gives | 7 |
 | `dependencies` | Services (or plugins) it needs, with version ranges; also its start order | below |
 | `library` | `true` on a service that is a library | 5 |
 | `isolation` | `"origin"`: official extensions only (section 4, "Storage") | 4 |
@@ -344,9 +360,12 @@ make the block invalid.
   0.15.x. Atmos doesn't load an extension whose range leaves it out, and
   the extension manager doesn't offer it; Settings says "not for this
   Atmos" and what it needs.
-- **`apiVersion: 4`** marks an SDK 1.0 extension. Atmos 0.14 and older don't
+- **`apiVersion: 4`** marks an SDK 1.x extension. Atmos 0.14 and older don't
   read `engines`, but they do refuse an `apiVersion` above their own, so
   this keeps them from loading it.
+- **Something new in SDK 1.1** (marked "1.1" in section 4) needs
+  `">=0.16.0"`: Atmos 0.15 reads `engines` and says the extension isn't for
+  it, rather than running it without the call.
 
 ### Versions and dependencies
 
@@ -364,10 +383,13 @@ make the block invalid.
 - A bare id is a service; write `"plugin:<id>"` for a plugin.
 - Ranges: `1.2.3` (exactly), `^1.2.3` (compatible: below `2.0.0`, or below
   `0.5.0` for `^0.4.x`), `~1.2.3` (patch updates), `>=1.2.3` and `*`.
-- Every `service:<id>` in `permissions.invokes` must also be a dependency
-  (for bundled extensions, `npm run test:permissions` checks it, along with
-  the ranges and that a released extension's required dependencies are
-  released too).
+- List every service and plugin in `permissions.invokes` as a dependency,
+  so Atmos can say what's missing. The system services (`audio`,
+  `wallpaper`, `location`) are part of Atmos and always there, so a
+  community extension needn't list them (the example above doesn't). The
+  bundled extensions list them anyway: `npm run test:permissions` checks
+  that every invoke is a dependency, along with the ranges and that a
+  released extension's required dependencies are released too.
 
 At startup, an extension whose **required** dependency is missing,
 switched off, can't load, or has a version outside the range doesn't load
@@ -442,8 +464,8 @@ refused call rejects with an `AtmosPermissionError` naming what to declare.
 Subscriptions (`events.on`, `listen`, the `onChange`s) don't reject: a
 refusal is logged in the frame's console.
 
-**What SDK 1.0 promises.** `atmos.SDK_VERSION` is `'1.0.0'`, and a later
-1.x only adds. Everything below is **stable** unless marked
+**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.1.0'` (Atmos 0.16),
+and a later 1.x only adds. What 1.1 added is marked **1.1**. Everything below is **stable** unless marked
 **experimental** (it may still change in a minor version). The calls in
 "Official extensions only" at the end of this section may change in a
 minor version too, and Atmos refuses them to community extensions.
@@ -455,7 +477,7 @@ minor version too, and Atmos refuses them to community extensions.
 | `atmos.extension` | `{ id, kind, tier, version }`: which extension this frame belongs to |
 | `atmos.surface` | `{ type, id, presentation, glass, drawer }`: `type` is `'panel'`, `'sidebar'`, `'settings'` or `'boot'`; `presentation` is `'full'`, `'tile'` or `'window'` (panels) and never changes, since a layout change makes a new frame |
 | `atmos.ready` | A promise that resolves once the frame is connected. Entry files already run after it |
-| `atmos.SDK_VERSION` | `'1.0.0'` |
+| `atmos.SDK_VERSION` | `'1.1.0'` (Atmos 0.16); `'1.0.0'` in Atmos 0.15 |
 
 ### State and events
 
@@ -486,16 +508,17 @@ markup, of which Atmos keeps only plain shapes).
 |---|---|
 | A row | `{ id, label, run, checked?, hold?, tone? }`. `checked` shows a tick; `hold: true` asks for a press and hold before it runs; `tone: 'danger'` draws it in the negative colour |
 | A row of buttons | `{ type: 'buttons', buttons: [{ id, label, icon?, title?, run }] }` (at most 12): a click runs that button and closes the menu |
-| A toggle | `{ type: 'toggle', checked, run(value) }` |
-| A slider | `{ type: 'range', min, max, step, value, suffix?, zeroLabel?, run(value) }` |
-| A number | `{ type: 'number', min, max, step, value, suffix?, run(value) }` |
-| Text | `{ type: 'text', value, placeholder?, maxLength?, run(value) }`: runs on Enter with the trimmed text, then closes |
-| A dropdown | `{ type: 'select', value, options: [{ value, label }], run(value) }` (at most 50 options) |
-| Colours | `{ type: 'colors', values: ['#rrggbb'], run(value) }` (at most 6) |
+| A toggle | `{ type: 'toggle', id, label, checked, run(value) }` |
+| A slider | `{ type: 'range', id, label, min, max, step, value, suffix?, zeroLabel?, run(value) }` |
+| A number | `{ type: 'number', id, label, min, max, step, value, suffix?, run(value) }` |
+| Text | `{ type: 'text', id, label, value, placeholder?, maxLength?, run(value) }`: runs on Enter with the trimmed text, then closes |
+| A dropdown | `{ type: 'select', id, label, value, options: [{ value, label }], run(value) }` (at most 50 options) |
+| Colours | `{ type: 'colors', id, label, values: ['#rrggbb'], run(value) }` (at most 6) |
 | Decoration | `{ type: 'separator' }`, `{ type: 'heading', label }`, `{ type: 'meta', label }` |
 
-Controls stay open while they are changed; add `closeOnChange: true` to
-close on the first change.
+Every row and control takes a `label` (shown beside the control) and an
+`icon`; `id` is what `open()` resolves with. Controls stay open while they
+are changed; add `closeOnChange: true` to close on the first change.
 
 ### Network, location, lifecycle
 
@@ -542,9 +565,10 @@ flight):
 
 | Call | What it does | Needs |
 |---|---|---|
-| `atmos.wallpaper.set(file)` / `get()` / `onChange(fn)` | Set an image `File` or `Blob` as the wallpaper; `{ mode, opacity, thumbnail }` now and whenever it changes (`thumbnail` is a small JPEG data URL, for sampling colours) | `"invokes": ["service:wallpaper"]` |
-| `atmos.audio.load(source, { id, position, play })` | This extension's own playback channel, which lives all session and keeps playing whatever frames come and go. `source` is a `Blob`/`File`, or an `atmos-resource://` URL from a provider it registers (official). `id` is your own label, reported back | `"invokes": ["service:audio"]` |
-| `atmos.audio.play()` / `pause()` / `seek(s)` / `setVolume(0–1)` / `stop()` / `state()` / `onChange(fn)` | Control it; `{ type, source, playing, currentTime, duration, volume, ended, error }` on every change, in every frame of the extension | `"invokes": ["service:audio"]` |
+| `atmos.wallpaper.set(file)` / `get()` / `onChange(fn)` | Set an image `File` or `Blob` as the wallpaper; `{ mode, opacity, thumbnail, canRestore }` now and whenever it changes (`thumbnail` is a small JPEG data URL, for sampling colours). Atmos keeps the image yours replaced, and Settings → Appearance says "Set by Weather" with a Restore previous button | `"invokes": ["service:wallpaper"]` |
+| `atmos.wallpaper.restore()` **1.1** | Put back the wallpaper your image replaced. Resolves `false` when the image showing isn't yours (the user or another extension changed it since); `canRestore` says beforehand. After several extensions in a row, what comes back is still what the user had | `"invokes": ["service:wallpaper"]` |
+| `atmos.audio.load(source, { id, position, play, loop })` | This extension's own playback channel, which lives all session and keeps playing whatever frames come and go. `source` is a `Blob`/`File`, or an `atmos-resource://` URL from a provider it registers (official). `id` is your own label, reported back as `id`. **1.1:** `loop: true` starts it over at the end inside Atmos, with no `'ended'` and no frame involved (a soundscape keeps looping when its panel closes). Resolves with the state | `"invokes": ["service:audio"]` |
+| `atmos.audio.play()` / `pause()` / `seek(s)` / `setVolume(0–1)` / `stop()` / `state()` / `onChange(fn)` | Control it; `play()` resolves whether it started. `{ type, id, source, loop, playing, currentTime, duration, volume, ended, error }` on every change, in every frame of the extension. `id` and `loop` are **1.1**; `source` is the same label as `id` (all Atmos 0.15 reports) | `"invokes": ["service:audio"]` |
 
 ### Other extensions
 
@@ -568,6 +592,41 @@ itself (`'plugin:<own id>'`) without declaring anything.
 | `atmos.notifications.show({ title, body?, tag?, silent? })` | **Experimental** (not yet seen working on Windows). A system notification, shown by Atmos for the frame (Chromium refuses the `Notification` API in frames). Resolves `true` once shown, `false` where the system has none | `"notifications"` in `permissions.browser` |
 | `atmos.notifications.onClick(fn)` | **Experimental.** The user clicked one of this extension's notifications: `fn({ tag })` in every frame of it, after Atmos comes to the front | — |
 
+### Looking like Atmos: `ui.css` (1.1)
+
+The rows and controls of Atmos's own Settings → Appearance page are in a
+stylesheet every frame can use, so a settings page sits among Atmos's own
+sections without matching them by eye:
+
+```css
+@import url("/__atmos/ui.css");
+```
+
+```html
+<section class="atmos-section">
+  <div class="atmos-row">
+    <span class="atmos-label">Stars <small>Shown over the sky</small></span>
+    <span class="atmos-control"><input type="checkbox" class="atmos-switch" aria-label="Stars"></span>
+  </div>
+</section>
+```
+
+| Class | For |
+|---|---|
+| `atmos-section`, `atmos-heading` | A group of rows, and a heading like Atmos's section headings |
+| `atmos-row`, `atmos-label` (a `<small>` in it is a hint), `atmos-control` | A row: label left, control right |
+| `atmos-switch` | An `<input type="checkbox">` drawn as Atmos's on/off switch |
+| `atmos-slider` with `atmos-range` and an `<output>` | A slider and its value |
+| `atmos-select`, `atmos-input`, `atmos-button`, `atmos-segmented` | A dropdown, a text field, a button, a choice of a few buttons (`.active` or `aria-checked="true"` marks the chosen one) |
+| `atmos-status` (`.ok`, `.err`), `atmos-details` | A line of status; rows that fold away under a `<summary>` |
+
+It styles only elements with these classes, and follows Atmos's theme.
+`/__atmos/ui.css` is served to every frame in Atmos 0.16 and later.
+Paths in a frame are relative to the extension's files only in its
+modules and stylesheets (`new URL('./x.css', import.meta.url)`): the
+document itself is `/__atmos/frame.html`, so `<link href="./x.css">` from
+a script doesn't find your file.
+
 ### Keeping work alive: the background frame and views
 
 Panels and widgets come and go, and each is a separate page. Anything that
@@ -584,6 +643,17 @@ engine's `ready()` first.
   revision, send a newly opened view a full `snapshot()`, and after that
   only the change since the last event. A view that sees a gap in the
   revisions asks for a snapshot.
+- Revisions start again when the engine does (Atmos restarts, and a
+  developer folder reloads every frame on save, `boot.js` included), so a
+  view that ignores anything older than what it has would ignore
+  everything. Give each run of the engine an epoch (a random id made when
+  it starts) and send it with every revision; a view that sees a new epoch
+  takes a fresh snapshot.
+- `call()` waits for the engine's frame to `expose()` its methods (up to
+  15 s), not for its data. Expose once `snapshot()` has something to give,
+  or have `ready()` and `snapshot()` await the engine's own start. Another
+  extension's frames can start before yours (start order is alphabetical),
+  and would otherwise get an empty snapshot.
 - Keep settings in `atmos.state` with each field its own top-level key
   (Finance uses `ns:<namespace>:<field>`), so every frame sees every change
   and writes only the fields it changed. `update()` merges top-level keys in
@@ -781,7 +851,7 @@ ordinary service, and can ship its client as a separate library.
 
 | Extension | Kind | Notes |
 |---|---|---|
-| Charting, Currency, Fullscreen Viewer | Libraries | Imported into the frames that use them; free for community extensions to use too |
+| Charting, Currency, Fullscreen Viewer | Libraries | Imported into the frames that use them; free for community extensions to use too (below) |
 | Media Metadata | Service with a library | `main.cjs` reads and writes files (any path), shared with official extensions only; `renderer.js` parses tags and takes `setInvoke()` |
 | Audio Player's engine | Service inside a plugin | Lives in `boot.js`, `expose()`s methods, emits changes |
 
@@ -789,6 +859,243 @@ ordinary service, and can ship its client as a separate library.
 (`auditLibrary()` in `scripts/extension-audit.cjs`); an exception would be
 listed by file in `scripts/extension-permissions.test.cjs`, never granted by
 a manifest (there are none).
+
+### The shared libraries
+
+Atmos has three libraries any extension can use: Charting, Currency and
+Fullscreen Viewer. Declare `"invokes": ["service:<id>"]` and a dependency on
+it with a version range, then, in the frame that needs it,
+`const lib = await import(await atmos.library('service:<id>', '<file>'))`.
+Each frame that imports it gets its own copy, which runs with your
+permissions, and each library's API follows semver by its `version`, so a `^`
+range brings fixes and additions but no breaking change.
+
+#### Charting
+
+Time-series charts (line, candlestick, Heikin Ashi) drawn in an element you
+give it, with zoom, pan and hover built in. It fetches nothing.
+
+```json
+"dependencies": { "charting": "^1.2.0" },
+"permissions": { "invokes": ["service:charting"] }
+```
+
+Import `api.js`.
+
+| Call | What it does |
+|---|---|
+| `createTimeSeriesChart(element, options)` | Draw a chart in `element` and return its handle (below) |
+| `configureChartStorage({ get, set })` | Where Charting saves the shared settings and named charts' views: `get(key)` returns a string or `null`, `set(key, value)` stores a string, both synchronous (`localStorage` works). Without it, settings last as long as the frame and named charts' views aren't kept |
+| `getChartSettings()` / `setChartSettings(patch)` / `onChartSettingsChange(fn, { signal })` | Settings shared by every chart in this frame: `smoothing` (0–100), `lineOpacity` and `backgroundOpacity` (0–1), `showCurrentPriceLine`, `candleAnimation`, and `samsara` (the overlay's parts). Charts follow a change at once |
+| `lineColorForTrend(points, { up, down }, valueOf?)` | `down` if the last value is below the first, otherwise `up`. `valueOf` defaults to `p => p.value` |
+| `sma`, `ema`, `wma`, `hma`, `dema` `(values, length)`, `rsi(values, length = 14)` | Indicator maths on an array of numbers; `null` where there aren't enough values yet |
+
+**Points.** A line point is `{ time, value }`, with `time` in milliseconds (a
+number or a `Date`; strings are dropped). A candle is `{ start, end, open,
+high, low, close }` or `{ t0, t1, o, h, l, c }`. Line points given to a
+candle chart are grouped into candles. Your other fields are kept.
+
+**Options** (all optional; all but `data`, `signal`, `toolbar` and
+`stateKey` can be changed later with `setOptions`):
+
+| Option | What it does |
+|---|---|
+| `type` | `'line'` (default), `'candlestick'` or `'heiken-ashi'` |
+| `data` | The first points |
+| `signal` | An `AbortSignal`; aborting it destroys the chart. Pass `atmos.lifecycle.signal` |
+| `indicator` | The Samsara trading overlay (moving averages, RSI and session marks; candles coloured by session) is **on** unless you pass `null` |
+| `showPriceAxis`, `showTimeAxis` | `true` to draw the axes; both are off by default |
+| `timelineMode`, `priceScale` | `'gapless'` (default: points evenly spaced) or `'gaps'` (placed by their real time); `'linear'` (default) or `'log'` |
+| `lineColor`, `upColor`, `downColor`, `gridColor`, `textColor` | Colours |
+| `formatValue(value)`, `formatTime(time)` | Label text (defaults: a local number, and hours and minutes) |
+| `showPointCount`, `showTooltip`, `showCrosshair`, `showHoverLabels` | On by default; `false` hides the visible-point count (top left), the tooltip, the crosshair, and the value and time labels that follow the pointer |
+| `bucketMs` | Candle charts made from line points: the time a candle covers. `null` (default) picks one, aiming at about 250 candles |
+| `maxPoints` | How many points it keeps (5000); older ones are dropped |
+| `toolbar` | `true` for Atmos's chart controls, shown while the pointer is over the chart; `{ controls: ['type', 'range', 'fit'], prepend: [element], append: [element] }` to choose them and add your own |
+| `stateKey` | A name for this chart: its type, axes, scale and view are saved through `configureChartStorage` and restored next time |
+
+The handle:
+
+| Call | What it does |
+|---|---|
+| `setData(points)` | Replace the points. The view the user zoomed or panned to is kept |
+| `append(point)` / `appendMany(points)` / `updateLatest(point)` | Add newer points, or replace the last. A view at the newest edge follows them |
+| `setOptions(patch)` / `setType(type)` | Change options |
+| `fitContent()` | Show all the data |
+| `setHiddenRanges([{ from, to }])` | Leave out these times (the user makes them with Ctrl-drag) |
+| `setStatus([{ key, value, title?, color? }])` | Small labels at the top left (red unless `color`); `null` clears them |
+| `batch(fn)` | Several synchronous changes, drawn once |
+| `on(name, fn)` | `'data'` and `'settings'` (`fn(getState())`), `'range'` (`{ from, to }` shown), `'hover'` (`{ time, value, point }`), `'hiddenRanges'` (`[{ tStart, tEnd }]`). Returns an unsubscribe function |
+| `getState()` | `{ type, pointCount, range, hiddenRanges, destroyed, … }` |
+| `timeToCoordinate(t)`, `priceToCoordinate(v)`, `coordinateToTime(x)`, `coordinateToPrice(y)` | Convert between data and pixels in the chart |
+| `destroy()` | Remove it and give the element back as it was |
+
+```js
+import atmos from 'atmos-sdk';
+
+const charting = await import(await atmos.library('service:charting', 'api.js'));
+
+document.body.innerHTML = '<div id="chart" style="position: fixed; inset: 0"></div>';
+
+const response = await atmos.fetch('https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.1&hourly=temperature_2m&timeformat=unixtime',
+  { signal: atmos.lifecycle.signal });   // declare api.open-meteo.com in permissions.network
+const { hourly } = await response.json();
+
+const chart = charting.createTimeSeriesChart(document.getElementById('chart'), {
+  type: 'line',
+  indicator: null,                  // no trading overlay
+  showPriceAxis: true,
+  showTimeAxis: true,
+  showPointCount: false,
+  formatValue: value => `${value.toFixed(1)} °C`,
+  formatTime: time => new Date(time).toLocaleString([], { weekday: 'short', hour: '2-digit' }),
+  signal: atmos.lifecycle.signal,   // destroyed as the frame goes
+  data: hourly.time.map((seconds, i) => ({ time: seconds * 1000, value: hourly.temperature_2m[i] })),
+});
+chart.fitContent();                 // the whole week, not only the newest hours
+```
+
+- **Give it a sized element.** The chart fills it (at least 80 px high) and
+  follows its size. It replaces the element's children and paints its
+  background `rgba(var(--surface-rgb), backgroundOpacity)`, opaque unless you
+  `setChartSettings({ backgroundOpacity: 0 })`; `destroy()` restores both.
+- **A new chart shows the newest points** at a readable density (about one
+  point per 3 px, one candle per 6 px); double-click returns to that view.
+  Call `fitContent()` to show them all.
+- **Candle colours must be plain colours:** candles are painted on a canvas,
+  which can't read `var(--…)`. Read Atmos's `--color-positive` and
+  `--color-negative` with `getComputedStyle(document.documentElement)`, and
+  again on `atmos.appearance.onChange`.
+- **Shared settings are per frame.** `smoothing`, `lineOpacity`,
+  `candleAnimation` and `showCurrentPriceLine` given to one chart last until
+  the next `setChartSettings()`. Other frames read saved settings once, when
+  they call `configureChartStorage()`, and don't see later changes.
+- **With a `stateKey`, what was saved wins** over the options you pass.
+- **Input.** Wheel zooms, drag pans, Ctrl-drag hides a range (Ctrl-double-click
+  brings them back), Shift-drag measures (its change always shows a `$`).
+- More (strips under the plot with `panes`, your own toolbar element,
+  `surface`) is in `services/charting/README.md`.
+
+#### Currency
+
+Exchange rates, and conversion between currencies through GBP. It keeps no
+state beyond the rates it holds in memory.
+
+```json
+"dependencies": { "currency": "^1.0.0" },
+"permissions": { "network": ["cdn.moneyconvert.net"], "invokes": ["service:currency"] }
+```
+
+It fetches `https://cdn.moneyconvert.net/api/latest.json` from your frame,
+hence the host. Import `rates.js` and `converter.js`:
+
+| Call | What it does |
+|---|---|
+| `startRatesPolling()` / `stopRatesPolling()` (`rates.js`) | Fetch the rates now and every 5 minutes (calling it again restarts the timer); stop |
+| `ratesReady()` | `true` once rates have arrived |
+| `getRates()` | `{ USD: 1.27, EUR: 1.17, … }`: units of each currency per 1 GBP, for every currency the source lists |
+| `onRatesUpdate(fn)` | `fn()` after every successful fetch or `useRates()`. Returns an unsubscribe function |
+| `useRates(rates)` | Use rates another frame got from `getRates()`, instead of fetching |
+| `convertToGbp(amount, currency)` (`converter.js`) | `amount` in `currency` (an ISO code such as `'EUR'`, or a symbol) into GBP |
+| `convertFromGbp(amount, currency = 'GBP')` | GBP into `currency` |
+| `symbolForIso(iso)` / `isoFromSymbol(symbol)` | `'EUR'` ↔ `'€'` for `£ $ € Fr C$ A$` (`$` is USD); anything else comes back unchanged |
+| `OUTPUT_CURRENCIES` / `isOutputCurrency(iso)` | `[{ iso, label }]` for GBP, USD, EUR and CHF, for a currency picker |
+
+```js
+import atmos from 'atmos-sdk';
+
+const rates = await import(await atmos.library('service:currency', 'rates.js'));
+const { convertToGbp, convertFromGbp, symbolForIso } =
+  await import(await atmos.library('service:currency', 'converter.js'));
+
+const price = document.body.appendChild(document.createElement('p'));
+
+function render() {
+  if (!rates.ratesReady()) { price.textContent = 'Waiting for exchange rates…'; return; }
+  const dollars = convertFromGbp(convertToGbp(19.99, 'EUR'), 'USD');
+  price.textContent = `€19.99 is about ${symbolForIso('USD')}${dollars.toFixed(2)}`;
+}
+
+atmos.lifecycle.onCleanup(rates.onRatesUpdate(render));
+atmos.lifecycle.onCleanup(rates.stopRatesPolling);
+rates.startRatesPolling();
+render();
+```
+
+- **Until rates arrive, and for a currency they don't list, conversions
+  return the amount unchanged.** Check `ratesReady()` before showing a
+  converted figure. `convertToGbp` returns `0` for `0` or a non-number.
+- **Nothing is saved, and each frame polls on its own.** With several frames,
+  poll only in `boot.js`: `expose()` a method returning `getRates()` and
+  `emit()` an event from `onRatesUpdate`. Views pass what
+  `atmos.call('plugin:<your id>', …)` or the event gives them to `useRates()`
+  (section 4, "Keeping work alive").
+- **A failed fetch only logs a console warning** and keeps the last good
+  rates. There is no error callback, and an undeclared host fails the same way.
+
+#### Fullscreen Viewer
+
+Shows images and videos one at a time in an element you give it: the wheel
+steps through them and Shift+wheel zooms towards the pointer. It knows
+nothing about where the items come from.
+
+```json
+"dependencies": { "fullscreen-viewer": "^1.0.0" },
+"permissions": { "invokes": ["service:fullscreen-viewer"] }
+```
+
+Media loads under your frame's rules: your own files, `blob:` and `data:`
+URLs, and hosts in your `permissions.network`. Import `index.js`.
+
+| Call | What it does |
+|---|---|
+| `createFullscreenViewer(element, options)` | A viewer that puts one `<img>` or `<video>` in `element` and listens for the wheel there. `options`: `wheelCooldownMs` (the least time between steps), `zoomMin`, `zoomMax`, `zoomSensitivity`, and optional `onOpen(item)`, `onNavigate(item)`, `onClose()` |
+| `viewer.open(items, startId)` | Show `items` (`[{ id, url, kind: 'image' \| 'video', alt? }]`) from the one whose `id` is `startId`, at 1× zoom. Call again if the list changes |
+| `viewer.close()` / `isOpen()` / `current()` / `destroy()` | Forget the items and call `onClose`; whether it's open; the item shown, or `null`; remove its wheel listener |
+| `findMedia(root)`, `applyZoom(media, wheelEvent, zoom, { zoomMin, zoomMax, zoomSensitivity })` | Zoom only, for your own navigation: the `<img>`/`<video>` under `root`, and one zoom step that returns the new zoom (you keep it, and set it back to 1 for a new item) |
+
+```css
+.viewer { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .9); }
+.viewer[hidden] { display: none; }
+.viewer img, .viewer video { max-width: 100%; max-height: 100%; object-fit: contain; }   /* it sets no size */
+```
+
+```js
+import atmos from 'atmos-sdk';
+
+const { createFullscreenViewer } = await import(await atmos.library('service:fullscreen-viewer', 'index.js'));
+
+const photos = ['harbour', 'hills', 'storm'].map(name =>
+  ({ id: name, kind: 'image', alt: name, url: new URL(`./photos/${name}.jpg`, import.meta.url).href }));
+const overlay = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'viewer', hidden: true }));
+
+const viewer = createFullscreenViewer(overlay, {
+  wheelCooldownMs: 350, zoomMin: 1, zoomMax: 6, zoomSensitivity: 0.0015,   // no defaults: pass all four
+  onClose: () => { overlay.hidden = true; overlay.replaceChildren(); },    // it doesn't empty the element
+});
+atmos.lifecycle.onCleanup(viewer.destroy);
+
+for (const photo of photos) {
+  const thumb = document.body.appendChild(Object.assign(document.createElement('img'), { src: photo.url, alt: photo.alt }));
+  thumb.addEventListener('click', () => { overlay.hidden = false; viewer.open(photos, photo.id); });
+}
+overlay.addEventListener('click', event => { if (event.target === overlay) viewer.close(); });
+atmos.lifecycle.listen(document, 'keydown', event => {
+  if (event.key === 'Escape' && viewer.isOpen()) { event.preventDefault(); viewer.close(); }   // else Atmos gets Escape too
+});
+```
+
+- **All four numbers are required.** Without them zoom becomes `NaN` and the
+  wheel has no cooldown. Matrix Chat uses the values above.
+- **It draws no chrome.** The backdrop, a close button, Escape, keys and
+  captions are yours. The wheel stops at the first and last item; Ctrl+wheel
+  is ignored.
+- **It covers only its element**, and a frame can't draw outside its
+  surface, so in a sidebar widget "full screen" is the widget.
+- **`close()` leaves the last image or video in the element** (a video keeps
+  playing): hide or empty it in `onClose`. Videos start muted and playing,
+  with controls.
+- **`startId` must be one of the ids**, or nothing is shown.
 
 ## 6. Main-process code (`main.cjs`)
 
@@ -890,6 +1197,15 @@ Plugins (or Services). The prompt lists its permissions in plain words
 "Show system notifications"), naming every host, says what it can use of
 other extensions, and what the sandbox does and doesn't cover.
 
+Until then nothing of it shows, so Atmos says it's waiting: the footer's
+Extensions button turns the negative colour ("Weather needs your
+approval"), and Settings → Extensions lists it under **Waiting for your
+approval**, where Review opens its card. Approving loads it at once, with
+nothing to restart: its panel, widgets and settings page appear and its
+background frame starts, along with any community extension that was
+approved earlier but needed this one. (It waits for the next start when it
+can't load now: switched off, or a dependency that isn't loading.)
+
 Approval records a fingerprint of every file (the manifest included) and
 the permissions shown. After any change the extension stops loading until
 it's approved again. What it now asks for beyond what was approved is
@@ -916,13 +1232,20 @@ methods its background frame `expose()`s.
   "exports": {
     "ipc":     { "subscribe": "official", "read-tags": "all" },
     "events":  { "event": "official" },
-    "methods": { "greet": "all" }
+    "methods": {
+      "greet":   "all",
+      "palette": { "with": "all", "description": "The sky's colours now, without your location" }
+    }
   }
 }
 ```
 
 - `"official"` shares it with system and official extensions; `"all"` with
   community extensions too.
+- **Atmos 0.16:** a name may instead be `{ "with": "official" | "all",
+  "description": "…" }`: what it gives, in plain words (at most 200
+  characters). Only Settings uses it; Atmos 0.15 refuses the block, so an
+  extension that uses it needs `"engines": { "atmos": ">=0.16.0" }`.
 - What isn't listed stays the extension's own: its own frames and
   `main.cjs` reach it as before.
 - Another extension reaches a shared name only if it also declares the
@@ -941,6 +1264,26 @@ with the calling extension, where the handler runs only if it shares that
 name with it. Share only handlers that are safe for any caller of that
 tier: one that reads any path, fetches any URL or returns a secret should
 stay private, or go to official extensions only when they need it.
+
+**What you share can pass on what you were allowed.** Sharing is checked
+against the target's `exports`, not against what the caller could reach
+itself: an extension that may read the location and shares a method with
+`"all"` hands whatever that method returns to extensions the user never
+allowed to know the location. So share with every extension only what's
+safe for any of them, and say what it gives. Settings shows the user:
+
+- on the extension's own card and in its approval prompt, **Shares with
+  other extensions**: each name, with whom, and its description ("Any
+  extension can call palette(): The sky's colours now, without your
+  location");
+- on a caller's card, what it may use of each extension it declares, with
+  the same descriptions;
+- a warning, on the card and in the prompt, when an extension can reach
+  something sensitive (the location, the camera or microphone, the
+  clipboard, the screen) and shares anything with every extension: "It can
+  know your location, and shares palette() with any extension, so what it
+  shares could pass that on."
+
 
 ### What is enforced
 
@@ -1120,8 +1463,9 @@ them from a newer Atmos with `npm run new:extension -- <your folder>
 `npm test` in the extension runs `node --import
 ./.atmos-sdk/testing/register.mjs --test`. The import makes `import atmos
 from 'atmos-sdk'` give a fake that keeps everything in memory, has the SDK's
-calls and refuses what Atmos would (an undeclared host, target or
-notification):
+calls and refuses what Atmos would (an undeclared host, target, system
+service or notification), with what Atmos gives: the same audio state and
+wallpaper summary, the same errors.
 
 ```js
 import { test } from 'node:test';
@@ -1149,16 +1493,26 @@ returns it (`createFakeAtmos` only makes one). Its options:
 | `state` | The saved state to start from |
 | `fetch` | Answers for `atmos.fetch()`: `{ 'https://…': answer }` (or `'POST https://…'`), or `request => answer`. An answer is a `Response`, `{ status, headers, json \| text \| body }`, or an `Error` to throw |
 | `location`, `appearance` | What `atmos.location` and `atmos.appearance` give |
+| `wallpaper` | The wallpaper `atmos.wallpaper.get()` starts from (`{ mode, opacity, thumbnail }`), or `null` |
 
 `atmos.fake` lets a test see and steer what happens:
 
 | | |
 |---|---|
 | `state`, `emitted`, `requests`, `menus`, `notifications`, `clipboard`, `panelShown`, `exposed`, `headerMenu`, `glass` | What the code did |
-| `setState(next)`, `emit(name, payload)`, `setLocation(next)`, `send(target, channel, ...args)` | Changes from outside, as another frame, the user or a `main.cjs` would make them |
+| `wallpaper` | The last image `atmos.wallpaper.set()` was given (`null` after `restore()`) |
+| `audio.loads`, `audio.state` | What `atmos.audio.load()` was given (`[{ source, id, position, play, loop }]`), and the channel's state now |
+| `audio.update(patch, type)`, `audio.end()` | Playback from outside: change the state and tell `onChange` listeners (`audio.update({ currentTime: 12 })`); the source reaching its end (`'ended'`, or starting over with `loop`) |
+| `setState(next)`, `emit(name, payload)`, `setLocation(next)`, `setWallpaper(summary)`, `send(target, channel, ...args)` | Changes from outside, as another frame, the user or a `main.cjs` would make them |
 | `chooseFromMenu(choice)` | What the next `contextMenu.open()` picks (an id, `{ id, value }`, or `null`); its `run` is called |
 | `handle(target, channel, fn)`, `exposeFor(target, methods)` | Stand-ins for another extension's `invoke()` handlers and `call()` methods |
 | `unload()` | The frame goes: `atmos.lifecycle` cleanups run and its signal aborts |
+
+The fake is checked against Atmos itself: one script of SDK calls
+(`scripts/sdk-contract/contract.js` in the Atmos repository) runs against
+the fake in Atmos's unit tests and against a real Atmos in its end-to-end
+checks, and both must give the same report. A difference between them is
+a bug in Atmos, not in your extension.
 
 ### Licensing your extension
 
@@ -1179,7 +1533,8 @@ Before sharing an extension:
 1. One stable id (lowercase letters, numbers, hyphens), which is also its
    folder's name.
 2. An `extension.json` with `apiVersion: 4`, `engines.atmos`, `version`,
-   `permissions` and, for anything it offers others, `exports`.
+   `permissions` and, for anything it offers others, `exports` (with a
+   `description` for each name shared with every extension).
 3. Entry files at the root (or listed in `contributes`), each importing
    `atmos-sdk`; nothing imports Atmos's own modules.
 4. State in `atmos.state` (small, JSON, shared by its frames); larger data
@@ -1189,7 +1544,7 @@ Before sharing an extension:
 6. What a view gives something that outlives it cleaned up with
    `atmos.lifecycle`.
 7. Its own look, headers and controls inside its own surfaces; the shell is
-   Atmos's.
+   Atmos's. A settings page can use Atmos's own rows (`/__atmos/ui.css`).
 8. Every permission it uses declared, and nothing it doesn't. For a bundled
    extension, `npm run test:permissions` checks it.
 9. `npm test` passing, and tried in every layout (full, tile, window), after
@@ -1198,6 +1553,27 @@ Before sharing an extension:
     that check their arguments, shared only when they must be.
 
 ## 10. Compatibility
+
+**SDK 1.1 (Atmos 0.16).** Only additions; an SDK 1.0 extension runs
+unchanged.
+
+- `atmos.audio.load(…, { loop: true })`, and `id` and `loop` in the audio
+  state (`source` stays, with the same label).
+- `atmos.wallpaper.restore()` and `canRestore`: Atmos keeps the wallpaper
+  an extension replaced.
+- Exports with a `description` (`{ "with", "description" }`), shown in
+  Settings.
+- `/__atmos/ui.css`: Atmos's Settings rows and controls for frames.
+- Widgets and settings pages are sized to their content even with a
+  `height: 100%` reset (0 px before), and warn in their console when they
+  measure 0 px.
+- A panel key two panels ask for goes to one (official first, then start
+  order); Settings → Panels lists the keys.
+- A community extension approved while Atmos runs loads at once, and one
+  waiting for approval shows in the footer and on Settings → Extensions.
+- The test kit refuses undeclared audio and wallpaper calls, reports the
+  audio state Atmos reports, and lets a test drive playback
+  (`atmos.fake.audio`).
 
 **SDK 1.0 (Atmos 0.15).**
 

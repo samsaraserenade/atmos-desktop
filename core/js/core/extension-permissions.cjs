@@ -204,6 +204,11 @@ function permissionsAdded(current, approved) {
 //     "methods":   { "greet": "all" }             // methods its boot frame expose()s (call)
 //   }
 //
+// SDK 1.1: a name may instead say what it gives, in plain words, for
+// Settings and the approval prompt:
+//
+//     "methods":   { "palette": { "with": "all", "description": "The sky's colours now, without your location" } }
+//
 // An extension's atmos-resource:// providers serve its own frames only
 // (sharing them, "exports.resources", went with SDK 1.0: nothing used it).
 //
@@ -222,8 +227,35 @@ const EXPORT_KINDS = ['ipc', 'events', 'methods'];
 const EXPORT_LEVELS = ['official', 'all'];
 const EXPORT_NAME = /^[a-z0-9][a-z0-9:._-]*$/i;
 
-/** Validate and normalise an "exports" block: { ipc: { name: level }, ... }. Missing means nothing shared. */
-function normalizeExports(exportsBlock) {
+const EXPORT_DESCRIPTION_MAX = 200;
+
+/** One exported name's value: "official" | "all", or { with, description }. */
+function exportEntry(kind, name, value) {
+  if (typeof value === 'string') {
+    if (!EXPORT_LEVELS.includes(value)) throw new TypeError(`exports.${kind}.${name} must be "official" or "all"`);
+    return { level: value, description: null };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`exports.${kind}.${name} must be "official", "all" or { "with": …, "description": … }`);
+  }
+  const unknown = Object.keys(value).filter(key => key !== 'with' && key !== 'description');
+  if (unknown.length) throw new TypeError(`exports.${kind}.${name} has unknown ${unknown.map(key => `"${key}"`).join(', ')} (use "with" and "description")`);
+  if (!EXPORT_LEVELS.includes(value.with)) throw new TypeError(`exports.${kind}.${name}.with must be "official" or "all"`);
+  let description = null;
+  if (value.description !== undefined) {
+    description = typeof value.description === 'string' ? value.description.replace(/\s+/g, ' ').trim() : '';
+    if (!description || description.length > EXPORT_DESCRIPTION_MAX) {
+      throw new TypeError(`exports.${kind}.${name}.description must be text of 1–${EXPORT_DESCRIPTION_MAX} characters`);
+    }
+  }
+  return { level: value.with, description };
+}
+
+/**
+ * Validate an "exports" block and give each name's level and description:
+ * { ipc: { name: { level, description } }, ... }. Missing means nothing shared.
+ */
+function exportDetails(exportsBlock) {
   const out = Object.fromEntries(EXPORT_KINDS.map(kind => [kind, {}]));
   if (exportsBlock === undefined || exportsBlock === null) return out;
   if (typeof exportsBlock !== 'object' || Array.isArray(exportsBlock)) throw new TypeError('exports must be an object');
@@ -233,13 +265,71 @@ function normalizeExports(exportsBlock) {
     const block = exportsBlock[kind];
     if (block === undefined) continue;
     if (!block || typeof block !== 'object' || Array.isArray(block)) throw new TypeError(`exports.${kind} must be an object of name: "official" | "all"`);
-    for (const [name, level] of Object.entries(block)) {
+    for (const [name, value] of Object.entries(block)) {
       if (!EXPORT_NAME.test(name)) throw new TypeError(`exports.${kind} has an invalid name "${name}"`);
-      if (!EXPORT_LEVELS.includes(level)) throw new TypeError(`exports.${kind}.${name} must be "official" or "all"`);
-      out[kind][name] = level;
+      out[kind][name] = exportEntry(kind, name, value);
     }
   }
   return out;
+}
+
+/** Validate and normalise an "exports" block: { ipc: { name: level }, ... }. Missing means nothing shared. */
+function normalizeExports(exportsBlock) {
+  const details = exportDetails(exportsBlock);
+  return Object.fromEntries(EXPORT_KINDS.map(kind => [kind,
+    Object.fromEntries(Object.entries(details[kind]).map(([name, { level }]) => [name, level]))]));
+}
+
+const joinWords = words => (words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`);
+const exportLabel = (kind, name) => (kind === 'methods' ? `${name}()` : kind === 'events' ? `${name} events` : `its ${name} handler`);
+
+/**
+ * Plain-language lines for an extension's own card and approval prompt:
+ * what it shares, with whom, and (when it says) what that gives. `null`
+ * for no "exports" block (it shares everything with official extensions
+ * only); [] when the block shares nothing.
+ */
+function describeExports(exportsBlock) {
+  if (exportsBlock === undefined || exportsBlock === null) return null;
+  const details = exportDetails(exportsBlock);
+  const lines = [];
+  for (const level of ['all', 'official']) {
+    for (const kind of ['methods', 'events', 'ipc']) {
+      for (const [name, entry] of Object.entries(details[kind]).sort(([a], [b]) => a.localeCompare(b))) {
+        if (entry.level !== level) continue;
+        const who = level === 'all' ? 'Any extension' : 'Official extensions';
+        const what = kind === 'methods' ? `can call ${name}()` : kind === 'events' ? `can hear its ${name} events` : `can use its ${name} handler`;
+        lines.push(`${who} ${what}${entry.description ? `: ${entry.description}` : ''}`);
+      }
+    }
+  }
+  return lines;
+}
+
+// What an extension may hold that it could pass on to others through what
+// it shares: the location, the camera, the clipboard, the screen.
+const SENSITIVE = {
+  invokes: { 'service:location': 'know your location' },
+  browser: { geolocation: 'use your location', 'clipboard-read': 'read the clipboard', media: 'use your camera or microphone', 'display-capture': 'capture your screen' },
+};
+
+/**
+ * A warning for Settings when an extension can reach something sensitive
+ * and shares anything with every extension, which could pass it on to
+ * extensions that were never allowed it themselves. Null otherwise.
+ */
+function sharingRisk(permissions, exportsBlock) {
+  let p;
+  let details;
+  try { p = normalizePermissions(permissions); details = exportDetails(exportsBlock); } catch { return null; }
+  const holds = [
+    ...p.invokes.filter(name => SENSITIVE.invokes[name]).map(name => SENSITIVE.invokes[name]),
+    ...p.browser.filter(name => SENSITIVE.browser[name]).map(name => SENSITIVE.browser[name]),
+  ];
+  const shared = EXPORT_KINDS.flatMap(kind => Object.entries(details[kind])
+    .filter(([, entry]) => entry.level === 'all').map(([name]) => exportLabel(kind, name)));
+  if (!holds.length || !shared.length) return null;
+  return `It can ${joinWords([...new Set(holds)])}, and shares ${joinWords(shared)} with any extension, so what it shares could pass that on.`;
 }
 
 /** Whether an extension of `tier` may use something exported at `level`. */
@@ -275,6 +365,6 @@ function reachOf(caller, target) {
 }
 
 module.exports = {
-  BASELINE_BROWSER, CONTEXT_ELECTRON, normalizePermissions, describePermissions, normalizeExports, levelAllows, reachOf, reaches,
+  BASELINE_BROWSER, CONTEXT_ELECTRON, normalizePermissions, describePermissions, normalizeExports, exportDetails, describeExports, sharingRisk, levelAllows, reachOf, reaches,
   isValidHost, hostAllowed, hostCovered, permissionsAdded,
 };

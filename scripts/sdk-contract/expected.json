@@ -1,0 +1,383 @@
+{
+  "all": {
+    "declared": "all",
+    "sdkVersion": "1.1.0",
+    "api": [
+      "SDK_VERSION",
+      "appearance",
+      "audio",
+      "background",
+      "call",
+      "clipboard",
+      "contextMenu",
+      "drawer",
+      "events",
+      "expose",
+      "extension",
+      "fetch",
+      "invoke",
+      "legacy",
+      "library",
+      "lifecycle",
+      "listen",
+      "location",
+      "notifications",
+      "panel",
+      "ready",
+      "state",
+      "surface",
+      "wallpaper"
+    ],
+    "members": {
+      "audio": [
+        "load",
+        "onChange",
+        "pause",
+        "play",
+        "seek",
+        "setVolume",
+        "state",
+        "stop"
+      ],
+      "wallpaper": [
+        "get",
+        "onChange",
+        "restore",
+        "set"
+      ],
+      "location": [
+        "get",
+        "onChange"
+      ],
+      "state": [
+        "get",
+        "onChange",
+        "set",
+        "update"
+      ],
+      "events": [
+        "emit",
+        "on"
+      ],
+      "lifecycle": [
+        "listen",
+        "onCleanup",
+        "setInterval",
+        "setTimeout",
+        "signal"
+      ],
+      "notifications": [
+        "onClick",
+        "show"
+      ],
+      "appearance": [
+        "get",
+        "onChange"
+      ],
+      "contextMenu": [
+        "close",
+        "open"
+      ],
+      "clipboard": [
+        "writeImage",
+        "writeText"
+      ],
+      "panel": [
+        "show"
+      ]
+    },
+    "extension": [
+      "id",
+      "kind",
+      "tier",
+      "version"
+    ],
+    "surface": [
+      "drawer",
+      "glass",
+      "id",
+      "presentation",
+      "type"
+    ],
+    "state": {
+      "a": 1,
+      "b": 2
+    },
+    "ownEvent": {
+      "n": 1
+    },
+    "emitWithPrefix": {
+      "error": "TypeError",
+      "saysWhatToDeclare": false
+    },
+    "audio": {
+      "load": {
+        "ok": {
+          "currentTime": "number",
+          "duration": "number",
+          "ended": "boolean",
+          "error": "null",
+          "id": "string",
+          "loop": "boolean",
+          "playing": "boolean",
+          "source": "string",
+          "type": "string",
+          "volume": "number"
+        }
+      },
+      "loadUrl": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "state": {
+        "currentTime": "number",
+        "duration": "number",
+        "ended": "boolean",
+        "error": "null",
+        "id": "string",
+        "loop": "boolean",
+        "playing": "boolean",
+        "source": "string",
+        "type": "string",
+        "volume": "number"
+      },
+      "stateValues": {
+        "type": "state",
+        "id": "contract",
+        "source": "contract",
+        "loop": true
+      },
+      "heardLoad": true,
+      "seekText": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "afterStop": {
+        "id": null,
+        "source": null,
+        "loop": false,
+        "playing": false
+      }
+    },
+    "wallpaper": {
+      "get": {
+        "ok": {
+          "canRestore": "boolean",
+          "mode": "string",
+          "opacity": "number",
+          "thumbnail": "string or null"
+        }
+      },
+      "setText": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "afterSet": true,
+      "restore": true,
+      "afterRestore": false,
+      "restoreAgain": false
+    },
+    "location": {
+      "ok": "null"
+    },
+    "notifications": {
+      "ok": "boolean"
+    },
+    "fetchUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    },
+    "fetchHttp": {
+      "error": "TypeError",
+      "saysWhatToDeclare": false
+    },
+    "invokeUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    },
+    "callUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    },
+    "libraryUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    }
+  },
+  "none": {
+    "declared": "none",
+    "sdkVersion": "1.1.0",
+    "api": [
+      "SDK_VERSION",
+      "appearance",
+      "audio",
+      "background",
+      "call",
+      "clipboard",
+      "contextMenu",
+      "drawer",
+      "events",
+      "expose",
+      "extension",
+      "fetch",
+      "invoke",
+      "legacy",
+      "library",
+      "lifecycle",
+      "listen",
+      "location",
+      "notifications",
+      "panel",
+      "ready",
+      "state",
+      "surface",
+      "wallpaper"
+    ],
+    "members": {
+      "audio": [
+        "load",
+        "onChange",
+        "pause",
+        "play",
+        "seek",
+        "setVolume",
+        "state",
+        "stop"
+      ],
+      "wallpaper": [
+        "get",
+        "onChange",
+        "restore",
+        "set"
+      ],
+      "location": [
+        "get",
+        "onChange"
+      ],
+      "state": [
+        "get",
+        "onChange",
+        "set",
+        "update"
+      ],
+      "events": [
+        "emit",
+        "on"
+      ],
+      "lifecycle": [
+        "listen",
+        "onCleanup",
+        "setInterval",
+        "setTimeout",
+        "signal"
+      ],
+      "notifications": [
+        "onClick",
+        "show"
+      ],
+      "appearance": [
+        "get",
+        "onChange"
+      ],
+      "contextMenu": [
+        "close",
+        "open"
+      ],
+      "clipboard": [
+        "writeImage",
+        "writeText"
+      ],
+      "panel": [
+        "show"
+      ]
+    },
+    "extension": [
+      "id",
+      "kind",
+      "tier",
+      "version"
+    ],
+    "surface": [
+      "drawer",
+      "glass",
+      "id",
+      "presentation",
+      "type"
+    ],
+    "state": {
+      "a": 1,
+      "b": 2
+    },
+    "ownEvent": {
+      "n": 1
+    },
+    "emitWithPrefix": {
+      "error": "TypeError",
+      "saysWhatToDeclare": false
+    },
+    "audio": {
+      "load": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      },
+      "loadUrl": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      },
+      "state": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      },
+      "play": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      },
+      "stop": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      }
+    },
+    "wallpaper": {
+      "get": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      },
+      "set": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      },
+      "restore": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      }
+    },
+    "location": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    },
+    "notifications": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": false
+    },
+    "fetchUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    },
+    "fetchHttp": {
+      "error": "TypeError",
+      "saysWhatToDeclare": false
+    },
+    "invokeUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    },
+    "callUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    },
+    "libraryUndeclared": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": true
+    }
+  }
+}
