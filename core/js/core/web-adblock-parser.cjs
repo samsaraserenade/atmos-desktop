@@ -1,0 +1,97 @@
+'use strict';
+/**
+ * Builds Atmos Browser's filter engine from the lists' text (web-adblock.cjs).
+ *
+ * A parse of the lists takes a couple of seconds and a hundred megabytes on
+ * the way, so it doesn't happen in the main process: web-host.cjs runs this
+ * file as a utility process, sends it { lists, resources }, gets back the
+ * engine serialized (which loads in milliseconds) and the utility process
+ * ends. The tests call buildEngine() directly.
+ *
+ * Lists that aren't uBlock Origin's own lose the scriptlet filters that need
+ * trust (uBlock Origin allows those only in its own lists): what runs in a
+ * page is chosen by those lists alone. Each list is parsed on its own by the
+ * engine's own parser (continued lines joined as the engine joins them), and
+ * a scriptlet is judged by the name the engine would resolve it to, so no
+ * spelling of a filter can reach a trusted scriptlet from another list.
+ */
+const crypto = require('crypto');
+
+// What the engine loads: network and cosmetic filters, exceptions, $csp,
+// and "!#if" sections. Not procedural (extended) selectors, which need a
+// script matching them in the page, nor HTML filtering, which Electron
+// can't do to a response.
+const ENGINE_CONFIG = Object.freeze({
+  loadNetworkFilters: true,
+  loadCosmeticFilters: true,
+  loadGenericCosmeticsFilters: true,
+  loadExceptionFilters: true,
+  loadCSPFilters: true,
+  loadPreprocessors: true,
+  loadExtendedSelectors: false,
+  enableHtmlFiltering: false,
+  enableMutationObserver: true,
+  enableCompression: false,
+  guessRequestTypeFromUrl: false,
+  integrityCheck: true,
+});
+
+/**
+ * Whether a parsed cosmetic filter injects a scriptlet only a trusted list
+ * may use: by the name the engine resolves (aliases, with or without ".js"),
+ * or any name starting "trusted-". Exceptions (#@#+js) switch scriptlets
+ * off, so they stay.
+ */
+function needsTrustPredicate(resources) {
+  const trusted = new Set((resources.scriptlets || []).filter(scriptlet => scriptlet.requiresTrust === true).map(scriptlet => scriptlet.name));
+  return filter => {
+    if (!filter.isScriptInject() || filter.isUnhide()) return false;
+    const script = filter.parseScript();
+    if (!script || typeof script.name !== 'string') return false;
+    const canonical = resources.getScriptletCanonicalName(script.name);
+    return /^trusted-/i.test(script.name) || (canonical !== undefined && trusted.has(canonical));
+  };
+}
+
+/**
+ * The engine for `lists` ([{ id, text, trusted }]) with `resources` (the
+ * JSON text of uBlock Origin's scriptlets and redirect resources, Atmos's
+ * own copy): { buffer, rules: { network, cosmetic } }.
+ */
+function buildEngine({ lists, resources }) {
+  const { FiltersEngine, Config, Resources, Preprocessor, parseFilters } = require('@ghostery/adblocker');
+  const checksum = crypto.createHash('sha256').update(resources).digest('hex');
+  const needsTrust = needsTrustPredicate(Resources.parse(resources, { checksum }));
+  const config = new Config(ENGINE_CONFIG);
+  const networkFilters = [];
+  const cosmeticFilters = [];
+  const conditions = new Map(); // one preprocessor per "!#if" condition, across lists
+  for (const list of lists || []) {
+    if (!list || typeof list.text !== 'string') continue;
+    const parsed = parseFilters(list.text, config);
+    networkFilters.push(...parsed.networkFilters);
+    cosmeticFilters.push(...(list.trusted === true ? parsed.cosmeticFilters : parsed.cosmeticFilters.filter(filter => !needsTrust(filter))));
+    for (const preprocessor of parsed.preprocessors) {
+      const kept = conditions.get(preprocessor.condition);
+      if (kept) for (const id of preprocessor.filterIDs) kept.filterIDs.add(id);
+      else conditions.set(preprocessor.condition, new Preprocessor({ condition: preprocessor.condition, filterIDs: new Set(preprocessor.filterIDs) }));
+    }
+  }
+  const engine = new FiltersEngine({ networkFilters, cosmeticFilters, preprocessors: [...conditions.values()], config });
+  engine.updateResources(resources, checksum);
+  return { buffer: engine.serialize(), rules: { network: networkFilters.length, cosmetic: cosmeticFilters.length } };
+}
+
+// As a utility process: one build, then it ends.
+if (process.parentPort) {
+  process.parentPort.once('message', ({ data }) => {
+    try {
+      const { buffer, rules } = buildEngine(data || {});
+      process.parentPort.postMessage({ ok: true, buffer, rules });
+    } catch (error) {
+      process.parentPort.postMessage({ ok: false, error: String(error?.message || error).slice(0, 500) });
+    }
+  });
+}
+
+module.exports = { buildEngine, needsTrustPredicate, ENGINE_CONFIG };

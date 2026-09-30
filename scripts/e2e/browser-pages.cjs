@@ -67,7 +67,8 @@ function handler(requests, info) {
         html(doc('Sign in to Example', `<style>body{font:15px sans-serif;background:#fff;padding:20px}</style>
           <h1>Sign in</h1><p id="opener"></p>
           <script>document.getElementById('opener').textContent='opener: '+(window.opener?'yes':'no');
-          setTimeout(()=>{ if (window.opener) window.opener.postMessage({ token: 'secret-token', state: new URL(location.href).searchParams.get('state') }, location.origin); window.close(); }, 600);</script>`));
+          const chromeMembers = Object.keys(window.chrome || {}).join(',');
+          setTimeout(()=>{ if (window.opener) window.opener.postMessage({ token: 'secret-token', state: new URL(location.href).searchParams.get('state'), chrome: chromeMembers }, location.origin); window.close(); }, 600);</script>`));
         return;
       case '/download':
         res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': 'attachment; filename="report ../../etc/passwd.txt"' });
@@ -103,6 +104,16 @@ function handler(requests, info) {
       case '/ua':
         html(doc('User agent', `<p id="ua">${esc(req.headers['user-agent'] || '')}</p>`));
         return;
+      case '/identity': {
+        // What the page is told about the browser: the client hints its
+        // navigation carried, and (before any other script) window.chrome,
+        // FedCM and navigator.userAgentData.
+        const hints = Object.fromEntries(Object.entries(req.headers).filter(([name]) => /^sec-ch-ua/.test(name)));
+        html(doc('Identity', `<p id="hints">${esc(JSON.stringify(hints))}</p>
+          <script>window.__identity = { chrome: Object.keys(window.chrome || {}), app: typeof (window.chrome && window.chrome.app),
+            fedcm: typeof IdentityCredential, brands: navigator.userAgentData ? navigator.userAgentData.brands : null };</script>`));
+        return;
+      }
       case '/mixed':
         html(doc('Mixed', `<p>An https page loading script over http.</p>
           <script src="http://${host}:${info.httpPort()}/script.js"></script>
@@ -142,6 +153,52 @@ function handler(requests, info) {
         return;
       case '/broken-icon':
         html(doc('Broken icon', '<p>This page\'s icon isn\'t an image.</p>', '', '/bad-icon.png'));
+        return;
+      // The ad blocker's page (browser.cjs writes the test lists): an ad
+      // server's script, a tracker's, a pixel, ad slots the lists hide by
+      // class, id and site, one added later, and content that stays.
+      case '/ads': {
+        const at = name => `http://${name}:${info.httpPort()}`;
+        html(doc('Ads', `<style>div{height:20px}</style>
+          <script>window.__adblockTestAtStart = typeof window.adblockTest === 'undefined' ? 'unset' : String(window.adblockTest);</script>
+          <script>(() => {
+            // What the scriptlets left, seen through a frame's own (untouched) toString.
+            const frame = document.createElement('iframe');
+            document.body.append(frame);
+            const nativeToString = frame.contentWindow.Function.prototype.toString;
+            window.__scriptletTraces = {
+              globals: ['scriptletGlobals', 'safeSelf', 'proxyApplyFn', 'preventXhrFn', 'setConstantFn'].filter(name => name in window),
+              toString: nativeToString.call(Function.prototype.toString),
+              open: nativeToString.call(XMLHttpRequest.prototype.open),
+            };
+            frame.remove();
+          })();</script>
+          <div class="ad-slot" id="slot">an ad slot</div>
+          <div class="sponsored" id="sponsored">sponsored</div>
+          <div id="banner-ad">a banner</div>
+          <div class="content" id="content">the article</div>
+          <script src="${at('ads.test')}/ad.js"></script>
+          <script src="${at('tracker.test')}/tracker.js"></script>
+          <img id="pixel" src="${at('pixel.test')}/p.gif" alt="">
+          <script src="/first-party.js"></script>
+          <script>setTimeout(() => { const late = document.createElement('div'); late.id = 'late'; late.className = 'ad-slot'; late.textContent = 'a late ad'; document.body.append(late); }, 250);</script>`));
+        return;
+      }
+      case '/ad.js':
+        res.writeHead(200, { 'Content-Type': 'text/javascript' });
+        res.end('window.__adLoaded = true;');
+        return;
+      case '/tracker.js':
+        res.writeHead(200, { 'Content-Type': 'text/javascript' });
+        res.end('window.__trackerLoaded = true;');
+        return;
+      case '/first-party.js':
+        res.writeHead(200, { 'Content-Type': 'text/javascript' });
+        res.end('window.__firstPartyLoaded = true;');
+        return;
+      case '/p.gif':
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(FAVICON);
         return;
       default:
         html(doc('Not found', '<p>Not found</p>'), 404);

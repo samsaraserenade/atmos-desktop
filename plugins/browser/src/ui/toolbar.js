@@ -1,6 +1,7 @@
 /**
  * The toolbar: back, forward, reload or stop, the address bar with its
- * suggestions, the page's zoom and bookmark star, downloads, and the menu.
+ * suggestions, the page's zoom, bookmark star and shield (the ads and
+ * trackers blocked on it), downloads, and the menu.
  *
  * The address bar shows the selected tab's address while you aren't typing
  * in it. Typing shows suggestions (what you typed, a search, bookmarks and
@@ -24,7 +25,8 @@ export function createToolbar({ engine, root, onLayout, openDownloads, focusPage
   });
   const zoom = h('button', { class: 'br-zoom', hidden: true, title: 'Reset zoom (Ctrl+0)' });
   const star = h('button', { class: 'br-icon-button br-star', title: 'Bookmark this page (Ctrl+D)', 'aria-label': 'Bookmark this page' }, icon('star'));
-  const address = h('div', { class: 'br-address' }, privatePill, site, input, zoom, star);
+  const shield = h('button', { class: 'br-icon-button br-shield', hidden: true, 'aria-label': 'Ads and trackers' });
+  const address = h('div', { class: 'br-address' }, privatePill, site, input, zoom, star, shield);
   const downloads = h('button', { class: 'br-icon-button br-downloads', hidden: true, title: 'Downloads (Ctrl+J)', 'aria-label': 'Downloads' }, icon('download'));
   const menu = h('button', { class: 'br-icon-button', title: 'Menu', 'aria-label': 'Menu' }, icon('menu'));
   const bar = h('div', { class: 'br-progress-bar' });
@@ -60,12 +62,43 @@ export function createToolbar({ engine, root, onLayout, openDownloads, focusPage
     const rect = site.getBoundingClientRect();
     void siteMenu(rect.left, rect.bottom + 4);
   });
+  shield.addEventListener('click', () => {
+    const rect = shield.getBoundingClientRect();
+    void shieldMenu(rect.right - 4, rect.bottom + 4);
+  });
+
+  /** The shield's menu: what was blocked here, and blocking on or off for the site. */
+  async function shieldMenu(x, y) {
+    const t = tab();
+    if (!t || t.kind !== 'page' || t.shield === 'none') return;
+    const items = [{ type: 'heading', label: siteName(t.url) }];
+    if (t.shield === 'disabled') {
+      items.push(
+        { type: 'meta', label: 'Ad and tracker blocking is off for every site' },
+        { type: 'toggle', id: 'block-ads', label: 'Block ads and trackers', checked: false, run: value => { void engine.setOptions({ blockAds: value === true }); } },
+      );
+    } else {
+      const found = t.shield === 'on' ? await engine.blocked(t.id).catch(() => null) : null;
+      const count = found?.count ?? t.blocked ?? 0;
+      items.push({ type: 'meta', label: t.shield === 'on' ? blockedText(count) : 'Ads and trackers are allowed on this site' });
+      for (const item of (found?.hosts || []).slice(0, 6)) items.push({ type: 'meta', label: `${item.host} · ${item.count}` });
+      items.push(
+        { type: 'separator' },
+        {
+          type: 'toggle', id: 'shield', label: 'Block ads and trackers on this site', checked: t.shield === 'on',
+          run: value => { void engine.setShield(t.id, value === true); },
+        },
+      );
+    }
+    void atmos.contextMenu.open(x, y, items);
+  }
 
   async function siteMenu(x, y) {
     const t = tab();
     if (!t || t.kind !== 'page') { input.focus(); return; }
     const origin = (() => { try { return new URL(t.url).origin; } catch { return ''; } })();
-    const stored = origin ? (await engine.sitePermissions().catch(() => [])).filter(item => item.origin === origin) : [];
+    // (The site's ads and trackers are the shield's to show.)
+    const stored = origin ? (await engine.sitePermissions().catch(() => [])).filter(item => item.origin === origin && item.name !== 'ads') : [];
     const items = [
       { type: 'heading', label: siteName(t.url) },
       { type: 'meta', label: t.error?.kind === 'certificate' ? 'The site’s certificate isn’t trusted' : t.secure ? 'Connection is secure' : 'Connection is not secure: what you send can be read on the way' },
@@ -245,6 +278,17 @@ export function createToolbar({ engine, root, onLayout, openDownloads, focusPage
     zoom.hidden = !zoomed;
     if (zoomed) zoom.textContent = `${Math.round(t.zoom * 100)}%`;
     star.hidden = t.kind !== 'page';
+    // The shield: the count blocked on the page, or crossed out when off.
+    const shieldShown = t.kind === 'page' && t.live && t.shield && t.shield !== 'none';
+    shield.hidden = !shieldShown;
+    if (shieldShown) {
+      const on = t.shield === 'on';
+      const count = on ? t.blocked || 0 : 0;
+      shield.className = `br-icon-button br-shield ${on ? 'on' : 'off'}`;
+      shield.replaceChildren(icon(on ? 'shield' : 'shieldOff'), count ? h('span', { class: 'br-shield-count', text: count > 999 ? '999+' : String(count) }) : '');
+      shield.title = on ? blockedText(count) : t.shield === 'off' ? 'Ads and trackers allowed on this site' : 'Ad and tracker blocking is off';
+      shield.setAttribute('aria-label', shield.title);
+    }
     star.classList.toggle('on', !!t.bookmarked);
     star.replaceChildren(icon(t.bookmarked ? 'starFilled' : 'star'));
     star.title = t.bookmarked ? 'Remove bookmark (Ctrl+D)' : 'Bookmark this page (Ctrl+D)';
@@ -276,6 +320,11 @@ export function createToolbar({ engine, root, onLayout, openDownloads, focusPage
       ring.append(circle);
       downloads.append(ring);
     }
+  }
+
+  function blockedText(count) {
+    if (!count) return 'Blocking ads and trackers: none on this page yet';
+    return `${count.toLocaleString()} ${count === 1 ? 'ad or tracker' : 'ads and trackers'} blocked on this page`;
   }
 
   return {

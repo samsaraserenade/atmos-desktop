@@ -108,13 +108,21 @@ export function createFakeAtmos(options = {}) {
 
   // Web pages (first-party, SDK 1.2): refused as Atmos refuses them; for an
   // official extension declaring "web": true, recorded in fake.web.
-  const webPages = new Map(); // tabId -> { url, title, private, zoom, muted, back: [], forward: [] }
-  const webRecord = { calls: [], surface: null, shown: null, options: { openLinks: false, askWhereToSave: true } };
+  const webPages = new Map(); // tabId -> { url, title, private, zoom, muted, back: [], forward: [], blocked }
+  const webRecord = { calls: [], surface: null, shown: null, options: { openLinks: false, askWhereToSave: true, blockAds: true }, adsAllowed: [] };
   const webAllowed = () => extension.tier !== 'third-party' && permissions.web === true;
   const webRefusal = () => refuse(`${self} may not show web pages; that takes "web": true in its permissions, for official extensions`);
+  const siteOfUrl = url => { try { const parsed = new URL(url); return /^https?:$/.test(parsed.protocol) ? parsed.origin : ''; } catch { return ''; } };
+  const shieldOf = page => {
+    const origin = siteOfUrl(page.url);
+    if (!origin) return 'none';
+    if (webRecord.options.blockAds === false) return 'disabled';
+    return webRecord.adsAllowed.includes(origin) ? 'off' : 'on';
+  };
   const webState = (tabId, page) => ({
     tabId, private: page.private, url: page.url, title: page.title, loading: false, canGoBack: page.back.length > 0,
     canGoForward: page.forward.length > 0, audible: false, muted: page.muted, zoom: page.zoom, secure: page.url.startsWith('https:'),
+    blocked: page.blocked || 0, shield: shieldOf(page),
   });
   function fakeWeb() {
     const guard = (name, run) => (...args) => {
@@ -127,6 +135,7 @@ export function createFakeAtmos(options = {}) {
       const current = page(tabId);
       current.url = url;
       current.title = url;
+      current.blocked = 0;
       deliver('web', { type, tabId, url, title: current.title, inPage: false });
       deliver('web', { type: 'state', tabId, ...webState(tabId, current) });
     };
@@ -168,6 +177,16 @@ export function createFakeAtmos(options = {}) {
       copyImage: guard('copyImage', tabId => { page(tabId); }),
       focus: guard('focus', tabId => { page(tabId); }),
       state: guard('state', tabId => webState(tabId, page(tabId))),
+      shield: guard('shield', (tabId, on) => {
+        const current = page(tabId);
+        const origin = siteOfUrl(current.url);
+        if (!origin) throw new Error('This isn’t a web page');
+        webRecord.adsAllowed = webRecord.adsAllowed.filter(item => item !== origin);
+        if (on === false) webRecord.adsAllowed.push(origin);
+        deliver('web', { type: 'state', tabId, ...webState(tabId, current) });
+        return shieldOf(current);
+      }),
+      blocked: guard('blocked', tabId => ({ count: page(tabId).blocked || 0, hosts: [] })),
       setSurface: guard('setSurface', rect => { webRecord.surface = clone(rect); }),
       onEvent(fn) {
         const off = on('web', fn);
@@ -182,6 +201,14 @@ export function createFakeAtmos(options = {}) {
         set: guard('permissions.set', () => []),
       },
       external: { respond: guard('external.respond', () => true) },
+      adblock: {
+        status: guard('adblock.status', () => ({
+          enabled: webRecord.options.blockAds !== false, state: 'ready', error: null, updatedAt: 0, rules: 0, total: 0, lists: [],
+        })),
+        update: guard('adblock.update', () => ({
+          enabled: webRecord.options.blockAds !== false, state: 'ready', error: null, updatedAt: 0, rules: 0, total: 0, lists: [],
+        })),
+      },
       options: guard('options', () => ({ ...webRecord.options })),
       setOptions: guard('setOptions', patch => { Object.assign(webRecord.options, clone(patch)); return { ...webRecord.options }; }),
       clearData: guard('clearData', () => true),
@@ -191,10 +218,17 @@ export function createFakeAtmos(options = {}) {
   const fake = {
     /** The saved state now. */
     get state() { return clone(saved); },
-    /** Web pages (first-party): { pages, surface, shown, calls, options }. */
+    /** Web pages (first-party): { pages, surface, shown, calls, options, adsAllowed }. */
     get web() { return { ...clone(webRecord), pages: Object.fromEntries([...webPages].map(([tabId, value]) => [tabId, webState(tabId, value)])) }; },
     /** What Atmos would tell the extension's frames about its pages (atmos.web.onEvent listeners hear it). */
     webEvent(event) { deliver('web', event); },
+    /** `count` ads and trackers blocked on a tab's page, as Atmos would report it. */
+    webBlocked(tabId, count) {
+      const current = webPages.get(tabId);
+      if (!current) throw new Error(`no tab ${tabId}`);
+      current.blocked = count;
+      deliver('web', { type: 'state', tabId, ...webState(tabId, current) });
+    },
     /** Events emitted: [{ name, payload }]. */
     emitted: [],
     /** atmos.fetch() requests made: Request objects. */

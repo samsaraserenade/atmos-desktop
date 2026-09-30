@@ -10,7 +10,9 @@
  *                   keys); the <webview> attach check for the Atmos page;
  *                   commands on a tab's contents; downloads; site settings
  *                   (web-settings.cjs); pop-up windows; favicons; links the
- *                   rest of Atmos opens, when the user asked for them here
+ *                   rest of Atmos opens, when the user asked for them here;
+ *                   the ad and tracker blocker (web-adblock.cjs) on requests,
+ *                   and the page channel its preload uses
  *   web-layer.js    in the Atmos page: one <webview> per open tab, placed
  *                   where the extension's panel says; relays between the
  *                   extension's frames (atmos.web) and here
@@ -23,6 +25,17 @@ const fs = require('fs');
 const policy = require('./web-policy.cjs');
 const { createWebSettings } = require('./web-settings.cjs');
 
+// Every tab and pop-up gets this preload, and no other: it gives
+// window.chrome Chrome's members (Google's sign-in refuses a Chrome without
+// them) and asks for the ad blocker's styles and scriptlets for its own page,
+// over the two channels below. It holds nothing else.
+const PAGE_PRELOAD = path.join(__dirname, 'web-page-preload.cjs');
+const PAGE_FILTERS = 'atmos-web:page-filters';   // sync: as a page starts
+const PAGE_TOKENS = 'atmos-web:page-tokens';     // the DOM's class names, ids, links
+const TOKEN_MESSAGES = 400;                      // per page load
+// Filter lists download in a session of their own (in memory, nothing in it).
+const LISTS_PARTITION = 'atmos-browser-lists';
+const MAX_LIST_BYTES = 16 * 1024 * 1024;
 const PERMISSION_WAIT_MS = 10 * 60 * 1000;
 const EXTERNAL_WAIT_MS = 2 * 60 * 1000;
 const ICON_DECODE_MS = 5000;
@@ -56,7 +69,7 @@ const DECODE_ICON = `(async (b64, type, size) => {
 })`;
 const EDIT_ACTIONS = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'delete', 'selectAll']);
 
-function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, isAppUrl, userData, isWebExtension = () => false, testOptions = {} }) {
+function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, isAppUrl, userData, isWebExtension = () => false, testOptions = {} }) {
   const settings = createWebSettings({ dir: path.join(userData, 'browser') });
   const openExternal = shell.openExternal.bind(shell); // the system's, before Core routes it (routeShell)
   const ownerFile = path.join(userData, 'browser', 'owner.json');
@@ -70,6 +83,9 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
   const externalRequests = new Map();   // request id -> { guestId, url, timer }
   const downloads = new Map();       // download id -> { item, record }
   const faviconCache = new Map();    // "private|url" -> data URL
+  const blockedByTab = new Map();    // webContents id -> { count, hosts: Map(host -> n), timer }
+  const tokenBudget = new Map();     // webContents id -> page-token messages left for this page
+  let adblock = null;                // web-adblock.cjs, made with the sessions
 
   // The browser's two sessions, made and set up the first time a page
   // attaches (configureSessions), never before: an Atmos without a web
@@ -96,6 +112,8 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
       muted: contents.isAudioMuted(),
       zoom: Math.round(contents.getZoomFactor() * 100) / 100,
       secure: /^https:/i.test(contents.getURL()),
+      blocked: blockedByTab.get(contents.id)?.count || 0,
+      shield: shieldOf(contents),
     };
   }
   const sendState = contents => { if (!contents.isDestroyed()) send(contents.id, 'state', state(contents)); };
@@ -232,6 +250,196 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     send(contents.id, 'favicon', { dataUrl, pageUrl: contents.getURL() });
   }
 
+  // ── Ads and trackers (web-adblock.cjs) ──────────────────────────────────
+  let listsSession = null;
+  function listSession() {
+    if (!listsSession) {
+      listsSession = session.fromPartition(LISTS_PARTITION);
+      listsSession.setUserAgent(policy.chromeUserAgent());
+      listsSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+      listsSession.setPermissionCheckHandler(() => false);
+    }
+    return listsSession;
+  }
+
+  /** A filter list, conditionally when there's a copy: { status, text, etag, lastModified }. */
+  async function fetchList(url, { etag = null, lastModified = null } = {}) {
+    const headers = {};
+    if (etag) headers['If-None-Match'] = etag;
+    if (lastModified) headers['If-Modified-Since'] = lastModified;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const response = await listSession().fetch(url, { headers, signal: controller.signal, cache: 'no-store', credentials: 'omit', redirect: 'follow' });
+      if (response.status === 304) return { status: 304 };
+      const bytes = response.ok ? await readCapped(response, MAX_LIST_BYTES) : null;
+      return {
+        status: bytes ? response.status : (response.ok ? 413 : response.status), text: bytes ? bytes.toString('utf8') : '',
+        etag: response.headers.get('etag'), lastModified: response.headers.get('last-modified'),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** The engine built from the lists in a utility process of its own (a parse takes seconds). */
+  function buildInUtility(payload) {
+    return new Promise((resolve, reject) => {
+      const child = utilityProcess.fork(path.join(__dirname, 'web-adblock-parser.cjs'), [], { serviceName: 'Atmos Browser filter lists', stdio: 'ignore' });
+      let settled = false;
+      const finish = (settle, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { child.kill(); } catch { /* gone */ }
+        settle(value);
+      };
+      const timer = setTimeout(() => finish(reject, new Error('building the filter lists took too long')), 180_000);
+      child.once('message', message => (message?.ok
+        ? finish(resolve, message)
+        : finish(reject, new Error(message?.error || 'the filter lists could not be built'))));
+      child.once('exit', code => finish(reject, new Error(`the filter-list builder stopped (${code})`)));
+      child.once('spawn', () => child.postMessage(payload));
+    });
+  }
+
+  /** The blocker, made the first time the browser needs it (loading its library costs a little). */
+  function adblocker() {
+    if (!adblock) {
+      const { createAdblock } = require('./web-adblock.cjs');
+      adblock = createAdblock({
+        dir: path.join(userData, 'browser', 'adblock'),
+        fetchText: fetchList,
+        buildEngine: buildInUtility,
+        localLists: testOptions.filterLists || null,
+        onChange: status => {
+          send(null, 'adblock', status);
+          for (const id of live.keys()) { const contents = webContents.fromId(id); if (contents) sendState(contents); }
+        },
+      });
+    }
+    return adblock;
+  }
+  const blockAdsOn = () => settings.options().blockAds !== false;
+
+  /** Whether the blocker applies to a page at `pageUrl`: on, and the site's shield up. */
+  function blockingFor(pageUrl, isPrivate) {
+    if (!blockAdsOn() || !adblock?.ready()) return false;
+    const origin = policy.siteOf(pageUrl);
+    return !!origin && !settings.adsAllowed(origin, { private: isPrivate });
+  }
+
+  /** A tab's shield: 'on', 'off' (the site's shield down), 'disabled' (blocking off) or 'none' (not a web page). */
+  function shieldOf(contents) {
+    const origin = policy.siteOf(contents.getURL());
+    if (!origin) return 'none';
+    if (!blockAdsOn()) return 'disabled';
+    return settings.adsAllowed(origin, { private: isPrivateSession(contents.session) }) ? 'off' : 'on';
+  }
+
+  function countBlocked(id, url, isPrivate) {
+    // The total on the new-tab page is kept on disk: private tabs don't add to it.
+    if (!isPrivate) adblock.counted();
+    if (!id) return;
+    let entry = blockedByTab.get(id);
+    if (!entry) { entry = { count: 0, hosts: new Map(), timer: null }; blockedByTab.set(id, entry); }
+    entry.count += 1;
+    const host = hostOf(url);
+    if (host && (entry.hosts.has(host) || entry.hosts.size < 100)) entry.hosts.set(host, (entry.hosts.get(host) || 0) + 1);
+    // The count shows in the tab's state, a few times a second at most.
+    if (!entry.timer) {
+      entry.timer = setTimeout(() => {
+        entry.timer = null;
+        const contents = webContents.fromId(id);
+        if (contents && live.has(id)) sendState(contents);
+      }, 300);
+    }
+  }
+  function resetBlocked(id) {
+    const entry = blockedByTab.get(id);
+    if (entry) clearTimeout(entry.timer);
+    blockedByTab.delete(id);
+    tokenBudget.delete(id);
+  }
+
+  /** The page a request is for, and the document asking (for $third-party and $domain). */
+  function requestContext(details) {
+    const type = details.resourceType || 'other';
+    let frame = null;
+    try { frame = details.frame || null; } catch { frame = null; }
+    const contents = details.webContents || null;
+    // A service worker's requests have neither frame nor contents: its site is its referrer's.
+    const pageUrl = type === 'mainFrame' ? details.url : (frame?.top?.url || contents?.getURL?.() || details.referrer || '');
+    const sourceUrl = type === 'mainFrame' ? details.url
+      : type === 'subFrame' ? (frame?.parent?.url || pageUrl)
+        : (/^https?:/i.test(frame?.url || '') ? frame.url : pageUrl);
+    return { type, pageUrl, sourceUrl: sourceUrl || details.referrer || '' };
+  }
+
+  /** onBeforeRequest: blocked, redirected to a stand-in, or without its tracking parameters. */
+  function blockRequest(details, isPrivate) {
+    if (!blockAdsOn() || !adblock?.ready()) return {};
+    const { type, pageUrl, sourceUrl } = requestContext(details);
+    if (!blockingFor(pageUrl, isPrivate)) return {};
+    const verdict = adblock.match({ url: details.url, type, sourceUrl });
+    if (!verdict) return {};
+    if (verdict.blocked) countBlocked(details.webContentsId, details.url, isPrivate);
+    return verdict.cancel ? { cancel: true } : { redirectURL: verdict.redirectURL };
+  }
+
+  /** onHeadersReceived, documents only: a list's $csp added as a policy of its own (they all apply). */
+  function addListCsp(details, isPrivate) {
+    if (!blockAdsOn() || !adblock?.ready()) return {};
+    const { type, pageUrl, sourceUrl } = requestContext(details);
+    if (!blockingFor(pageUrl, isPrivate)) return {};
+    const extra = adblock.csp({ url: details.url, type, sourceUrl });
+    if (!extra) return {};
+    const headers = { ...details.responseHeaders };
+    const name = Object.keys(headers).find(key => key.toLowerCase() === 'content-security-policy') || 'Content-Security-Policy';
+    headers[name] = [...(headers[name] || []), extra];
+    return { responseHeaders: headers };
+  }
+
+  /** A message on the page channel: the tab's or pop-up's main frame, on a web page, or null. */
+  function pageFrom(event) {
+    const contents = event.sender;
+    if (!contents || contents.isDestroyed() || !isWebSession(contents.session) || !live.has(contents.id)) return null;
+    const frame = event.senderFrame;
+    if (!frame || frame !== contents.mainFrame) return null;
+    const url = frame.url;
+    if (!/^https?:/i.test(url)) return null;
+    return { contents, url, isPrivate: isPrivateSession(contents.session) };
+  }
+
+  // As a page starts, synchronously (its scriptlets run before its own
+  // scripts): the styles and scriptlets for the page's own address, which
+  // Core reads from its frame. Nothing a page sends names another page.
+  ipcMain.on(PAGE_FILTERS, event => {
+    let reply = null;
+    try {
+      const page = pageFrom(event);
+      if (page && blockingFor(page.url, page.isPrivate)) {
+        tokenBudget.set(page.contents.id, TOKEN_MESSAGES);
+        const found = adblock.pageStart(page.url);
+        if (found) reply = { styles: found.styles, scripts: found.scripts, watch: true };
+      }
+    } catch (error) {
+      console.warn('[web] page filters:', error.message);
+      reply = null;
+    } finally {
+      event.returnValue = reply;
+    }
+  });
+  // Then the styles for the class names, ids and links its DOM grows (bounded, and a budget per page).
+  ipcMain.handle(PAGE_TOKENS, (event, tokens) => {
+    const page = pageFrom(event);
+    if (!page || !blockingFor(page.url, page.isPrivate)) return null;
+    const left = tokenBudget.get(page.contents.id) || 0;
+    if (left <= 0) return null;
+    tokenBudget.set(page.contents.id, left - 1);
+    return adblock.pageTokens(page.url, tokens);
+  });
+
   // ── Asking the user (the extension draws the prompt) ─────────────────────
   function askPermission(contents, origin, names, callback) {
     const guestId = contents.id;
@@ -299,7 +507,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
             autoHideMenuBar: true,
             backgroundColor: '#ffffff',
             title: policy.siteOf(details.url) || 'Atmos Browser',
-            webPreferences: { ...policy.WEB_PREFERENCES },
+            webPreferences: { ...policy.WEB_PREFERENCES, preload: PAGE_PRELOAD },
           },
         };
       }
@@ -357,6 +565,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     contents.on('did-start-navigation', details => {
       if (details.isMainFrame && !details.isSameDocument) {
         dropRequestsOf(guestId);
+        resetBlocked(guestId);
         send(guestId, 'progress', { value: 0.15 });
       }
     });
@@ -415,6 +624,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     const gone = live.get(guestId);
     live.delete(guestId);
     dropRequestsOf(guestId);
+    resetBlocked(guestId);
     if (gone?.private && ![...live.values()].some(other => other.private)) void endPrivateSession();
   }
 
@@ -444,6 +654,21 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     for (const ses of [webSessions.ordinary, webSessions.private]) {
       const isPrivate = ses === webSessions.private;
       ses.setUserAgent(userAgent);
+      // Ads and trackers: every request a page makes, and the $csp of documents.
+      ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
+        let verdict = {};
+        try { verdict = blockRequest(details, isPrivate); } catch (error) { console.warn('[web] blocking:', error.message); }
+        callback(verdict);
+      });
+      ses.webRequest.onHeadersReceived({ urls: ['http://*/*', 'https://*/*'], types: ['mainFrame', 'subFrame'] }, (details, callback) => {
+        let verdict = {};
+        try { verdict = addListCsp(details, isPrivate); } catch (error) { console.warn('[web] list CSP:', error.message); }
+        callback(verdict);
+      });
+      const filter = policy.CLIENT_HINTS_FILTER;
+      ses.webRequest.onBeforeSendHeaders({ urls: [...filter.urls], types: [...filter.types] }, (details, callback) => {
+        callback({ requestHeaders: policy.withClientHints(details.requestHeaders) });
+      });
       const settingFor = origin => permissionName => settings.permission(origin, permissionName, { private: isPrivate });
       ses.setPermissionRequestHandler((contents, permission, callback, details) => {
         const origin = policy.siteOf(details?.requestingUrl || contents?.getURL?.() || '');
@@ -465,6 +690,9 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
       ses.on('select-usb-device', (event, _details, callback) => { event.preventDefault(); callback(); });
       ses.on('will-download', (_event, item, contents) => startDownload(item, contents, isPrivate));
     }
+    // The blocker loads what it kept (or fetches its lists) now, off to the side.
+    adblocker();
+    if (blockAdsOn()) void adblock.start();
     return webSessions;
   }
 
@@ -578,6 +806,26 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     },
     focus: contents => contents.focus(),
     state: contents => state(contents),
+    // The site's shield: up (blocking) or down (its ads and trackers allowed).
+    // Kept per site; a private tab's choice stays with the private session.
+    shield(contents, on) {
+      const origin = policy.siteOf(contents.getURL());
+      if (!origin) throw new Error('This isn’t a web page');
+      settings.setPermission(origin, 'ads', on === false ? 'allow' : null, { private: isPrivateSession(contents.session) });
+      for (const id of live.keys()) {
+        const other = webContents.fromId(id);
+        if (other && policy.siteOf(other.getURL()) === origin) sendState(other);
+      }
+      return shieldOf(contents);
+    },
+    // What was blocked on the page: the count, and by site.
+    blocked(contents) {
+      const entry = blockedByTab.get(contents.id);
+      return {
+        count: entry?.count || 0,
+        hosts: [...(entry?.hosts || new Map())].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([host, count]) => ({ host, count })),
+      };
+    },
     capture: async contents => {
       const image = await contents.capturePage();
       const size = image.getSize();
@@ -620,7 +868,26 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
   handle('web:site-settings', () => settings.listPermissions());
   handle('web:site-setting', (origin, name, value) => { settings.setPermission(String(origin), String(name), value === null ? null : String(value)); return settings.listPermissions(); });
   handle('web:options', () => settings.options());
-  handle('web:set-options', patch => settings.setOptions(patch));
+  handle('web:set-options', patch => {
+    const before = blockAdsOn();
+    const options = settings.setOptions(patch);
+    if (blockAdsOn() !== before) {
+      if (webSessions && blockAdsOn()) void adblocker().start();
+      for (const id of live.keys()) { const contents = webContents.fromId(id); if (contents) sendState(contents); }
+    }
+    return options;
+  });
+  // The blocker: its lists, when they were updated, what it has blocked in all.
+  handle('web:adblock', () => {
+    if (blockAdsOn()) void adblocker().start();
+    return { ...adblocker().status(), enabled: blockAdsOn() };
+  });
+  handle('web:adblock-update', async () => {
+    const blocker = adblocker();
+    await blocker.start();
+    await blocker.update({ force: true });
+    return { ...blocker.status(), enabled: blockAdsOn() };
+  });
   handle('web:clear-data', async what => {
     const ses = configureSessions().ordinary;
     if (what?.cookies) await ses.clearStorageData();
@@ -651,7 +918,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     // Its session has the browser's handlers before its page exists.
     configureSessions();
     for (const key of Object.keys(webPreferences)) delete webPreferences[key];
-    Object.assign(webPreferences, verdict.webPreferences);
+    Object.assign(webPreferences, verdict.webPreferences, { preload: PAGE_PRELOAD });
     for (const key of Object.keys(params)) delete params[key];
     Object.assign(params, verdict.params);
   }

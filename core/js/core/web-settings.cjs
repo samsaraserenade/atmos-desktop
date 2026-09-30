@@ -5,8 +5,11 @@
  *
  *   sites.json    the user's choice per site for each prompted permission
  *                 ('allow' or 'block'; Chromium checks some synchronously,
- *                 so the answer has to be here), and each site's zoom
- *   options.json  open links in Atmos Browser; ask where to save downloads
+ *                 so the answer has to be here), the sites where ads and
+ *                 trackers are allowed (their shield is down: "ads":
+ *                 "allow"), and each site's zoom
+ *   options.json  open links in Atmos Browser; ask where to save downloads;
+ *                 block ads and trackers
  *
  * Private tabs' choices and zoom live in memory only and go with the
  * private session (clearPrivate). History, bookmarks and tabs are the
@@ -16,8 +19,12 @@ const path = require('path');
 const { readJson, writeJson } = require('./json-files.cjs');
 const { PROMPTED, siteOf } = require('./web-policy.cjs');
 
-const DEFAULT_OPTIONS = Object.freeze({ openLinks: false, askWhereToSave: true });
+const DEFAULT_OPTIONS = Object.freeze({ openLinks: false, askWhereToSave: true, blockAds: true });
 const VALUES = new Set(['allow', 'block']);
+// Remembered per site: the prompted permissions, and "ads" (only ever
+// 'allow': blocking is the default, so its shield down is the one choice).
+const SITE_SETTINGS = Object.freeze([...PROMPTED, 'ads']);
+const allowedValue = (name, value) => VALUES.has(value) && (name !== 'ads' || value === 'allow');
 
 /** { origin: { name: 'allow'|'block' } } with only known names and http(s) origins. */
 function cleanPermissions(value) {
@@ -26,7 +33,7 @@ function cleanPermissions(value) {
   for (const [origin, names] of Object.entries(value)) {
     if (siteOf(origin) !== origin || !names || typeof names !== 'object') continue;
     for (const [name, setting] of Object.entries(names)) {
-      if (PROMPTED.includes(name) && VALUES.has(setting)) (out[origin] ||= {})[name] = setting;
+      if (SITE_SETTINGS.includes(name) && allowedValue(name, setting)) (out[origin] ||= {})[name] = setting;
     }
   }
   return out;
@@ -66,11 +73,12 @@ function createWebSettings({ dir }) {
     permission(origin, name, { private: isPrivate = false } = {}) {
       return store(isPrivate).permissions[origin]?.[name];
     },
-    /** Remember a choice ('allow' | 'block'), or forget it (null). */
+    /** Remember a choice ('allow' | 'block'; "ads" only 'allow'), or forget it (null). */
     setPermission(origin, name, value, { private: isPrivate = false } = {}) {
       if (siteOf(origin) !== origin) throw new TypeError(`not a site: ${origin}`);
-      if (!PROMPTED.includes(name)) throw new TypeError(`not a site permission: ${name}`);
-      if (value !== null && !VALUES.has(value)) throw new TypeError(`a choice is 'allow', 'block' or null (${value})`);
+      if (!SITE_SETTINGS.includes(name)) throw new TypeError(`not a site permission: ${name}`);
+      if (name === 'ads' && value === 'block') value = null; // blocking is the default
+      if (value !== null && !allowedValue(name, value)) throw new TypeError(`a choice is 'allow', 'block' or null (${value})`);
       const permissions = store(isPrivate).permissions;
       if (value === null) {
         if (permissions[origin]) {
@@ -91,6 +99,14 @@ function createWebSettings({ dir }) {
     revoke(origin, name = null) {
       if (name === null) { delete kept.permissions[origin]; save(); return; }
       this.setPermission(origin, name, null);
+    },
+    /**
+     * Whether the user let a site show ads and trackers (its shield down).
+     * Private tabs follow the ordinary choice unless they made their own.
+     */
+    adsAllowed(origin, { private: isPrivate = false } = {}) {
+      const own = store(isPrivate).permissions[origin]?.ads;
+      return (own ?? (isPrivate ? kept.permissions[origin]?.ads : undefined)) === 'allow';
     },
     zoom(host, { private: isPrivate = false } = {}) {
       return store(isPrivate).zoom[host] ?? (isPrivate ? kept.zoom[host] : undefined) ?? 1;
@@ -118,4 +134,4 @@ function createWebSettings({ dir }) {
   };
 }
 
-module.exports = { createWebSettings, DEFAULT_OPTIONS };
+module.exports = { createWebSettings, DEFAULT_OPTIONS, SITE_SETTINGS };

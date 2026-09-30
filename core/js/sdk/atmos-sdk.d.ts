@@ -370,6 +370,22 @@ export interface WebTabState {
   muted?: boolean;
   zoom?: number;
   secure?: boolean;
+  /** Ads and trackers blocked on the page so far. */
+  blocked?: number;
+  /** The site's shield: 'on' (blocking), 'off' (the site's ads allowed), 'disabled' (blocking off), 'none' (not a web page). */
+  shield?: 'on' | 'off' | 'disabled' | 'none';
+}
+/** @firstParty SDK 1.2: the ad and tracker blocker. */
+export interface WebAdblockStatus {
+  enabled: boolean;
+  state: 'off' | 'loading' | 'ready' | 'error';
+  error: string | null;
+  /** When the engine was last built from the lists (ms), or null. */
+  updatedAt: number | null;
+  rules: number;
+  /** Everything it has blocked, in all. */
+  total: number;
+  lists: { id: string; title: string; changedAt: number | null; checkedAt: number | null }[];
 }
 /** @firstParty SDK 1.2: a rectangle in the frame's own pixels. */
 export interface WebRect { x: number; y: number; width: number; height: number }
@@ -393,7 +409,8 @@ export interface WebDownload {
  * 'state', 'navigated', 'progress', 'favicon', 'open-tab', 'open-link',
  * 'context-menu', 'command', 'find', 'load-failed', 'refused', 'fullscreen',
  * 'crashed', 'permission-request', 'permission-settled', 'external-request',
- * 'download', 'download-removed', 'private-ended'.
+ * 'download', 'download-removed', 'private-ended', 'adblock' (the blocker's
+ * status changed).
  */
 export interface WebEvent {
   type: string;
@@ -427,6 +444,10 @@ export interface WebApi {
   copyImage(tabId: string, x: number, y: number): Promise<void>;
   focus(tabId: string): Promise<void>;
   state(tabId: string): Promise<WebTabState>;
+  /** The site's shield for the tab's page: true blocks its ads and trackers, false allows them (kept per site). */
+  shield(tabId: string, on: boolean): Promise<'on' | 'off' | 'disabled' | 'none'>;
+  /** What was blocked on the tab's page: the count, and by site. */
+  blocked(tabId: string): Promise<{ count: number; hosts: { host: string; count: number }[] }>;
   /** The panel: where the page goes (null: nowhere). `over`: what the frame draws over the page. */
   setSurface(rect: (WebRect & { over?: WebRect[] }) | null): Promise<void>;
   onEvent(fn: (event: WebEvent) => void): Unsubscribe;
@@ -445,8 +466,13 @@ export interface WebApi {
     set(origin: string, name: string, value: 'allow' | 'block' | null): Promise<{ origin: string; name: string; value: 'allow' | 'block' }[]>;
   };
   readonly external: { respond(requestId: string, allow: boolean): Promise<boolean> };
-  options(): Promise<{ openLinks: boolean; askWhereToSave: boolean }>;
-  setOptions(patch: { openLinks?: boolean; askWhereToSave?: boolean }): Promise<{ openLinks: boolean; askWhereToSave: boolean }>;
+  readonly adblock: {
+    status(): Promise<WebAdblockStatus>;
+    /** Check every list now (and build again if one changed). */
+    update(): Promise<WebAdblockStatus>;
+  };
+  options(): Promise<{ openLinks: boolean; askWhereToSave: boolean; blockAds: boolean }>;
+  setOptions(patch: { openLinks?: boolean; askWhereToSave?: boolean; blockAds?: boolean }): Promise<{ openLinks: boolean; askWhereToSave: boolean; blockAds: boolean }>;
   clearData(what: { cookies?: boolean; cache?: boolean; siteSettings?: boolean }): Promise<boolean>;
 }
 /** @firstParty SDK 1.2 */

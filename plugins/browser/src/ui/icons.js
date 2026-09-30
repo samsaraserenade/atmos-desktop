@@ -37,6 +37,8 @@ export const ICONS = {
   bell: svg('<path d="M4 11V7.2a4 4 0 0 1 8 0V11l1 1.2H3z"/><path d="M6.8 13.6a1.3 1.3 0 0 0 2.4 0"/>'),
   clipboard: svg('<rect x="3.5" y="3" width="9" height="11" rx="1.2"/><path d="M6 3V2h4v1"/>'),
   link: svg('<path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.8.8"/><path d="M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.8-.8"/>'),
+  shield: svg('<path d="M8 1.8l5 1.9v3.9c0 3.2-2.1 5.6-5 6.6-2.9-1-5-3.4-5-6.6V3.7z"/><path d="M5.8 8l1.5 1.5 3-3"/>'),
+  shieldOff: svg('<path d="M8 1.8l5 1.9v3.9c0 3.2-2.1 5.6-5 6.6-2.9-1-5-3.4-5-6.6V3.7z"/><path d="M2.5 2.5l11 11"/>'),
 };
 
 /** The icon for a site permission. */
@@ -56,4 +58,5 @@ export const PERMISSION_WORDS = {
 /** Its short name, for Settings. */
 export const PERMISSION_NAMES = {
   camera: 'Camera', microphone: 'Microphone', geolocation: 'Location', notifications: 'Notifications', 'clipboard-read': 'Clipboard',
+  ads: 'Ads and trackers',
 };

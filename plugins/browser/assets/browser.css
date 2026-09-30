@@ -295,3 +295,15 @@ html[data-atmos-surface="settings"] body { font-size: 12px; }
 .br-site-row .br-site-what.allow { color: var(--br-positive); }
 .br-settings-note { padding: 2px 14px 10px; font-size: 10.5px; line-height: 1.55; color: var(--br-ink-4); }
 .br-clear-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px 10px; }
+
+/* The shield: ads and trackers blocked on the page */
+.br-shield { position: relative; width: auto; min-width: 24px; height: 24px; padding: 0 5px; gap: 3px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.br-shield svg { width: 14px; height: 14px; }
+.br-shield.on { color: var(--br-ink-2); }
+.br-shield.off { color: var(--br-ink-4); }
+.br-shield-count {
+  min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px; background: var(--br-fill-3); color: var(--br-ink);
+  font-size: 9.5px; line-height: 14px; font-variant-numeric: tabular-nums; text-align: center;
+}
+.br-ntp-stat { display: flex; align-items: center; justify-content: center; gap: 6px; margin: -6px 0 14px; font-size: 11px; color: var(--br-ink-3); }
+.br-ntp-stat svg { width: 13px; height: 13px; }

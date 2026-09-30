@@ -256,3 +256,48 @@ test('a title that is only the address (a page without one yet, a failed page) i
   assert.ok(!isAddress('Example Domain', 'https://example.com/'));
   assert.ok(!isAddress('example', 'https://example.com/'));
 });
+
+test('ads and trackers: the count and the shield follow the page; the shield is per site and reloads it', async () => {
+  const { engine, atmos, calls } = await start();
+  engine.attachPanel();
+  const [first] = engine.tabs();
+  await engine.navigate(first.id, 'https://news.example/story');
+  await settle();
+  assert.equal(engine.tab(first.id).shield, 'on');
+  assert.equal(engine.tab(first.id).blocked, 0);
+  atmos.fake.webBlocked(first.id, 12);
+  await settle();
+  assert.equal(engine.tab(first.id).blocked, 12);
+  // Down for the site: Core keeps it, the page reloads.
+  const reloads = calls('reload').length;
+  assert.equal(await engine.setShield(first.id, false), 'off');
+  assert.equal(engine.tab(first.id).shield, 'off');
+  assert.deepEqual(atmos.fake.web.adsAllowed, ['https://news.example']);
+  await settle();
+  assert.equal(calls('reload').length, reloads + 1);
+  // Another page on the site: still down; elsewhere: up.
+  await engine.navigate(first.id, 'https://news.example/other');
+  await settle();
+  assert.equal(engine.tab(first.id).shield, 'off');
+  await engine.navigate(first.id, 'https://elsewhere.example/');
+  await settle();
+  assert.equal(engine.tab(first.id).shield, 'on');
+  assert.equal(engine.tab(first.id).blocked, 0, 'a new page starts at nothing blocked');
+  // Blocking off for all.
+  await engine.setOptions({ blockAds: false });
+  await engine.navigate(first.id, 'https://third.example/');
+  await settle();
+  assert.equal(engine.tab(first.id).shield, 'disabled');
+  assert.equal((await engine.adblockStatus()).enabled, false);
+});
+
+test('the blocker\'s status arrives with Core\'s events', async () => {
+  const { engine, atmos } = await start();
+  const heard = [];
+  engine.subscribe(change => { if (change.type === 'adblock') heard.push(change); });
+  atmos.fake.webEvent({ type: 'adblock', tabId: null, state: 'ready', rules: 1234, total: 5 });
+  await settle();
+  assert.equal(engine.adblock().rules, 1234);
+  assert.equal(engine.adblock().total, 5);
+  assert.ok(heard.length >= 1);
+});

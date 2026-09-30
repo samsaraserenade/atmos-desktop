@@ -1,8 +1,8 @@
 /**
  * Atmos Browser's settings (a section of Settings → Appearance, where Atmos
  * shows extensions' settings): the search engine, links from Atmos,
- * downloads, how long tabs stay loaded, what sites may do, and clearing
- * what the browser keeps.
+ * downloads, blocking ads and trackers, how long tabs stay loaded, what sites
+ * may do, and clearing what the browser keeps.
  */
 import atmos from 'atmos-sdk';
 import { engine, follow } from './src/ui/engine-client.js';
@@ -31,7 +31,20 @@ function toggle(checked, onChange, label) {
 }
 
 let sites = [];
+let updating = false;
 const status = h('div', { class: 'atmos-status', hidden: true });
+
+/** "3 hours ago", roughly. */
+function ago(ms) {
+  if (!ms) return 'never';
+  const minutes = Math.round((Date.now() - ms) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
 function say(text, ok = true) {
   status.textContent = text;
   status.className = `atmos-status ${ok ? 'ok' : 'err'}`;
@@ -50,29 +63,52 @@ const render = soon(() => {
   const engines = engine.searchEngines();
   const current = engine.searchEngine();
 
-  const siteRows = sites.length
-    ? sites.map(item => {
-      const remove = h('button', { class: 'atmos-button', text: 'Remove' });
-      remove.addEventListener('click', async () => {
-        sites = await engine.setSitePermission(item.origin, item.name, null).catch(() => sites);
-        render();
-      });
-      return h('div', { class: 'br-site-row' },
-        h('span', { class: 'br-site-origin', text: item.origin, title: item.origin }),
-        h('span', { class: `br-site-what ${item.value}`, text: `${PERMISSION_NAMES[item.name] || item.name}: ${item.value === 'allow' ? 'allowed' : 'blocked'}` }),
-        remove);
-    })
+  const siteRow = item => {
+    const remove = h('button', { class: 'atmos-button', text: item.name === 'ads' ? 'Block again' : 'Remove' });
+    remove.addEventListener('click', async () => {
+      sites = await engine.setSitePermission(item.origin, item.name, null).catch(() => sites);
+      render();
+    });
+    return h('div', { class: 'br-site-row' },
+      h('span', { class: 'br-site-origin', text: item.origin, title: item.origin }),
+      h('span', { class: `br-site-what ${item.value}`, text: `${PERMISSION_NAMES[item.name] || item.name}: ${item.value === 'allow' ? 'allowed' : 'blocked'}` }),
+      remove);
+  };
+  const adSites = sites.filter(item => item.name === 'ads');
+  const permissionSites = sites.filter(item => item.name !== 'ads');
+
+  // Ads and trackers: on or off, the lists, and the sites allowed them.
+  const blocker = engine.adblock();
+  const blocking = options.blockAds !== false;
+  const update = h('button', { class: 'atmos-button', text: updating ? 'Checking…' : 'Update the lists now', disabled: updating || !blocking });
+  update.addEventListener('click', async () => {
+    updating = true;
+    render();
+    try {
+      const after = await engine.updateFilters();
+      say(after.error ? after.error : `Filter lists checked: ${(after.rules || 0).toLocaleString()} rules`, !after.error);
+    } catch (error) { say(error.message, false); }
+    updating = false;
+    render();
+  });
+  const listState = !blocking ? 'Off: pages load everything they ask for.'
+    : !blocker || blocker.state === 'loading' || blocker.state === 'off' ? 'Getting the filter lists ready…'
+      : blocker.state === 'error' && !blocker.updatedAt ? `The filter lists couldn’t be fetched (${blocker.error}). Atmos tries again every hour.`
+        : `Lists updated ${ago(blocker.updatedAt)}, ${(blocker.rules || 0).toLocaleString()} rules. ${(blocker.total || 0).toLocaleString()} blocked so far.${blocker.error ? ` Last check: ${blocker.error}` : ''}`;
+
+  const siteRows = permissionSites.length
+    ? permissionSites.map(siteRow)
     : [h('div', { class: 'br-settings-note', text: 'Sites ask before using your camera, microphone, location, notifications or clipboard. What you answer shows here, to take back.' })];
 
   const clearHistory = h('button', { class: 'atmos-button', text: 'Clear history' });
   const clearCookies = h('button', { class: 'atmos-button', text: 'Clear cookies and site data' });
   const clearCache = h('button', { class: 'atmos-button', text: 'Clear cached files' });
-  const resetSites = h('button', { class: 'atmos-button', text: 'Reset site permissions and zoom' });
+  const resetSites = h('button', { class: 'atmos-button', text: 'Reset site permissions, shields and zoom' });
   clearHistory.addEventListener('click', () => clear({ history: true }, 'History cleared'));
   clearCookies.addEventListener('click', () => clear({ cookies: true }, 'Cookies and site data cleared: sites will ask you to sign in again'));
   clearCache.addEventListener('click', () => clear({ cache: true }, 'Cached files cleared'));
   resetSites.addEventListener('click', async () => {
-    await clear({ siteSettings: true }, 'Site permissions and zoom reset');
+    await clear({ siteSettings: true }, 'Site permissions, shields and zoom reset');
     sites = await engine.sitePermissions().catch(() => []);
     render();
   });
@@ -86,6 +122,14 @@ const render = soon(() => {
         toggle(options.openLinks === true, value => engine.setOptions({ openLinks: value }), 'Open links in Atmos Browser')),
       row('Ask where to save each file', 'Off: downloads go straight to your Downloads folder',
         toggle(options.askWhereToSave !== false, value => engine.setOptions({ askWhereToSave: value }), 'Ask where to save each file'))),
+    h('section', { class: 'atmos-section' },
+      h('div', { class: 'atmos-heading', text: 'Ads and trackers' }),
+      row('Block ads and trackers', 'On every site, unless you turn it off for one with the shield in the address bar',
+        toggle(blocking, value => engine.setOptions({ blockAds: value }), 'Block ads and trackers')),
+      h('div', { class: 'br-settings-note', text: listState }),
+      h('div', { class: 'br-clear-row' }, update),
+      ...(adSites.length ? adSites.map(siteRow) : [h('div', { class: 'br-settings-note', text: 'Sites where you turn blocking off show here.' })]),
+      h('div', { class: 'br-settings-note', text: 'Filter lists: uBlock Origin’s own (ads, privacy, badware risks, unbreak, quick fixes), EasyList and EasyPrivacy, checked for updates every few days. Blocking engine: Ghostery’s. The scripts it runs in pages to get past the harder ads come with Atmos, never from the lists.' })),
     h('section', { class: 'atmos-section' },
       h('div', { class: 'atmos-heading', text: 'Tabs' }),
       row('Put away tabs left for', 'A put-away tab keeps its place and reloads when you go back to it', select([
@@ -103,10 +147,11 @@ const render = soon(() => {
       status),
     h('section', { class: 'atmos-section' },
       h('div', { class: 'atmos-heading', text: 'About' }),
-      h('div', { class: 'br-settings-note', text: 'Pages open in a browser session of their own, apart from Atmos and its extensions; private tabs share another, kept only in memory. Atmos Browser has no Safe Browsing (it doesn’t warn about known dangerous sites), no saved passwords, ad blocking, Chrome extensions or sync, and plays no DRM-protected video (Netflix and the like).' })),
+      h('div', { class: 'br-settings-note', text: 'Pages open in a browser session of their own, apart from Atmos and its extensions; private tabs share another, kept only in memory. Atmos Browser has no Safe Browsing (it doesn’t warn about known dangerous sites), no saved passwords, Chrome extensions or sync, and plays no DRM-protected video (Netflix and the like).' })),
   );
 });
 
-follow(change => { if (change.type === 'settings') render(); });
+follow(change => { if (change.type === 'settings' || change.type === 'adblock') render(); });
 sites = await engine.sitePermissions().catch(() => []);
 render();
+void engine.adblockStatus();

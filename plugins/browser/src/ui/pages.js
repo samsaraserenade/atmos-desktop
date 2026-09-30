@@ -39,11 +39,13 @@ export function renderNewTab(container, tab, { engine, focusAddress }) {
   search.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusAddress(); } });
   const bookmarksEl = h('div', { class: 'br-tiles' });
   const topEl = h('div', { class: 'br-tiles' });
+  const statEl = h('div', { class: 'br-ntp-stat', hidden: true });
   const column = h('div', { class: 'br-internal-column' },
     tab.private ? h('div', { class: 'br-private-note' }, icon('private'), h('div', {},
       h('strong', { text: 'A private tab' }),
       'Pages you open here have a session of their own: sign-ins, cookies and site data here are separate from your other tabs, and nothing is kept once the last private tab closes. No history is kept. Files you download stay.')) : null,
     search,
+    statEl,
     h('div', { class: 'br-heading', text: 'Bookmarks' }), bookmarksEl,
     tab.private ? null : h('div', { class: 'br-heading', text: 'Most visited' }), tab.private ? null : topEl);
   const page = h('div', { class: 'br-internal br-ntp', dataset: { atmosGlass: 'panel' } }, column);
@@ -52,8 +54,14 @@ export function renderNewTab(container, tab, { engine, focusAddress }) {
   let seq = 0;
   async function fill() {
     const mine = ++seq;
-    const [marks, top] = await Promise.all([engine.bookmarks.list(), tab.private ? [] : engine.history.topSites(8)]);
+    const [marks, top, blocker] = await Promise.all([
+      engine.bookmarks.list(), tab.private ? [] : engine.history.topSites(8), engine.adblockStatus().catch(() => null),
+    ]);
     if (mine !== seq) return;
+    // Everything the blocker has stopped, in all (Brave's new tab has it too).
+    const total = blocker?.enabled ? blocker.total || 0 : 0;
+    statEl.hidden = !total;
+    if (total) statEl.replaceChildren(icon('shield'), h('span', { text: `${total.toLocaleString()} ${total === 1 ? 'ad or tracker' : 'ads and trackers'} blocked so far` }));
     const markTiles = [...marks].slice(0, 16).map(item => tile({ ...item, favicon: engine.iconFor(item.url) }, {
       onOpen: open,
       onMenu: (x, y) => atmos.contextMenu.open(x, y, [

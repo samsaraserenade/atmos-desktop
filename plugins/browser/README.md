@@ -2,8 +2,9 @@
 
 A web browser in an Atmos panel: tabs, an address bar that searches or goes
 to an address, bookmarks, history, private tabs, downloads, find in page and
-zoom, with a new-tab page and its settings in Atmos's own look. Official
-(first-party); the panel's key is `[`.
+zoom, ads and trackers blocked (like Brave's shields), with a new-tab page
+and its settings in Atmos's own look. Official (first-party); the panel's
+key is `[`.
 
 ## How it works
 
@@ -47,8 +48,10 @@ the plugin's own origin, `"isolation": "origin"`).
   origin (`atmos-browser`). History keeps 90 days, 20,000 addresses at most.
 - **Cookies, site data, cache**: Core's, in the browser's own session
   (`persist:atmos-browser`), apart from Atmos and from every extension.
-- **Site permissions and per-site zoom**: Core's, in `browser/sites.json` in
-  Atmos's user data.
+- **Site permissions, shields and per-site zoom**: Core's, in
+  `browser/sites.json` in Atmos's user data.
+- **The ad blocker's lists and engine**: Core's, in `browser/adblock/`
+  (about 15 MB), with the total it has blocked (ordinary tabs only).
 - **Private tabs** keep nothing: their session (`atmos-browser-private`) is
   in memory, shared by the private tabs open at a time and cleared when the
   last one closes. No history, no restored tabs, zoom and permission answers
@@ -68,8 +71,12 @@ fullscreen or private aren't put away.
   the address bar is refused. Links to other programs (`mailto:`, `magnet:`…)
   ask first; a few that run programs on Windows (`ms-msdt:`, `search-ms:`…)
   and drive letters (`C:\…`) are refused outright.
-- Pages are sandboxed and context-isolated, with web security on and no
-  preload: nothing in a page can reach Atmos, Node or an extension.
+- Pages are sandboxed and context-isolated, with web security on. Core's
+  one script in them, in a world of its own the page can't reach, gives
+  `window.chrome` the members Chrome's pages have (Google's sign-in checks
+  for them) and asks Core for the ad blocker's styles and scriptlets for
+  that page, which Core answers only for the page's own address: nothing
+  in a page can reach Atmos, Node or an extension.
 - A pop-up asked for with a size (a sign-in window) opens as a small window
   of its own that keeps its opener, its site in its title; other new windows
   become tabs.
@@ -82,7 +89,18 @@ fullscreen or private aren't put away.
 - Downloads get safe file names; a downloaded program or script is never
   opened from Atmos ("Show in folder" only). By default Atmos asks where to
   save each file.
-- The user agent is Chrome's own, with no Electron or Atmos token.
+- The user agent is Chrome's own, with no Electron or Atmos token, and
+  pages see what Chrome's see: `window.chrome`, the client hints sent with
+  a navigation, and no FedCM (which Electron can't show), so sites use a
+  sign-in pop-up for "Sign in with Google".
+- Ads and trackers are blocked by Core, in the main process, with uBlock
+  Origin's own lists, EasyList and EasyPrivacy in Ghostery's engine:
+  requests to ad and tracking servers, the ad slots left behind, and (with
+  small page scripts, scriptlets) the harder cases. The scriptlets and the
+  stand-ins it redirects to ship with Atmos; the lists only choose among
+  them, and lists that aren't uBlock Origin's own can't use the ones that
+  need trust. A page's own address is never blocked, only what it loads.
+  The shield turns it off per site; Settings for all.
 - A site's icon is decoded apart, in a sandboxed page of its own with no
   network, and drawn again by Core: nothing a site sends is decoded in the
   browser's own frames, which can do more than a page can.
@@ -100,7 +118,8 @@ The full account is in `docs/ARCHITECTURE.md` ("Web pages") and
 - **Stricter:** no `file:` pages, links to other programs ask first, every
   permission is off until you allow a site, no browser extensions, no
   saved passwords to steal, and downloaded programs are never opened from
-  Atmos.
+  Atmos. Like Brave (and unlike Chrome), ads and trackers are blocked from
+  the start.
 - **Weaker:** Chromium's security fixes arrive only with an Atmos release
   that brings a newer Electron, and Atmos doesn't update itself, where
   Chrome and Brave do within days. Keep Atmos up to date. There's no Safe
@@ -141,9 +160,14 @@ searches.
 Settings → Appearance → Atmos Browser: the search engine; **Open links in
 Atmos Browser** (off by default: links that Atmos and its extensions would
 send to your default browser open in a new tab here instead); whether to ask
-where to save each file; when tabs are put away; site permissions to take
-back; clearing history, cookies and site data, cached files, or site
-permissions and zoom.
+where to save each file; **blocking ads and trackers** (on by default), when
+its lists were updated, and the sites where it's off; when tabs are put
+away; site permissions to take back; clearing history, cookies and site
+data, cached files, or site permissions, shields and zoom.
+
+The shield in the address bar shows how many ads and trackers were blocked
+on the page, which sites they came from, and turns blocking off (or on
+again) for the site; the page reloads.
 
 ## Not in this version
 
@@ -151,9 +175,6 @@ permissions and zoom.
   are kept). Later, moderate: Electron has no password manager; one would
   need a vault of its own (`safeStorage`, like Matrix Chat's) and careful
   form filling.
-- **Ad blocking.** Later, fairly cheap: a filter list applied to the
-  browser's session (`webRequest`), such as uBlock's lists through an
-  existing Electron ad-blocking library.
 - **Chrome extensions.** Electron supports only part of the extensions API,
   and they would run with a page's reach; not planned.
 - **Sync** between computers.
@@ -179,6 +200,13 @@ permissions and zoom.
   service, so it may be unavailable on some computers.
 - Downloads are listed for the session; the files stay where they were
   saved.
+- The ad blocker hides and scripts the page itself, not the frames inside
+  it (their ads are mostly blocked as requests), and doesn't run uBlock
+  Origin's procedural filters (`:has-text()` and the like). YouTube's ads
+  are an arms race: the lists' fixes arrive every few days, their newer
+  scriptlets only with an Atmos release.
+- On a first start, pages load unblocked for the few seconds the lists take
+  to download and build.
 
 ## Tests
 
@@ -187,5 +215,6 @@ permissions and zoom.
   against the fake Atmos (tabs restored and loaded lazily, private tabs,
   prompts, links from Atmos). Run with the other extensions' tests:
   `npm run test:all`.
-- Core's policy: `core/js/core/web-policy.test.cjs`, `web-settings.test.cjs`.
+- Core's policy: `core/js/core/web-policy.test.cjs`, `web-settings.test.cjs`;
+  the blocker: `web-adblock.test.cjs`, `web-page-preload.test.cjs`.
 - End to end: `scripts/e2e/browser.cjs` (see `scripts/e2e/README.md`).

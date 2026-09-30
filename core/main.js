@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage, utilityProcess } = require('electron');
 const fs   = require('fs');
 const path = require('path');
 
@@ -1601,14 +1601,19 @@ function _isWebExtensionFrame(frame) {
 }
 
 const _web = createWebHost({
-  app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain,
+  app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess,
   isAppUrl: _isAppUrl,
   userData: app.getPath('userData'),
   isWebExtension: _isWebExtension,
-  // Unpackaged, --browser-downloads=<dir> saves downloads there without asking (the end-to-end check).
+  // Unpackaged (the end-to-end check): --browser-downloads=<dir> saves
+  // downloads there without asking; --browser-filter-lists=<dir> takes the
+  // blocker's lists from <dir>/<id>.txt instead of downloading them.
   testOptions: (() => {
-    const flag = app.isPackaged ? null : process.argv.find(arg => arg.startsWith('--browser-downloads='));
-    return flag ? { downloadsDir: path.resolve(flag.slice('--browser-downloads='.length)) } : {};
+    const flag = name => (app.isPackaged ? null : process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)) || null;
+    const options = {};
+    if (flag('browser-downloads')) options.downloadsDir = path.resolve(flag('browser-downloads'));
+    if (flag('browser-filter-lists')) options.filterLists = path.resolve(flag('browser-filter-lists'));
+    return options;
   })(),
 });
 // Every shell.openExternal in the main process (Core's and official main.cjs)

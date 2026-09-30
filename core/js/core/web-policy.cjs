@@ -11,8 +11,13 @@
  *                 (the default session, where atmos-app://, atmos-ext:// and
  *                 atmos-resource:// are served; no handler for them exists
  *                 in these partitions)
- *   preferences   sandboxed, context-isolated, web security on, no Node and
- *                 no preload: a page can't send IPC
+ *   preferences   sandboxed, context-isolated, web security on, no Node;
+ *                 the only preload is Core's web-page-preload.cjs (Chrome's
+ *                 window.chrome members, and the ad blocker's styles and
+ *                 scriptlets over two channels Core answers only for the
+ *                 page's own address): the page's own scripts can't reach it
+ *   identity      Chrome's user agent (no Electron or Atmos token), and
+ *                 the client hints Chromium sends with a navigation
  *   navigation    pages are http(s) and about:blank; frames inside them may
  *                 also be about:srcdoc, data: and blob:; Atmos's own schemes,
  *                 files and the browser's internals never; other schemes
@@ -43,6 +48,11 @@ const WEB_PREFERENCES = Object.freeze({
   plugins: false,
   experimentalFeatures: false,
   enableBlinkFeatures: '',
+  // FedCM (navigator.credentials.get({ identity })) exists in Electron but
+  // has no dialog, so every request fails, and "Sign in with Google" on
+  // other sites stops there. Without it, sites use a sign-in pop-up, as in
+  // Firefox and Safari.
+  disableBlinkFeatures: 'FedCm',
   navigateOnDragDrop: false,
   spellcheck: false,
   safeDialogs: true,
@@ -62,6 +72,42 @@ function chromeUserAgent(platform = process.platform, chromeVersion = process.ve
   const os = platform === 'win32' ? 'Windows NT 10.0; Win64; x64'
     : platform === 'darwin' ? 'Macintosh; Intel Mac OS X 10_15_7' : 'X11; Linux x86_64';
   return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
+/**
+ * The brands a page reads from navigator.userAgentData, in Chromium's
+ * order: "Chromium" and a made-up "GREASE" brand, both chosen from the major
+ * version (Chromium's algorithm, components/embedder_support; Electron adds
+ * no brand of its own). The browser's e2e checks it against a real page.
+ */
+function uaBrands(chromeVersion = process.versions.chrome) {
+  const seed = Number(String(chromeVersion || '').split('.')[0]) || 0;
+  const chars = [' ', '(', ':', '-', '.', '/', ')', ';', '=', '?', '_'];
+  const brands = [];
+  brands[seed % 2] = { brand: `Not${chars[seed % chars.length]}A${chars[(seed + 1) % chars.length]}Brand`, version: ['8', '99', '24'][seed % 3] };
+  brands[(seed + 1) % 2] = { brand: 'Chromium', version: String(seed) };
+  return brands;
+}
+
+// Which requests get the client hints below: navigations to https and
+// localhost. A page's own requests carry them already (Blink adds them),
+// but Electron sends none with a navigation, where Chromium sends these
+// three by default, one of the ways an embedded Chromium shows (Google's
+// sign-in looks for them).
+const CLIENT_HINTS_FILTER = Object.freeze({
+  urls: Object.freeze(['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*']),
+  types: Object.freeze(['mainFrame', 'subFrame']),
+});
+
+/** Request headers with the user agent client hints Chromium sends by default added, when they're missing. */
+function withClientHints(headers = {}, platform = process.platform, chromeVersion = process.versions.chrome) {
+  if (Object.keys(headers).some(name => /^sec-ch-ua$/i.test(name))) return headers;
+  return {
+    ...headers,
+    'sec-ch-ua': uaBrands(chromeVersion).map(({ brand, version }) => `"${brand}";v="${version}"`).join(', '),
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': `"${platform === 'win32' ? 'Windows' : platform === 'darwin' ? 'macOS' : 'Linux'}"`,
+  };
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
@@ -377,7 +423,7 @@ function webviewAttachment({ fromAtmosPage, params }) {
 module.exports = {
   PARTITION, PRIVATE_PARTITION, PARTITIONS, WEB_PREFERENCES, PROMPTED, ZOOM_FACTORS,
   ICON_PARTITION, ICON_SIZE, ICON_MAX_BYTES, imageDataUrlBytes, iconBitmap,
-  chromeUserAgent, navigationPolicy, isLoadable, siteOf,
+  chromeUserAgent, uaBrands, CLIENT_HINTS_FILTER, withClientHints, navigationPolicy, isLoadable, siteOf,
   permissionNames, permissionDecision, permissionCheck,
   downloadName, uniqueName, openableDownload,
   shortcutFor, nextZoom, webviewAttachment,

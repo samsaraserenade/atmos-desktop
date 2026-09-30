@@ -49,6 +49,21 @@ const iso = isolatedEnv('atmos-browser-');
 for (const name of Object.keys(iso.env)) if (/^(https?|all|no)_proxy$/i.test(name)) delete iso.env[name];
 const downloads = path.join(iso.home, 'Downloads');
 fs.mkdirSync(downloads, { recursive: true });
+// The ad blocker's lists, instead of downloading uBlock Origin's and EasyList
+// (--browser-filter-lists): small ones for the test pages' hosts.
+const filterLists = path.join(iso.home, 'filter-lists');
+fs.mkdirSync(filterLists, { recursive: true });
+fs.writeFileSync(path.join(filterLists, 'ublock-filters.txt'), [
+  '! Title: uBlock filters (e2e)', '||ads.test^$third-party', 'alpha.test##+js(set-constant, adblockTest, true)',
+  '*$removeparam=utm_source', 'beta.test##+js(trusted-set-constant, fromUblock, 42)',
+  // X's lines in uBlock Origin's privacy list, in its order: the second
+  // stops the first replacing Function.prototype.toString, which X checks.
+  'alpha.test##+js(prevent-xhr, /never-requested)', 'alpha.test##+js(proxy-apply-config, {"skipToString":true})', '',
+].join('\n'));
+fs.writeFileSync(path.join(filterLists, 'easylist.txt'), [
+  '[Adblock Plus 2.0]', '! Title: EasyList (e2e)', '##.ad-slot', '###banner-ad', 'alpha.test##.sponsored',
+  '||pixel.test^$image', '||tracker.test^$script,redirect=noop.js', 'beta.test##+js(trusted-set-constant, fromEasylist, 42)', '',
+].join('\n'));
 
 /** Real X input: one python process, one command a line. */
 function xinput() {
@@ -94,6 +109,7 @@ async function launch(extra = []) {
     // E2E_ELECTRON_ARGS: more switches, e.g. "--use-angle=swiftshader --enable-unsafe-swiftshader"
     // for GPU compositing (in software) where there's no GPU, instead of Chromium's software compositor.
     args: [repo, '--no-sandbox', '--host-resolver-rules=MAP *.test 127.0.0.1, MAP *.test.example 127.0.0.1', `--browser-downloads=${downloads}`,
+      `--browser-filter-lists=${filterLists}`,
       ...(process.env.E2E_ELECTRON_ARGS || '').split(/\s+/).filter(Boolean), ...extra],
     cwd: repo,
     env: iso.env,
@@ -360,6 +376,7 @@ setTimeout(() => {
     check('a sign-in pop-up is a window of its own, in the browser\'s session, its site in its title', !!popup && popup.browserSession && !popup.defaultSession && popup.title.startsWith(A), popup);
     const message = await until(async () => JSON.parse(await inPage(`${A}/links`, 'JSON.stringify(window.__messages)')).find(item => item.token), { timeout: 5000 });
     check('…with its opener: it answers the page and closes', message?.token === 'secret-token' && message.state === 'xyz', message);
+    check('…and Chrome\'s window.chrome members, as a tab has (Core\'s page preload)', message?.chrome === 'loadTimes,csi,app', message);
     check('…and the page\'s tab stays', (await tabs()).length === before);
 
     // ── Downloads ─────────────────────────────────────────────────────────
@@ -457,10 +474,91 @@ setTimeout(() => {
     check('mixed content stays blocked (an http script on an https page)', mixed.done && !mixed.ran, mixed);
     const ua = await (async () => { await go(`${A}/ua`); return inPage(`${A}/ua`, 'document.getElementById("ua").textContent'); })();
     check('the user agent is Chrome\'s, with no Electron or Atmos token', /Chrome\/\d+/.test(ua) && !/electron|atmos/i.test(ua), ua);
+    // What else tells a page (Google's sign-in, say) it's in Chrome, on a secure page.
+    await go(`${LOCAL}/identity`);
+    const identity = JSON.parse(await inPage(`${LOCAL}/identity`, 'JSON.stringify({ ...window.__identity, hints: JSON.parse(document.getElementById("hints").textContent) })'));
+    check('a page has Chrome\'s window.chrome (loadTimes, csi, app) before its own scripts run', identity.chrome.join(',') === 'loadTimes,csi,app' && identity.app === 'object', identity);
+    check('…and no FedCM, which has no dialog here (sites use a sign-in pop-up)', identity.fedcm === 'undefined', identity.fedcm);
+    const chromeVersion = await app.evaluate(() => process.versions.chrome);
+    const brandsHeader = brands => (brands || []).map(({ brand, version }) => `"${brand}";v="${version}"`).join(', ');
+    check('its navigation carried Chromium\'s client hints, the brands the page reads', identity.hints['sec-ch-ua'] === brandsHeader(identity.brands)
+      && identity.hints['sec-ch-ua'] === brandsHeader(require('../../core/js/core/web-policy.cjs').uaBrands(chromeVersion))
+      && identity.hints['sec-ch-ua-mobile'] === '?0' && /^"(Windows|macOS|Linux)"$/.test(identity.hints['sec-ch-ua-platform'] || ''), identity);
     // That page sets no background: it's the browser's white, not see-through to Atmos's wallpaper.
     await wait(300);
     const plain = pixel(640, 500);
     check('a page that sets no background is white, not see-through to Atmos', near(plain, [255, 255, 255], 8), plain);
+
+    // ── Ads and trackers ──────────────────────────────────────────────────
+    step('ads and trackers');
+    const adblockReady = await until(async () => (await engine(e => e.adblockStatus()))?.state === 'ready', { timeout: 20000 });
+    check('the blocker builds its engine from the lists (a utility process) and is ready', !!adblockReady, await engine(e => e.adblockStatus()));
+    await go(`${A}/ads?utm_source=newsletter&keep=1`);
+    await wait(1200); // the late ad, its class sent, its style back; the count in the state
+    tab = await selected();
+    check('a tracking parameter comes off the address ($removeparam)', tab.url === `${A}/ads?keep=1`, tab.url);
+    const adPage = () => inPage(`${A}/ads`, `JSON.stringify({
+      ad: window.__adLoaded === true, tracker: window.__trackerLoaded === true, first: window.__firstPartyLoaded === true,
+      start: window.__adblockTestAtStart, traces: window.__scriptletTraces, pixel: document.getElementById('pixel').naturalWidth,
+      hidden: Object.fromEntries(['slot', 'sponsored', 'banner-ad', 'content', 'late'].map(id => [id, document.getElementById(id) ? getComputedStyle(document.getElementById(id)).display : 'missing'])),
+    })`).then(JSON.parse);
+    let ads = await adPage();
+    check('an ad server\'s script is blocked (a third party), the site\'s own runs', !ads.ad && ads.first, ads);
+    check('…a tracker\'s script gets a stand-in that does nothing', !ads.tracker, ads);
+    check('…and a tracking pixel is blocked', ads.pixel === 0, ads);
+    check('a scriptlet runs in the page before its own scripts', ads.start === 'true', ads);
+    check('…all of them together, leaving nothing on the page\'s window, the configuring one first (Function.prototype.toString untouched, as X needs)',
+      ads.traces?.globals?.length === 0 && ads.traces.toString === 'function toString() { [native code] }' && ads.traces.open === 'function () { [native code] }', ads.traces);
+    check('the site\'s ad slots are hidden as it starts', ads.hidden.sponsored === 'none', ads.hidden);
+    check('…generic ones by class and id as the page grows (a late one too)', ads.hidden.slot === 'none' && ads.hidden['banner-ad'] === 'none' && ads.hidden.late === 'none', ads.hidden);
+    check('…and nothing else', ads.hidden.content === 'block', ads.hidden);
+    tab = await until(async () => { const t = await selected(); return t.blocked >= 3 ? t : null; }, { timeout: 4000 }) || await selected();
+    check('the shield counts what was blocked on the page', tab.shield === 'on' && tab.blocked >= 3, { shield: tab.shield, blocked: tab.blocked });
+    const shieldText = await (await panel()).evaluate(() => { const button = document.querySelector('.br-shield'); return button && !button.hidden ? button.textContent : null; });
+    check('…in the address bar', shieldText === String(tab.blocked), shieldText);
+    const byHost = await engine((e, id) => e.blocked(id), tab.id);
+    check('…and by site', byHost.hosts.some(item => item.host.startsWith('ads.test')) && byHost.hosts.some(item => item.host.startsWith('pixel.test')), byHost);
+    grab('21-shield');
+    // What runs in a page: uBlock Origin's own list may use a trusted scriptlet; EasyList may not.
+    await go(`${B}/ads`);
+    const trustedRan = await inPage(`${B}/ads`, 'JSON.stringify({ ublock: window.fromUblock ?? null, easylist: window.fromEasylist ?? null })').then(JSON.parse);
+    check('a trusted scriptlet runs from uBlock Origin\'s own list, never from EasyList', trustedRan.ublock === 42 && trustedRan.easylist === null, trustedRan);
+    // A page itself is never blocked.
+    await go(`${pages.http('ads.test')}/solid?title=AdServer&color=7c3aed`);
+    check('a page on a blocked server still opens (only what pages load is blocked)', (await selected()).title === 'AdServer', (await selected()).title);
+    // The shield down for the site, then up.
+    await go(`${A}/ads`);
+    tab = await selected();
+    await engine((e, id) => e.setShield(id, false), tab.id);
+    await until(async () => { const t = await selected(); return t.shield === 'off' && !t.loading; }, { timeout: 8000 });
+    await wait(800);
+    ads = await adPage();
+    tab = await selected();
+    check('the shield down for a site: its ads load, no scriptlet, no hiding, nothing counted', ads.ad && ads.start === 'unset' && ads.hidden.sponsored === 'block' && ads.hidden.slot === 'block' && tab.blocked === 0, { ads, blocked: tab.blocked });
+    const shieldSites = await engine(e => e.sitePermissions());
+    check('…kept as the site\'s setting', shieldSites.some(item => item.origin === A && item.name === 'ads' && item.value === 'allow'), shieldSites);
+    await engine((e, id) => e.setShield(id, true), tab.id);
+    await until(async () => { const t = await selected(); return t.shield === 'on' && !t.loading; }, { timeout: 8000 });
+    await wait(800);
+    ads = await adPage();
+    check('…and up again: blocked again', !ads.ad && ads.hidden.sponsored === 'none', ads);
+    // Off for every site, then on.
+    await engine(e => e.setOptions({ blockAds: false }));
+    await engine(e => e.reload(e.selectedId()));
+    await until(async () => { const t = await selected(); return t.shield === 'disabled' && !t.loading; }, { timeout: 8000 });
+    await wait(600);
+    ads = await adPage();
+    check('blocking off for every site: the ads load, the shield says it\'s off', ads.ad && (await selected()).shield === 'disabled', ads);
+    await engine(e => e.setOptions({ blockAds: true }));
+    // Private tabs are blocked the same (this tab leaves the page first, so it's the private tab's).
+    await go(`${A}/solid?title=Alpha&color=1d4ed8`);
+    await engine((e, url) => e.newTab({ private: true, url }), `${A}/ads`);
+    await until(async () => { const t = await selected(); return t.private && t.live && !t.loading && t.url.startsWith(`${A}/ads`); }, { timeout: 8000 });
+    await wait(800);
+    const privateAds = await inPage(`${A}/ads`, 'JSON.stringify({ ad: window.__adLoaded === true, start: window.__adblockTestAtStart })').then(JSON.parse);
+    check('a private tab is blocked the same', !privateAds.ad && privateAds.start === 'true', privateAds);
+    await engine(e => e.closeTab(e.selectedId()));
+    await wait(300);
 
     // ── Atmos over a page ─────────────────────────────────────────────────
     step('atmos over a page');
@@ -762,7 +860,10 @@ setTimeout(() => {
     check('the selected one is loaded, the others wait', (await selected()).title === 'Kept' && restored.filter(t => t.live).length === 1, restored.map(t => [t.title, t.live]));
     const marks = await engine(e => e.bookmarks.list().then(list => list.map(item => item.title)));
     check('bookmarks and history are kept', marks.includes('Kept') && (await engine(e => e.history.search('Alpha').then(list => list.length))) > 0, marks);
+    await until(async () => (await engine(e => e.adblockStatus()))?.state === 'ready', { timeout: 20000 });
     grab('19-restored');
+    await go(`${A}/ads`);
+    check('the blocker is back after a restart', (await inPage(`${A}/ads`, 'window.__adLoaded === true')) === false);
     await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsMenu());
     await wait(500);
     await page.evaluate(() => [...document.querySelectorAll('#settings-menu button, #settings-menu [role="tab"], #settings-menu .sm-nav-item')].find(el => /Appearance/.test(el.textContent))?.click());

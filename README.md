@@ -191,10 +191,14 @@ A web browser in a panel, in Atmos's own look.
   know from other browsers.
 - **Light on memory:** tabs you haven't used for a while are put away and
   load again when you go back to them; restored tabs load only when opened.
+- **Ads and trackers blocked,** like Brave's shields: uBlock Origin's
+  lists, EasyList and EasyPrivacy, on from the start. A shield in the
+  address bar counts what was blocked and turns blocking off for a site
+  that needs it.
 - **Careful by default:** sites ask before using the camera, microphone,
   location or notifications, and the answer is remembered per site; no
   way past a certificate warning; downloaded programs are never opened from
-  Atmos. It has no ad blocker, saved passwords or Safe Browsing yet.
+  Atmos. It has no saved passwords or Safe Browsing yet.
 
 ### Finance
 

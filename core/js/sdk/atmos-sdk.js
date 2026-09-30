@@ -866,12 +866,14 @@ export async function background({ timeout = 15000 } = {}) {
  *   close(tabId)                    its page goes (the tab is the extension's to keep)
  *   show(tabId | null)              which tab's page the panel shows
  *   navigate/back/forward/reload/stop/zoom/find/stopFind/print/mute/edit/download/copyImage/focus/state
+ *   shield(tabId, on)               the site's shield: block its ads and trackers, or not
+ *   blocked(tabId)                  what was blocked on the tab's page
  *   setSurface({ x, y, width, height, over })   the panel: where the page goes, in
  *                                   this frame's pixels; `over` are rectangles the
  *                                   frame draws over the page (the page shows through
  *                                   the rest). null: nowhere
  *   onEvent(fn)                     what the pages do: { type, tabId, … }
- *   downloads, permissions, external, options, setOptions, clearData
+ *   downloads, permissions, external, adblock, options, setOptions, clearData
  */
 const webAsk = (tabId, name, ...args) => ask('web.do', tabId, name, ...args);
 export const web = Object.freeze({
@@ -899,6 +901,10 @@ export const web = Object.freeze({
   copyImage: (tabId, x, y) => webAsk(tabId, 'copyImage', x, y),
   focus: tabId => webAsk(tabId, 'focus'),
   state: tabId => webAsk(tabId, 'state'),
+  /** The site's shield: true blocks its ads and trackers (the default), false allows them. Kept per site. */
+  shield: (tabId, on) => webAsk(tabId, 'shield', on !== false),
+  /** { count, hosts: [{ host, count }] }: what was blocked on the tab's page. */
+  blocked: tabId => webAsk(tabId, 'blocked'),
   setSurface: rect => ask('web.setSurface', rect),
   onEvent(fn) {
     const off = subscribe('web', fn);
@@ -925,7 +931,13 @@ export const web = Object.freeze({
     /** The user's answer to an { type: 'external-request' } event (a mailto: link, say). */
     respond: (requestId, allow) => ask('web.externalRespond', requestId, allow === true),
   }),
-  /** { openLinks, askWhereToSave } */
+  /** The ad and tracker blocker: { enabled, state, error, updatedAt, rules, total, lists }. */
+  adblock: Object.freeze({
+    status: () => ask('web.adblock'),
+    /** Check every list now; resolves the status after. */
+    update: () => ask('web.adblockUpdate'),
+  }),
+  /** { openLinks, askWhereToSave, blockAds } */
   options: () => ask('web.options'),
   setOptions: patch => ask('web.setOptions', patch),
   /** { cookies, cache, siteSettings }: the ordinary session's (private tabs keep nothing). */

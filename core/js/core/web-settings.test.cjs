@@ -92,13 +92,37 @@ test('zoom per site, with private tabs starting from the ordinary zoom and keepi
   assert.equal(settings.zoom('a.example', { private: true }), 1);
 });
 
-test('options: off and ask by default, only known booleans kept', t => {
+test('options: links off, ask where to save, block ads; only known booleans kept', t => {
   const dir = folder(t);
   const settings = createWebSettings({ dir });
   assert.deepEqual(settings.options(), { ...DEFAULT_OPTIONS });
-  assert.deepEqual(DEFAULT_OPTIONS, { openLinks: false, askWhereToSave: true });
-  settings.setOptions({ openLinks: true, askWhereToSave: 'no', extra: true });
-  assert.deepEqual(createWebSettings({ dir }).options(), { openLinks: true, askWhereToSave: true });
+  assert.deepEqual(DEFAULT_OPTIONS, { openLinks: false, askWhereToSave: true, blockAds: true });
+  settings.setOptions({ openLinks: true, askWhereToSave: 'no', blockAds: false, extra: true });
+  assert.deepEqual(createWebSettings({ dir }).options(), { openLinks: true, askWhereToSave: true, blockAds: false });
+});
+
+test('a site\'s shield: ads allowed per site, kept; private tabs follow unless they choose', t => {
+  const dir = folder(t);
+  const settings = createWebSettings({ dir });
+  assert.equal(settings.adsAllowed('https://a.example'), false);
+  settings.setPermission('https://a.example', 'ads', 'allow');
+  assert.equal(settings.adsAllowed('https://a.example'), true);
+  assert.equal(createWebSettings({ dir }).adsAllowed('https://a.example'), true, 'kept across starts');
+  assert.deepEqual(settings.listPermissions(), [{ origin: 'https://a.example', name: 'ads', value: 'allow' }]);
+  // Blocking is the default: 'block' just forgets the exception.
+  settings.setPermission('https://a.example', 'ads', 'block');
+  assert.equal(settings.adsAllowed('https://a.example'), false);
+  assert.deepEqual(settings.listPermissions(), []);
+  // A private tab sees the ordinary choice; its own stays in memory.
+  settings.setPermission('https://b.example', 'ads', 'allow');
+  assert.equal(settings.adsAllowed('https://b.example', { private: true }), true);
+  settings.setPermission('https://c.example', 'ads', 'allow', { private: true });
+  assert.equal(settings.adsAllowed('https://c.example', { private: true }), true);
+  assert.equal(settings.adsAllowed('https://c.example'), false);
+  assert.equal(createWebSettings({ dir }).adsAllowed('https://c.example', { private: true }), false);
+  settings.clearPrivate();
+  assert.equal(settings.adsAllowed('https://c.example', { private: true }), false);
+  assert.throws(() => settings.setPermission('https://a.example', 'popups', 'allow'), /not a site permission/);
 });
 
 test('clearing site settings', t => {

@@ -116,7 +116,7 @@ const MAX_FETCHES_PER_FRAME = 32;
 let _bridgeSerial = 0;
 
 // Web pages (atmos.web): what a frame may ask Core to do to one of its tabs.
-const WEB_COMMANDS = new Set(['navigate', 'back', 'forward', 'reload', 'stop', 'zoom', 'find', 'stopFind', 'print', 'mute', 'edit', 'download', 'copyImage', 'focus', 'state']);
+const WEB_COMMANDS = new Set(['navigate', 'back', 'forward', 'reload', 'stop', 'zoom', 'find', 'stopFind', 'print', 'mute', 'edit', 'download', 'copyImage', 'focus', 'state', 'shield', 'blocked']);
 const MAX_WEB_URL = 8192;
 const MAX_DOWNLOAD_URL = 2_000_000; // "Save image as…" on a data: image
 const WEB_TAB_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -502,6 +502,7 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       }
       if (name === 'find' && args[0] != null && typeof args[0] !== 'string') throw new BridgeError('web.find(tabId, text)', 'TypeError');
       if (name === 'copyImage' && !(Number.isFinite(args[0]) && Number.isFinite(args[1]))) throw new BridgeError('web.copyImage(tabId, x, y)', 'TypeError');
+      if (name === 'shield' && typeof args[0] !== 'boolean') throw new BridgeError('web.shield(tabId, on): on is true or false', 'TypeError');
       return web.do(tabIdOf(tabId), name, ...args.slice(0, 2));
     },
     'web.list': () => requireWeb().list(),
@@ -543,6 +544,9 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       return requireWeb().setSiteSetting(origin, name, value);
     },
     'web.options': () => requireWeb().options(),
+    // The ad and tracker blocker: its lists and totals, and updating them now.
+    'web.adblock': () => requireWeb().adblock(),
+    'web.adblockUpdate': () => requireWeb().adblockUpdate(),
     'web.setOptions': patch => requireWeb().setOptions(plainObject(patch, 'web options')),
     'web.clearData': what => {
       const { cookies, cache, siteSettings } = plainObject(what, 'what to clear');

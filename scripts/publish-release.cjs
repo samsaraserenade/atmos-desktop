@@ -16,7 +16,10 @@
  *  4. Updates only the files git tracks in the public checkout (its
  *     node_modules, dist and other ignored or untracked files are left alone).
  *  5. Runs Core, services, permission and the released plugins' tests there;
- *     on failure it puts the checkout back as it was.
+ *     on failure it puts the checkout back as it was. If package-lock.json
+ *     changed, `npm ci` runs there first, since the tests need a dependency
+ *     new in this release (its node_modules is left as the new lockfile
+ *     has it, even if the tests then fail).
  *  6. Commits as the public checkout's git user, which must be a GitHub
  *     no-reply address, and installs the pre-push guard
  *     (scripts/pre-push-guard.cjs) with the current list of terms.
@@ -97,6 +100,18 @@ function main() {
       inDest('reset', '-q', '--hard', 'HEAD');
       for (const file of added) fs.rmSync(path.join(dest, file), { force: true });
     };
+    // A dependency new in this release isn't in the checkout's node_modules
+    // yet, and Core's tests load it (@ghostery/adblocker, 0.17.0).
+    const lockChanged = staged.split('\n').some(line => line.split('\t').pop() === 'package-lock.json');
+    if (lockChanged || !fs.existsSync(path.join(dest, 'node_modules'))) {
+      console.log(`publish: npm ci in the public checkout (${lockChanged ? 'package-lock.json changed' : 'no node_modules'})`);
+      const install = spawnSync('npm', ['ci'], { cwd: dest, encoding: 'utf8', maxBuffer: 1 << 26, shell: process.platform === 'win32' });
+      if (install.status !== 0) {
+        console.error(`${install.stdout || ''}${install.stderr || ''}`.trim().split('\n').slice(-20).join('\n'));
+        restore();
+        fail('npm ci failed in the public checkout; its files have been put back as they were (run npm ci there again before a build).');
+      }
+    }
     const tests = [
       ['npm', ['run', '-s', 'test:core']],
       ['npm', ['run', '-s', 'test:services']],

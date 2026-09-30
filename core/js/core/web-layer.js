@@ -425,5 +425,7 @@ export function webFor(extension, iframe, surfaceType) {
     options: () => api.options(),
     setOptions: patch => api.setOptions(patch),
     clearData: what => api.clearData(what),
+    adblock: () => api.adblock(),
+    adblockUpdate: () => api.adblockUpdate(),
   };
 }

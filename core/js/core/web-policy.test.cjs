@@ -13,7 +13,7 @@ test('the browser\'s sessions are its own partitions: one on disk, one in memory
   assert.deepEqual([...policy.PARTITIONS], [policy.PARTITION, policy.PRIVATE_PARTITION]);
 });
 
-test('every page runs sandboxed, isolated, with web security and no Node or preload', () => {
+test('every page runs sandboxed, isolated, with web security, no Node, no preload of its own and no FedCM', () => {
   const prefs = policy.WEB_PREFERENCES;
   assert.ok(Object.isFrozen(prefs));
   assert.equal(prefs.sandbox, true);
@@ -24,9 +24,12 @@ test('every page runs sandboxed, isolated, with web security and no Node or prel
   assert.equal(prefs.nodeIntegrationInWorker, false);
   assert.equal(prefs.allowRunningInsecureContent, false);
   assert.equal(prefs.webviewTag, false);
+  // The host adds Core's own (web-page-preload.cjs); a page never chooses one.
   assert.equal(prefs.preload, undefined);
   // A page with no background of its own isn't see-through to Atmos.
   assert.equal(prefs.transparent, false);
+  // FedCM has no dialog in Electron: off, so sites use a sign-in pop-up.
+  assert.equal(prefs.disableBlinkFeatures, 'FedCm');
 });
 
 test('a Chrome user agent, with no Electron or Atmos in it', () => {
@@ -35,6 +38,24 @@ test('a Chrome user agent, with no Electron or Atmos in it', () => {
   assert.match(policy.chromeUserAgent('darwin', '152.1'), /\(Macintosh; Intel Mac OS X 10_15_7\).*Chrome\/152\.0\.0\.0/);
   assert.match(policy.chromeUserAgent('linux', '152.1'), /\(X11; Linux x86_64\)/);
   for (const ua of [windows, policy.chromeUserAgent()]) assert.doesNotMatch(ua, /electron|atmos/i);
+});
+
+test('the user agent client hints are Chromium\'s, for its major version', () => {
+  // As Chromium 141 and Electron 44 (Chromium 152) report them.
+  assert.deepEqual(policy.uaBrands('141.0.7390.37'), [{ brand: 'Chromium', version: '141' }, { brand: 'Not?A_Brand', version: '8' }]);
+  assert.deepEqual(policy.uaBrands('152.0.7977.130'), [{ brand: 'Not?A_Brand', version: '24' }, { brand: 'Chromium', version: '152' }]);
+  const headers = policy.withClientHints({ 'User-Agent': 'x', Accept: '*/*' }, 'win32', '141.0.7390.37');
+  assert.equal(headers['sec-ch-ua'], '"Chromium";v="141", "Not?A_Brand";v="8"');
+  assert.equal(headers['sec-ch-ua-mobile'], '?0');
+  assert.equal(headers['sec-ch-ua-platform'], '"Windows"');
+  assert.equal(headers['User-Agent'], 'x');
+  assert.equal(policy.withClientHints({}, 'darwin', '152')['sec-ch-ua-platform'], '"macOS"');
+  // Hints already there are left alone.
+  const sent = { 'Sec-CH-UA': '"Chromium";v="152"' };
+  assert.equal(policy.withClientHints(sent, 'win32', '152'), sent);
+  // Navigations to secure origins: a page's own requests have them already.
+  assert.deepEqual([...policy.CLIENT_HINTS_FILTER.types], ['mainFrame', 'subFrame']);
+  assert.ok(policy.CLIENT_HINTS_FILTER.urls.every(url => /^(https:\/\/\*|http:\/\/(localhost|127\.0\.0\.1))\//.test(url)));
 });
 
 test('pages: http, https and about:blank only', () => {

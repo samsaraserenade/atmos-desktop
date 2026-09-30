@@ -53,6 +53,8 @@ function freshRuntime() {
     loading: false, progress: 0,
     canGoBack: false, canGoForward: false,
     audible: false, muted: false, zoom: 1, secure: false,
+    blocked: 0,         // ads and trackers blocked on the page (Core counts)
+    shield: 'none',     // 'on', 'off' (the site's ads allowed), 'disabled', 'none'
     favicon: null,
     error: null,        // { kind: 'certificate' | 'load' | 'crashed', url, code, description }
     notice: null,       // { text } something refused
@@ -75,7 +77,8 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
   const downloads = new Map();       // id -> record (Core's, this session)
   const listeners = new Set();
   let settings = cleanSettings(null, engines);
-  let options = { openLinks: false, askWhereToSave: true };
+  let options = { openLinks: false, askWhereToSave: true, blockAds: true };
+  let adblock = null;                // Core's blocker status, as last heard
   let panels = 0;
   let shown = undefined;             // what Core was last told to show
   let saveTimer = null;
@@ -120,6 +123,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
       live: state.live, loading: state.loading, progress: state.progress,
       canGoBack: state.canGoBack, canGoForward: state.canGoForward,
       audible: state.audible, muted: state.muted, zoom: state.zoom, secure: state.secure,
+      blocked: state.blocked, shield: state.shield,
       favicon: state.favicon || iconFor(tab),
       error: state.error, notice: state.notice, typed: state.typed,
       permission: state.permissions[0] || null, external: state.external,
@@ -356,7 +360,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
   function applyState(tab, page) {
     if (!page) return;
     const state = rt(tab.id);
-    for (const key of ['loading', 'canGoBack', 'canGoForward', 'audible', 'muted', 'zoom', 'secure']) {
+    for (const key of ['loading', 'canGoBack', 'canGoForward', 'audible', 'muted', 'zoom', 'secure', 'blocked', 'shield']) {
       if (page[key] !== undefined) state[key] = page[key];
     }
     if (isPageUrl(page.url) && page.url !== tab.url) {
@@ -534,6 +538,12 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         emit({ type: 'tab', id: target });
         return;
       }
+      case 'adblock': {
+        const { type: _type, tabId: _tab, ...status } = event;
+        adblock = { ...(adblock || {}), ...status };
+        emit({ type: 'adblock' });
+        return;
+      }
       case 'private-ended': {
         list.forgetPrivate();
         privateIcons.clear();
@@ -683,7 +693,30 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
   async function setOptions(patch) {
     options = await web.setOptions(patch);
     emit({ type: 'settings' });
+    if (patch && 'blockAds' in patch) void adblockStatus();
     return { ...options };
+  }
+
+  // ── Ads and trackers (Core blocks; this shows it) ─────────────────────────
+  async function adblockStatus() {
+    adblock = await web.adblock.status().catch(() => adblock);
+    emit({ type: 'adblock' });
+    return adblock ? { ...adblock } : null;
+  }
+  async function updateFilters() {
+    adblock = await web.adblock.update();
+    emit({ type: 'adblock' });
+    return { ...adblock };
+  }
+  /** The site's shield for a tab's page: up (blocking) or down; the page reloads to show it. */
+  async function setShield(id, on) {
+    const tab = list.get(id);
+    if (!tab || !rt(id).live) return null;
+    const shield = await web.shield(id, on !== false);
+    rt(id).shield = shield;
+    emit({ type: 'tab', id });
+    reload(id);
+    return shield;
   }
 
   async function clearData({ history: clearHistory = false, cookies = false, cache = false, siteSettings = false } = {}) {
@@ -710,6 +743,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     for (const page of await web.list().catch(() => [])) await web.close(page.tabId).catch(() => {});
     web.onEvent(onEvent);
     options = await web.options().catch(() => options);
+    void adblockStatus();
     for (const record of await web.downloads.list().catch(() => [])) downloads.set(record.id, record);
     await Promise.all([history.load(), bookmarks.load()]);
     history.subscribe(() => emit({ type: 'history' }));
@@ -769,6 +803,9 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     },
     // Settings
     setSettings, setOptions,
+    adblock: () => (adblock ? { ...adblock } : null),
+    adblockStatus, updateFilters, setShield,
+    blocked: id => onLive(id, () => web.blocked(id)),
     sitePermissions: () => web.permissions.list(),
     setSitePermission: (origin, name, value) => web.permissions.set(origin, name, value),
     clearData,

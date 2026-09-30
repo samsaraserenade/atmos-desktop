@@ -82,6 +82,8 @@ contextBridge.exposeInMainWorld('atmosCore', {
     options:           ()                  => ipcRenderer.invoke('web:options'),
     setOptions:        patch               => ipcRenderer.invoke('web:set-options', patch),
     clearData:         what                => ipcRenderer.invoke('web:clear-data', what),
+    adblock:           ()                  => ipcRenderer.invoke('web:adblock'),
+    adblockUpdate:     ()                  => ipcRenderer.invoke('web:adblock-update'),
     listenForLinks:    ref                 => ipcRenderer.invoke('web:link-listener', ref),
     openExternal:      url                 => ipcRenderer.invoke('web:open-external', url),
     onEvent: callback => {

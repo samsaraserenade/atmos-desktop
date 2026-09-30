@@ -21,7 +21,20 @@ Parts with a licence of their own:
                              over a network must offer them its source.
 
 Third-party code included in Atmos (vendored libraries and npm packages)
-keeps its own licence; see those files and their packages.
+keeps its own licence; see those files and their packages. In particular:
+
+  @ghostery/adblocker        Atmos Browser's filter engine (an npm package,
+                             with its dependencies): Mozilla Public License
+                             2.0, Ghostery GmbH.
+  core/js/core/web-adblock-resources.json
+                             uBlock Origin's scriptlets and redirect
+                             resources (as converted by Ghostery's
+                             adblocker project): GNU General Public License,
+                             version 3, Raymond Hill and contributors.
+
+The filter lists Atmos Browser downloads at run time (uBlock Origin's own,
+GPLv3; EasyList and EasyPrivacy, GPLv3 or CC BY-SA 3.0) aren't part of
+Atmos.
 
 Releases of Atmos published before this change (up to and including
 version 0.10.0) were licensed under the Apache License, Version 2.0, and
