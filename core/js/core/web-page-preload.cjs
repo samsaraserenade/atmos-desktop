@@ -15,9 +15,11 @@
  *
  * 2. The ad blocker (web-adblock.cjs): it asks Core, synchronously as the
  *    page starts, for the styles that hide this page's ad slots and the
- *    lists' scriptlets for it, and runs those in the page's world before its
- *    own scripts; then, as the page grows, it sends the class names, ids and
- *    links it finds and inserts the styles that come back. Two channels,
+ *    lists' scriptlets for it, and runs those before the page's own scripts
+ *    (in the page's world, or in a world of their own for the ones uBlock
+ *    Origin runs in its content script's); then, as the page grows, it sends
+ *    the class names, ids and links it finds and inserts the styles that
+ *    come back. Two channels,
  *    `atmos-web:page-filters` and `atmos-web:page-tokens`: Core answers only
  *    for this page's own address (it reads it from the frame), only for
  *    Atmos Browser's pages, and within a budget per page. Nothing else goes
@@ -155,17 +157,33 @@ function watchTokens({ ipcRenderer, webFrame, doc = document, Observer = Mutatio
 }
 
 /** Ask for the blocker's styles and scriptlets for this page, and apply them. */
-function applyFilters({ ipcRenderer, webFrame }) {
+// The world the blocker's "isolated" scriptlets run in (uBlock Origin runs
+// them in its content script's): the page's DOM, out of reach of the page's
+// scripts. Its own policy, so the page's Trusted Types rules (YouTube's) don't
+// stop it rewriting an inline script, as they don't stop an extension's
+// content script. Not Electron's own world (999), where this preload runs.
+const SCRIPTLET_WORLD = 1024;
+const SCRIPTLET_WORLD_CSP = "script-src 'self'; object-src 'none'";
+
+function applyFilters({ ipcRenderer, webFrame }, where = globalThis.location) {
   let start = null;
   try { start = ipcRenderer.sendSync('atmos-web:page-filters'); } catch { return; }
   if (!start || typeof start !== 'object') return;
   if (typeof start.styles === 'string' && start.styles) {
     try { webFrame.insertCSS(start.styles, { cssOrigin: 'user' }); } catch { /* no document to style */ }
   }
-  // In the page's world, now: before the page's own scripts.
+  // Now, before the page's own scripts: in the page's world, then in the
+  // scriptlets' own.
   for (const script of Array.isArray(start.scripts) ? start.scripts : []) {
     if (typeof script !== 'string' || !script) continue;
     try { void webFrame.executeJavaScript(script).catch(() => {}); } catch { /* a scriptlet that fails fails alone */ }
+  }
+  const isolated = (Array.isArray(start.isolated) ? start.isolated : []).filter(script => typeof script === 'string' && script);
+  if (isolated.length) {
+    try {
+      webFrame.setIsolatedWorldInfo(SCRIPTLET_WORLD, { securityOrigin: where.origin, csp: SCRIPTLET_WORLD_CSP, name: 'Atmos Browser: ad blocker' });
+      void webFrame.executeJavaScriptInIsolatedWorld(SCRIPTLET_WORLD, isolated.map(code => ({ code }))).catch(() => {});
+    } catch { /* the page goes on without them */ }
   }
   if (start.watch === true) watchTokens({ ipcRenderer, webFrame });
 }
@@ -184,4 +202,4 @@ if (electron && typeof electron === 'object') {
   }
 }
 
-if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens };
+if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens, applyFilters, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP };

@@ -184,6 +184,23 @@ function handler(requests, info) {
           <script>setTimeout(() => { const late = document.createElement('div'); late.id = 'late'; late.className = 'ad-slot'; late.textContent = 'a late ad'; document.body.append(late); }, 250);</script>`));
         return;
       }
+      // A page that fights blockers in its own world, as YouTube does: it
+      // enforces Trusted Types (YouTube's header) and, in its first script,
+      // makes every textContent rewrite do nothing. uBlock Origin's
+      // scriptlets that rewrite an inline script (browser.cjs lists one for
+      // it) run in a world of their own, out of its reach.
+      case '/tt':
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "require-trusted-types-for 'script'" });
+        res.end(doc('Trusted Types', `<p>Trusted Types.</p>
+          <script>(() => {
+            // (With Trusted Types, a script element has a textContent of its own.)
+            for (const proto of [Node.prototype, HTMLScriptElement.prototype]) {
+              const own = Object.getOwnPropertyDescriptor(proto, 'textContent');
+              if (own) Object.defineProperty(proto, 'textContent', { configurable: true, enumerable: own.enumerable, get() { return own.get.call(this); }, set() {} });
+            }
+          })();</script>
+          <script>window.__rewritten = 'no'; window.__tt = { rewritten: window.__rewritten, pct: window.__pct ?? null };</script>`));
+        return;
       case '/ad.js':
         res.writeHead(200, { 'Content-Type': 'text/javascript' });
         res.end('window.__adLoaded = true;');

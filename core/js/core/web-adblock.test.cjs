@@ -193,15 +193,19 @@ test('pages: the styles and scriptlets for a page\'s own address, then the style
   await adblock.start();
   const alpha = adblock.pageStart('https://alpha.test/article');
   assert.match(alpha.styles, /\.sponsored/);
-  // uBlock Origin's own list may use a trusted scriptlet; a page's
-  // scriptlets come as one script.
+  // uBlock Origin's own list may use a trusted scriptlet. A page's
+  // scriptlets come as one script for the page's world and one for their
+  // own (uBlock Origin's "isolated" ones: setting a cookie, here).
   assert.equal(alpha.scripts.length, 1);
   assert.match(alpha.scripts[0], /adblockTest/);
-  assert.match(alpha.scripts[0], /trustedcookie/);
+  assert.doesNotMatch(alpha.scripts[0], /trustedcookie/);
+  assert.equal(alpha.isolated.length, 1);
+  assert.match(alpha.isolated[0], /trustedcookie/);
   // EasyList's trusted scriptlets went; its ordinary one stays.
   const beta = adblock.pageStart('https://beta.test/');
   assert.equal(beta.scripts.length, 1);
   assert.match(beta.scripts[0], /fromEasylist/);
+  assert.deepEqual(beta.isolated, []);
   assert.doesNotMatch(beta.scripts.join(''), /fromeasylist|"p"/);
   assert.equal(adblock.pageStart('about:blank'), null);
   assert.equal(adblock.pageStart('atmos-app://local/index.html'), null);
@@ -254,15 +258,17 @@ test('a page\'s scriptlets run as uBlock Origin runs them: one scope, helpers sh
     'x.test##+js(prevent-xhr, /i/api/1.1/graphql/viewer_context.json)',
     'y.test##+js(prevent-xhr, /tracking)',
     'z.test##+js(set-constant, zed, 1)', 'z.test##+js(noop.js)',
-  ].join('\n')}\n` };
+  ].join('\n')}\n`,
+  // EasyPrivacy repeats one of them under another name (as it does for X): it runs once.
+  easyprivacy: `${LIST_TEXT.easyprivacy}x.test##+js(no-xhr-if, /i/api/1.1/flow/viewer.json)\n` };
   const { adblock } = blocker(t, { fetchText: cdn({ texts }).fetchText });
   await adblock.start();
 
   const x = adblock.pageStart('https://x.test/i/flow/login').scripts;
   assert.equal(x.length, 1, 'one script');
   assert.equal((x[0].match(/function proxyApplyFn\(/g) || []).length, 1, 'each helper once');
-  const calls = [...x[0].matchAll(/^try \{ \(function ([A-Za-z]+)\(/gm)].map(found => found[1]);
-  assert.deepEqual(calls, ['proxyApplyConfig', 'preventXhr', 'preventXhr', 'preventXhr'], 'the configuring one first');
+  const calls = [...x[0].matchAll(/^try \{ ([A-Za-z]+)\(/gm)].map(found => found[1]);
+  assert.deepEqual(calls, ['proxyApplyConfig', 'preventXhr', 'preventXhr', 'preventXhr'], 'the configuring one first, each call once');
   const page = pageContext();
   page.run(x[0]);
   assert.equal(page.openReplaced(), true, 'the scriptlets ran');
@@ -282,6 +288,38 @@ test('a page\'s scriptlets run as uBlock Origin runs them: one scope, helpers sh
   assert.match(z[0], /^\(function \(\) \{\nvar scriptletGlobals = \{\};/);
   assert.match(z[0], /zed/);
   assert.doesNotMatch(z[1], /scriptletGlobals/);
+});
+
+test('scriptlet arguments arrive as the list wrote them, as JSON: no "%" decoding, no way out of an argument', async t => {
+  // The engine's own scripts put arguments in template literals and decoded
+  // them as if URI-encoded: "50%" threw, "a%20b" became "a b", a backtick
+  // broke the script, and a list could end an argument and run its own code.
+  const texts = {
+    ...LIST_TEXT,
+    'ublock-filters': `${LIST_TEXT['ublock-filters']}${[
+      'w.test##+js(trusted-set-constant, pctA, json:"50%")',
+      'w.test##+js(trusted-set-constant, pctB, json:"a%20b")',
+      'w.test##+js(trusted-set-constant, tick, json:"a`b")',
+      'w.test##+js(broken)',
+    ].join('\n')}\n`,
+    // EasyList, which may not run trusted scriptlets: an argument written to
+    // get out (with the engine's own scripts this ran `injected=1` in the page).
+    easylist: `${LIST_TEXT.easylist}w.test##+js(set-constant, escaped, x\`\\,injected=1\\,\`)\n`,
+  };
+  // A scriptlet whose code doesn't parse (none of uBlock Origin's), so a call is left out.
+  const resources = JSON.parse(RESOURCES);
+  resources.scriptlets.push({ name: 'broken.js', aliases: [], body: 'function broken(){ return ( }', dependencies: [] });
+  const warnings = [];
+  const { adblock } = blocker(t, { fetchText: cdn({ texts }).fetchText, readResources: () => JSON.stringify(resources), log: { warn: (...args) => warnings.push(args.join(' ')) } });
+  await adblock.start();
+  const [script] = adblock.pageStart('https://w.test/').scripts;
+  assert.doesNotMatch(script, /decodeURIComponent/);
+  assert.doesNotMatch(script, /function broken/, 'the call that doesn\'t parse is left out');
+  assert.ok(warnings.some(line => /1 scriptlet\(s\) left out/.test(line)), warnings.join('\n'));
+  const page = pageContext();
+  page.run(script);
+  assert.deepEqual([page.run('globalThis.pctA'), page.run('globalThis.pctB'), page.run('globalThis.tick')], ['50%', 'a%20b', 'a`b']);
+  assert.equal(page.run('typeof injected'), 'undefined', 'an argument is only ever a string');
 });
 
 test('a restart loads the kept engine: no download, no parse', async t => {
@@ -354,7 +392,7 @@ test('an error page or an oversized answer isn\'t taken for a list', async t => 
   assert.match(adblock.status().error, /EasyList: not a filter list/);
 });
 
-test('a new library or resources: the engine is built again from the kept lists, offline', async t => {
+test('a new library, resources or parser: the engine is built again from the kept lists, offline', async t => {
   const dir = folder(t);
   await blocker(t, { dir }).adblock.start();
   const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
@@ -366,6 +404,39 @@ test('a new library or resources: the engine is built again from the kept lists,
   assert.equal(builds.length, 1);
   assert.ok(adblock.ready());
   assert.equal(adblock.status().state, 'ready');
+  // A parser that leaves out other filters than the one that built it.
+  const again = blocker(t, { dir, fetchText, readParser: () => '// another parser' });
+  await again.adblock.start();
+  assert.equal(again.builds.length, 1, 'built again for a new parser');
+  const same = blocker(t, { dir, fetchText, readParser: () => '// another parser' });
+  await same.adblock.start();
+  assert.equal(same.builds.length, 0, 'and kept after that');
+});
+
+test('what a list can\'t put in a page: styles that leave their rule or load an address, $csp reports, text too long', async t => {
+  const long = 'a'.repeat(70 * 1024);
+  const texts = {
+    ...LIST_TEXT,
+    easylist: `${LIST_TEXT.easylist}${[
+      'v.test##.fine-ad',
+      'v.test##body:style(color:red } input[value$="x"] { background:url(https://evil.test/x) } z {color:red)',
+      'v.test##a{background:url(https://evil.test/s)}b',
+      '##html:style(background:u\\72l(https://evil.test/e))',
+      'v.test##x; @import url(https://evil.test/i.css)',
+      'v.test##.ok-style:style(height: 0 !important; margin: 0 !important)',
+      `v.test##div[data-x="${long}"]`,
+    ].join('\n')}\n`,
+    easyprivacy: `${LIST_TEXT.easyprivacy}${['*$csp=report-uri https://evil.test/r', '||v.test^$csp=img-src \'none\'', '||v.test^$csp=script-src \'none\'; report-to evil'].join('\n')}\n`,
+  };
+  const { adblock } = blocker(t, { fetchText: cdn({ texts }).fetchText });
+  await adblock.start();
+  const page = adblock.pageStart('https://v.test/');
+  assert.match(page.styles, /\.fine-ad/);
+  assert.match(page.styles, /\.ok-style/);
+  assert.doesNotMatch(page.styles, /evil\.test|@import|url\(|u\\72l|data-x/);
+  const policy = adblock.csp({ url: 'https://v.test/', type: 'mainFrame', sourceUrl: 'https://v.test/' });
+  assert.equal(policy, "img-src 'none'");
+  assert.equal(adblock.csp({ url: 'https://w.test/', type: 'mainFrame', sourceUrl: 'https://w.test/' }), undefined);
 });
 
 test('test lists from a folder (the end-to-end check): nothing downloaded or kept', async t => {

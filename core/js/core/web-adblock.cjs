@@ -31,6 +31,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const vm = require('vm');
 const { readJson, writeJson } = require('./json-files.cjs');
 
 const FORMAT = 1;
@@ -38,6 +39,9 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const MAX_LIST_BYTES = 16 * 1024 * 1024;
 const RESOURCES_FILE = path.join(__dirname, 'web-adblock-resources.json');
+// What the engine keeps depends on the parser too (which filters it leaves
+// out): a new parser builds it again, as a new library or resources do.
+const PARSER_FILE = path.join(__dirname, 'web-adblock-parser.cjs');
 
 // uBlock Origin's defaults for ads, trackers and breakage (its assets.json),
 // less Peter Lowe's and URLhaus. "trusted": uBlock Origin's own, which may
@@ -64,12 +68,16 @@ const MIRRORS = Object.freeze([
 // syntax; styles go in as user style sheets.
 const ENV = Object.freeze([['env_chromium', true], ['ext_ublock', true], ['cap_user_stylesheet', true]]);
 
-// How Ghostery's engine starts each scriptlet it gives out (its
-// assembleScript): this line, the scriptlet's helpers, then the call.
-const SCRIPTLET_GLOBALS = "if (typeof scriptletGlobals === 'undefined') { var scriptletGlobals = {}; }";
+// A page's scriptlets are put together here, as uBlock Origin does, from the
+// filters the engine matches, not taken as the engine assembles them: it
+// puts each argument in a template literal and decodes it as if it were
+// URI-encoded, so an argument with a "%" threw or changed, one with a
+// backtick broke its script, and a list could end an argument early and run
+// code of its own in pages. Here each call's arguments are JSON.
 // Scriptlets uBlock Origin runs before the others (its "priority"): one that
 // configures another's helpers has to come first.
 const SCRIPTLET_PRIORITY = new Map([['proxy-apply-config.js', 100]]);
+const MAX_COMPILED = 500;     // bundles whose syntax was checked, remembered
 
 /** How long a list keeps: its "! Expires:" line, from a day to a week (4 days if it doesn't say). */
 function expiresMs(text) {
@@ -121,6 +129,7 @@ function cleanMeta(value) {
       builtAt: Number.isFinite(engine.builtAt) ? engine.builtAt : 0,
       library: typeof engine.library === 'string' ? engine.library : '',
       resources: typeof engine.resources === 'string' ? engine.resources : '',
+      parser: typeof engine.parser === 'string' ? engine.parser : '',
       lists: Array.isArray(engine.lists) ? engine.lists.filter(id => typeof id === 'string') : [],
       rules: {
         network: Number.isFinite(engine.rules?.network) ? engine.rules.network : 0,
@@ -140,7 +149,7 @@ function cleanMeta(value) {
  */
 function createAdblock({
   dir, fetchText, buildEngine, localLists = null, now = () => Date.now(), timers = globalThis, log = console,
-  readResources = () => fs.readFileSync(RESOURCES_FILE, 'utf8'), onChange = () => {},
+  readResources = () => fs.readFileSync(RESOURCES_FILE, 'utf8'), readParser = () => fs.readFileSync(PARSER_FILE, 'utf8'), onChange = () => {},
 }) {
   const { FiltersEngine, Request } = require('@ghostery/adblocker');
   const LIBRARY = require('@ghostery/adblocker/package.json').version;
@@ -157,15 +166,19 @@ function createAdblock({
   let totalTimer = null;
   let resourcesText = null;
   let resourcesHash = null;
-  let scriptletIndex = null;    // the engine's scriptlets by function name (bundleScripts)
+  let parserHash = null;
+  const compiled = new Map();   // a bundle's hash → whether it parses
 
   function resources() {
     if (resourcesText === null) {
       resourcesText = readResources();
       resourcesHash = crypto.createHash('sha256').update(resourcesText).digest('hex');
+      parserHash = crypto.createHash('sha256').update(readParser()).digest('hex');
     }
     return resourcesText;
   }
+  /** Whether the kept engine was built by this library, resources and parser. */
+  const current = () => meta.engine.library === LIBRARY && meta.engine.resources === resourcesHash && meta.engine.parser === parserHash;
   function setPhase(next, error = lastError) {
     phase = next;
     lastError = error;
@@ -177,7 +190,6 @@ function createAdblock({
   function install(next) {
     next.updateEnv(new Map(ENV));
     engine = next;
-    scriptletIndex = null;
   }
 
   async function writeAtomic(file, data) {
@@ -194,7 +206,7 @@ function createAdblock({
   async function loadKept() {
     resources();
     if (localLists) return false;
-    if (meta.engine.library !== LIBRARY || meta.engine.resources !== resourcesHash) return false;
+    if (!current()) return false;
     const buffer = await fs.promises.readFile(engineFile).catch(() => null);
     if (!buffer) return false;
     try {
@@ -264,8 +276,8 @@ function createAdblock({
         }
       }
       // Built again when a list changed, or when there's no engine for this
-      // library and these resources (the lists kept on disk will do).
-      const stale = !engine || meta.engine.library !== LIBRARY || meta.engine.resources !== resourcesHash;
+      // library, resources and parser (the lists kept on disk will do).
+      const stale = !engine || !current();
       if (changed || stale) {
         for (const list of LISTS) {
           if (texts.has(list.id)) continue;
@@ -279,7 +291,7 @@ function createAdblock({
         const buffer = built.buffer instanceof Uint8Array ? built.buffer : new Uint8Array(built.buffer);
         install(FiltersEngine.deserialize(buffer));
         meta.engine = {
-          builtAt: now(), library: LIBRARY, resources: resourcesHash, lists: lists.map(list => list.id),
+          builtAt: now(), library: LIBRARY, resources: resourcesHash, parser: parserHash, lists: lists.map(list => list.id),
           rules: { network: built.rules?.network || 0, cosmetic: built.rules?.cosmetic || 0 },
         };
         if (!localLists) await writeAtomic(engineFile, buffer);
@@ -338,10 +350,16 @@ function createAdblock({
     return null;
   }
 
-  /** $csp directives the lists add to a document's response, or undefined. */
+  /**
+   * $csp directives the lists add to a document's response, or undefined:
+   * only a clean header value that sends no reports (the parser leaves such
+   * filters out; this is the last check before a header).
+   */
   function csp({ url, type, sourceUrl }) {
     if (!engine || !/^https?:/i.test(url)) return undefined;
-    return engine.getCSPDirectives(Request.fromRawDetails({ url, type, sourceUrl: sourceUrl || url })) || undefined;
+    const value = engine.getCSPDirectives(Request.fromRawDetails({ url, type, sourceUrl: sourceUrl || url }));
+    if (typeof value !== 'string' || !value || !/^[\x20-\x7e]*$/.test(value) || /(?:^|[;,])\s*report-(?:to|uri)\b/i.test(value)) return undefined;
+    return value;
   }
 
   function where(url) {
@@ -349,89 +367,126 @@ function createAdblock({
     return { hostname: request.hostname || '', domain: request.domain || '' };
   }
 
+  /** Whether `code` parses as a script (only parsed, never run), remembered by its hash. */
+  function parses(code) {
+    const key = crypto.createHash('sha1').update(code).digest('hex');
+    let ok = compiled.get(key);
+    if (ok === undefined) {
+      try { new vm.Script(code); ok = true; } catch { ok = false; }
+      if (compiled.size >= MAX_COMPILED) compiled.delete(compiled.keys().next().value);
+      compiled.set(key, ok);
+    }
+    return ok;
+  }
+
   /**
-   * The engine's scriptlets by the name of their function: each one's
-   * helpers, the text a script of it starts with (the engine's
-   * assembleScript: SCRIPTLET_GLOBALS, the helpers, then the call) and where
-   * uBlock Origin puts it in the order.
+   * One scriptlet filter as { world, priority, definitions, call }: the
+   * scriptlet's function and its helpers (defined once per script) and a
+   * call with its arguments as JSON; { other } for a resource the engine
+   * gives as it is; null for a name it doesn't know.
    */
-  function scriptlets() {
-    if (scriptletIndex) return scriptletIndex;
-    scriptletIndex = new Map();
+  function scriptletCall(filter) {
+    const parsed = filter.parseScript();
+    if (!parsed || typeof parsed.name !== 'string') return null;
     const resources = engine.resources;
-    for (const scriptlet of resources?.scriptlets || []) {
-      if (typeof scriptlet?.body !== 'string' || scriptlet.name.endsWith('.fn')) continue;
-      const name = /^function\s+([A-Za-z0-9_$]+)\s*\(/.exec(scriptlet.body)?.[1];
-      if (!name || scriptletIndex.has(name)) continue;
-      let helpers;
-      try { helpers = resources.getScriptletDependencies(scriptlet); } catch { continue; }
-      scriptletIndex.set(name, {
-        helpers,
-        prefix: `${[SCRIPTLET_GLOBALS, ...helpers].join(';')};`,
-        call: `(${scriptlet.body})(`,
-        priority: SCRIPTLET_PRIORITY.get(scriptlet.name) || 0,
-      });
+    const scriptlet = resources.getRawScriptlet(parsed.name);
+    if (!scriptlet) {
+      const other = resources.getSurrogate(parsed.name);
+      return typeof other === 'string' && other ? { other } : null;
     }
-    return scriptletIndex;
-  }
-
-  /** One of the engine's scripts as { helpers, call, priority }, or null if it isn't laid out as expected. */
-  function splitScript(script) {
-    if (typeof script !== 'string' || !script.startsWith(`${SCRIPTLET_GLOBALS};`)) return null;
-    const index = scriptlets();
-    // The call comes last, after the helpers: try each place it could start.
-    for (let at = script.indexOf(';(function '); at !== -1; at = script.indexOf(';(function ', at + 1)) {
-      const name = /^\(function ([A-Za-z0-9_$]+)\s*\(/.exec(script.slice(at + 1, at + 200))?.[1];
-      const known = name && index.get(name);
-      if (known && known.prefix.length === at + 1 && script.startsWith(known.prefix) && script.startsWith(known.call, at + 1)) {
-        return { helpers: known.helpers, call: script.slice(at + 1), priority: known.priority };
-      }
-    }
-    return null;
+    const args = JSON.stringify(parsed.args.map(String)).slice(1, -1);
+    const named = /^function\s+([A-Za-z0-9_$]+)\s*\(/.exec(scriptlet.body)?.[1];
+    return {
+      world: scriptlet.executionWorld === 'ISOLATED' ? 'isolated' : 'main',
+      priority: SCRIPTLET_PRIORITY.get(scriptlet.name) || 0,
+      definitions: [...resources.getScriptletDependencies(scriptlet), ...(named ? [scriptlet.body] : [])],
+      call: named ? `${named}(${args});` : `(${scriptlet.body})(${args});`,
+    };
   }
 
   /**
-   * A page's scriptlets as one script, run the way uBlock Origin runs them:
-   * in a scope of their own, so nothing is left on the page's window (a
-   * page could spot helpers left there, and trip over them); each helper
-   * defined once and shared, so a scriptlet that configures another's
-   * helpers works (proxy-apply-config: X shows "Some privacy related
-   * extensions may cause issues" when it doesn't); the configuring ones
-   * first, then in uBlock Origin's order; each call in a try of its own.
-   * A script not laid out as expected (a resource the engine gives as it
-   * is) runs after it, on its own, as before.
+   * One world's calls as one script: a scope of their own, each definition
+   * once, each call once (lists repeat each other), uBlock Origin's order,
+   * each call in its own try.
    */
-  function bundleScripts(scripts) {
-    const helpers = new Set();
-    const calls = [];
-    const others = [];
-    for (const script of scripts) {
-      const parts = splitScript(script);
-      if (!parts) { if (typeof script === 'string' && script) others.push(script); continue; }
-      for (const helper of parts.helpers) helpers.add(helper);
-      calls.push(parts);
-    }
-    if (!calls.length) return others;
-    calls.sort((a, b) => (b.priority - a.priority) || a.call.localeCompare(b.call));
-    return [[
+  function bundle(calls) {
+    const definitions = new Set();
+    for (const call of calls) for (const definition of call.definitions) definitions.add(definition);
+    const unique = [...new Map(calls.map(call => [call.call, call])).values()];
+    const sorted = unique.sort((a, b) => (b.priority - a.priority) || a.call.localeCompare(b.call));
+    return [
       '(function () {',
       'var scriptletGlobals = {};',
-      ...helpers,
-      ...calls.map(({ call }) => `try { ${call} } catch (e) {}`),
+      ...definitions,
+      ...sorted.map(({ call }) => `try { ${call} } catch (e) {}`),
       '})();',
-    ].join('\n'), ...others];
+    ].join('\n');
   }
 
-  /** As a page starts: { styles, scripts } for its address, or null (nothing to do). */
+  /**
+   * A page's scriptlets as uBlock Origin runs them: { main, isolated }, a
+   * script for each world (uBlock Origin's "isolated" ones touch the page's
+   * DOM from a world of their own, out of the page's reach). In a scope of
+   * their own, so nothing is left on the page's window (a page could spot
+   * helpers left there, and trip over them); each helper defined once and
+   * shared, so a scriptlet that configures another's helpers works
+   * (proxy-apply-config: X shows "Some privacy related extensions may cause
+   * issues" when it doesn't); the configuring ones first, then in uBlock
+   * Origin's order; each call in a try of its own, its arguments as JSON. A
+   * call that doesn't parse is left out rather than the whole script. A
+   * resource the engine gives as it is runs after, on its own.
+   */
+  function bundleScripts(filters) {
+    const byWorld = { main: [], isolated: [] };
+    const others = [];
+    for (const filter of filters) {
+      let call = null;
+      try { call = scriptletCall(filter); } catch { call = null; }
+      if (!call) continue;
+      if (call.other) others.push(call.other);
+      else byWorld[call.world].push(call);
+    }
+    const out = { main: [], isolated: [] };
+    for (const world of ['main', 'isolated']) {
+      let calls = byWorld[world];
+      if (!calls.length) continue;
+      let code = bundle(calls);
+      if (!parses(code)) {
+        calls = calls.filter(call => parses(bundle([call])));
+        log.warn?.(`[adblock] ${byWorld[world].length - calls.length} scriptlet(s) left out: they don't parse`);
+        code = calls.length ? bundle(calls) : '';
+        if (!code || !parses(code)) continue;
+      }
+      out[world].push(code);
+    }
+    out.main.push(...others);
+    return out;
+  }
+
+  /**
+   * As a page starts: { styles, scripts, isolated } for its address (the
+   * scripts for the page's world, and for a world of their own), or null
+   * (nothing to do). The engine's own getCosmeticsFilters, but with the
+   * scriptlets put together here.
+   */
   function pageStart(url) {
-    if (!engine || !/^https?:/i.test(url)) return null;
+    if (!engine || !/^https?:/i.test(url) || engine.config?.loadCosmeticFilters === false) return null;
     const { hostname, domain } = where(url);
-    const result = engine.getCosmeticsFilters({
+    const { matches, allowGenericHides } = engine.matchCosmeticFilters({
       url, hostname, domain,
-      getBaseRules: true, getInjectionRules: true, getExtendedRules: false, getRulesFromHostname: true, getRulesFromDOM: false,
+      getRulesFromDOM: false, getRulesFromHostname: true, getInjectionRules: true, getExtendedRules: false,
     });
-    if (result.active === false) return null;
-    return { styles: result.styles || '', scripts: bundleScripts(Array.isArray(result.scripts) ? result.scripts : []) };
+    const filters = matches.filter(({ filter, exception }) => filter !== undefined && exception === undefined).map(({ filter }) => filter);
+    // Each part on its own: one that fails leaves the other.
+    let styles = '';
+    try {
+      styles = engine.injectCosmeticFilters(filters.filter(filter => !filter.isScriptInject()), {
+        url, injectScriptlets: false, injectExtended: false, allowGenericHides, getBaseRules: true,
+      }).styles || '';
+    } catch (error) { log.warn?.('[adblock] a page\'s styles:', error.message); }
+    let scripts = { main: [], isolated: [] };
+    try { scripts = bundleScripts(filters.filter(filter => filter.isScriptInject())); } catch (error) { log.warn?.('[adblock] a page\'s scriptlets:', error.message); }
+    return { styles, scripts: scripts.main, isolated: scripts.isolated };
   }
 
   /** The styles for what the page's DOM holds (class names, ids, links): { styles }, or null. */
@@ -479,4 +534,4 @@ function createAdblock({
   };
 }
 
-module.exports = { createAdblock, LISTS, MIRRORS, expiresMs, looksLikeList, cleanTokens, cleanMeta, RESOURCES_FILE };
+module.exports = { createAdblock, LISTS, MIRRORS, expiresMs, looksLikeList, cleanTokens, cleanMeta, RESOURCES_FILE, PARSER_FILE };

@@ -14,6 +14,13 @@
  * engine's own parser (continued lines joined as the engine joins them), and
  * a scriptlet is judged by the name the engine would resolve it to, so no
  * spelling of a filter can reach a trusted scriptlet from another list.
+ *
+ * Whatever its list, a filter is left out when what it would put in a page
+ * isn't plainly what it says: styles that could leave their rule or load an
+ * address (the engine's own check needs a page to run in, and this has
+ * none), a $csp that would send reports (pages' addresses to someone else)
+ * or isn't a clean header value, and text too long for the engine to read
+ * back (one such filter stopped every page's styles and scriptlets).
  */
 const crypto = require('crypto');
 
@@ -53,10 +60,56 @@ function needsTrustPredicate(resources) {
   };
 }
 
+const MAX_FILTER_TEXT = 64 * 1024;   // the engine reads back ~125 K characters at most; the longest real filter is ~17 K
+// uBlock Origin's own rule: a report would carry the page's address elsewhere.
+const CSP_REPORTS = /(?:^|[;,])\s*report-(?:to|uri)\b/i;
+const HEADER_TEXT = /^[\x20-\x7e]*$/;
+// In a :style(): what could load an address, reach outside its declarations
+// or hide in an escape or comment (uBlock Origin refuses these too).
+const STYLE_UNSAFE = /url\s*\(|image(?:-set)?\s*\(|cross-fade\s*\(|element\s*\(|expression\s*\(|-moz-binding|behavior\s*:|@|\\|\/\*|\/\/|[{}<>]/i;
+
+/**
+ * Whether a selector stays a selector: no rule or at-rule of its own (an
+ * unquoted "{", "}", ";" or "@", a comment, an unclosed string), no control
+ * characters. Escaped characters are part of names (".sm\:hidden").
+ */
+function selectorIsSafe(selector) {
+  if (typeof selector !== 'string' || !selector || /[\x00-\x1f\x7f]/.test(selector)) return false;
+  let quote = null;
+  for (let i = 0; i < selector.length; i += 1) {
+    const c = selector[i];
+    if (c === '\\') { i += 1; continue; }
+    if (quote) { if (c === quote) quote = null; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '{' || c === '}' || c === ';' || c === '@') return false;
+    if (c === '/' && selector[i + 1] === '*') return false;
+  }
+  return quote === null;
+}
+
+const tooLong = value => typeof value === 'string' && value.length > MAX_FILTER_TEXT;
+
+/** Whether a cosmetic filter only does what it says (scriptlets are judged by needsTrustPredicate). */
+function cosmeticIsSafe(filter) {
+  if (tooLong(filter.selector) || tooLong(filter.style)) return false;
+  if (filter.isScriptInject() || filter.isUnhide()) return true;
+  if (!selectorIsSafe(filter.getSelector())) return false;
+  return !filter.hasCustomStyle() || (!STYLE_UNSAFE.test(filter.getStyle()) && !/[\x00-\x1f\x7f]/.test(filter.getStyle()));
+}
+
+/** Whether a network filter only does what it says. */
+function networkIsSafe(filter) {
+  if (tooLong(filter.filter) || tooLong(filter.hostname) || tooLong(filter.optionValue)) return false;
+  if (!filter.isCSP()) return true;
+  const csp = filter.csp;
+  return csp === undefined || (HEADER_TEXT.test(csp) && !CSP_REPORTS.test(csp));
+}
+
 /**
  * The engine for `lists` ([{ id, text, trusted }]) with `resources` (the
  * JSON text of uBlock Origin's scriptlets and redirect resources, Atmos's
- * own copy): { buffer, rules: { network, cosmetic } }.
+ * own copy): { buffer, rules: { network, cosmetic, left } } (left: filters
+ * left out as unsafe).
  */
 function buildEngine({ lists, resources }) {
   const { FiltersEngine, Config, Resources, Preprocessor, parseFilters } = require('@ghostery/adblocker');
@@ -66,11 +119,18 @@ function buildEngine({ lists, resources }) {
   const networkFilters = [];
   const cosmeticFilters = [];
   const conditions = new Map(); // one preprocessor per "!#if" condition, across lists
+  let left = 0;                  // filters left out as unsafe
   for (const list of lists || []) {
     if (!list || typeof list.text !== 'string') continue;
     const parsed = parseFilters(list.text, config);
-    networkFilters.push(...parsed.networkFilters);
-    cosmeticFilters.push(...(list.trusted === true ? parsed.cosmeticFilters : parsed.cosmeticFilters.filter(filter => !needsTrust(filter))));
+    for (const filter of parsed.networkFilters) {
+      if (networkIsSafe(filter)) networkFilters.push(filter);
+      else left += 1;
+    }
+    for (const filter of parsed.cosmeticFilters) {
+      if (!cosmeticIsSafe(filter)) left += 1;
+      else if (list.trusted === true || !needsTrust(filter)) cosmeticFilters.push(filter);
+    }
     for (const preprocessor of parsed.preprocessors) {
       const kept = conditions.get(preprocessor.condition);
       if (kept) for (const id of preprocessor.filterIDs) kept.filterIDs.add(id);
@@ -79,7 +139,7 @@ function buildEngine({ lists, resources }) {
   }
   const engine = new FiltersEngine({ networkFilters, cosmeticFilters, preprocessors: [...conditions.values()], config });
   engine.updateResources(resources, checksum);
-  return { buffer: engine.serialize(), rules: { network: networkFilters.length, cosmetic: cosmeticFilters.length } };
+  return { buffer: engine.serialize(), rules: { network: networkFilters.length, cosmetic: cosmeticFilters.length, left } };
 }
 
 // As a utility process: one build, then it ends.
@@ -94,4 +154,4 @@ if (process.parentPort) {
   });
 }
 
-module.exports = { buildEngine, needsTrustPredicate, ENGINE_CONFIG };
+module.exports = { buildEngine, needsTrustPredicate, selectorIsSafe, cosmeticIsSafe, networkIsSafe, ENGINE_CONFIG, MAX_FILTER_TEXT };

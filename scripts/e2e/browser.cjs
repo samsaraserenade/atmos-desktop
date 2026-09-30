@@ -58,7 +58,10 @@ fs.writeFileSync(path.join(filterLists, 'ublock-filters.txt'), [
   '*$removeparam=utm_source', 'beta.test##+js(trusted-set-constant, fromUblock, 42)',
   // X's lines in uBlock Origin's privacy list, in its order: the second
   // stops the first replacing Function.prototype.toString, which X checks.
-  'alpha.test##+js(prevent-xhr, /never-requested)', 'alpha.test##+js(proxy-apply-config, {"skipToString":true})', '',
+  'alpha.test##+js(prevent-xhr, /never-requested)', 'alpha.test##+js(proxy-apply-config, {"skipToString":true})',
+  // One uBlock Origin runs in its content script's world (rewriting an
+  // inline script, as its YouTube rules do), and an argument with a "%".
+  "alpha.test##+js(trusted-rpnt, script, /__rewritten = 'no'/, __rewritten = 'yes')", 'alpha.test##+js(trusted-set-constant, __pct, json:"50%")', '',
 ].join('\n'));
 fs.writeFileSync(path.join(filterLists, 'easylist.txt'), [
   '[Adblock Plus 2.0]', '! Title: EasyList (e2e)', '##.ad-slot', '###banner-ad', 'alpha.test##.sponsored',
@@ -519,6 +522,11 @@ setTimeout(() => {
     const byHost = await engine((e, id) => e.blocked(id), tab.id);
     check('…and by site', byHost.hosts.some(item => item.host.startsWith('ads.test')) && byHost.hosts.some(item => item.host.startsWith('pixel.test')), byHost);
     grab('21-shield');
+    // A scriptlet uBlock Origin runs in its content script's world, on a page that fights blockers in its own (as YouTube does).
+    await go(`${A}/tt`);
+    const strict = await inPage(`${A}/tt`, 'JSON.stringify(window.__tt)').then(JSON.parse);
+    check('an "isolated" scriptlet runs in a world of its own, before the page\'s scripts and out of their reach (it rewrites an inline script, as uBlock Origin\'s YouTube rules do, on a page that breaks rewriting in its own world)', strict.rewritten === 'yes', strict);
+    check('…and scriptlet arguments arrive as the list wrote them (a "%" too)', strict.pct === '50%', strict);
     // What runs in a page: uBlock Origin's own list may use a trusted scriptlet; EasyList may not.
     await go(`${B}/ads`);
     const trustedRan = await inPage(`${B}/ads`, 'JSON.stringify({ ublock: window.fromUblock ?? null, easylist: window.fromEasylist ?? null })').then(JSON.parse);

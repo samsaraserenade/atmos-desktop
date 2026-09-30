@@ -36,6 +36,7 @@ const TOKEN_MESSAGES = 400;                      // per page load
 // Filter lists download in a session of their own (in memory, nothing in it).
 const LISTS_PARTITION = 'atmos-browser-lists';
 const MAX_LIST_BYTES = 16 * 1024 * 1024;
+const STORAGE_FLUSH_MS = 30_000;                 // pages' storage and cookies to disk
 const PERMISSION_WAIT_MS = 10 * 60 * 1000;
 const EXTERNAL_WAIT_MS = 2 * 60 * 1000;
 const ICON_DECODE_MS = 5000;
@@ -421,7 +422,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
       if (page && blockingFor(page.url, page.isPrivate)) {
         tokenBudget.set(page.contents.id, TOKEN_MESSAGES);
         const found = adblock.pageStart(page.url);
-        if (found) reply = { styles: found.styles, scripts: found.scripts, watch: true };
+        if (found) reply = { styles: found.styles, scripts: found.scripts, isolated: found.isolated, watch: true };
       }
     } catch (error) {
       console.warn('[web] page filters:', error.message);
@@ -693,6 +694,17 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     // The blocker loads what it kept (or fetches its lists) now, off to the side.
     adblocker();
     if (blockAdsOn()) void adblock.start();
+    // Pages' storage and cookies go to disk every 30 s and as Atmos quits.
+    // Chromium writes them in batches (a busy site's localStorage a minute
+    // or more behind), so a hard stop (Ctrl+C on `npm start`, a crash) lost
+    // what a site had just saved: Discord's sign-in token, say.
+    const flush = () => {
+      const ordinary = webSessions.ordinary;
+      try { ordinary.flushStorageData(); } catch { /* nothing to write */ }
+      ordinary.cookies.flushStore().catch(() => {});
+    };
+    setInterval(flush, STORAGE_FLUSH_MS).unref?.();
+    app.on('before-quit', flush);
     return webSessions;
   }
 

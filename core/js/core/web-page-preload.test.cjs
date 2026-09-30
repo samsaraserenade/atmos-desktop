@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { installChromeMembers } = require('./web-page-preload.cjs');
+const { installChromeMembers, applyFilters, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP } = require('./web-page-preload.cjs');
 
 // The page's location, which loadTimes() reads (Node has none).
 globalThis.location = { protocol: 'https:' };
@@ -79,4 +79,28 @@ test('members a page already has are left as they are', () => {
   const chrome = page({ chrome: own }).chrome;
   assert.equal(chrome, own);
   assert.deepEqual(Object.keys(chrome), ['app']);
+});
+
+test('the blocker\'s scriptlets: the page\'s world, then a world of their own with a policy of its own', () => {
+  const calls = [];
+  const webFrame = {
+    insertCSS: (css, options) => calls.push(['css', css, options.cssOrigin]),
+    executeJavaScript: code => { calls.push(['main', code]); return Promise.resolve(); },
+    setIsolatedWorldInfo: (id, info) => calls.push(['world', id, info]),
+    executeJavaScriptInIsolatedWorld: (id, sources) => { calls.push(['isolated', id, sources]); return Promise.resolve(); },
+  };
+  const ipcRenderer = { sendSync: () => ({ styles: '.ad{display:none}', scripts: ['main();'], isolated: ['isolated();', 7, ''], watch: false }) };
+  applyFilters({ ipcRenderer, webFrame }, { origin: 'https://www.youtube.com' });
+  assert.deepEqual(calls, [
+    ['css', '.ad{display:none}', 'user'],
+    ['main', 'main();'],
+    ['world', SCRIPTLET_WORLD, { securityOrigin: 'https://www.youtube.com', csp: SCRIPTLET_WORLD_CSP, name: 'Atmos Browser: ad blocker' }],
+    ['isolated', SCRIPTLET_WORLD, [{ code: 'isolated();' }]],
+  ]);
+  assert.notEqual(SCRIPTLET_WORLD, 999, 'not Electron\'s own world, where the preload runs');
+  assert.doesNotMatch(SCRIPTLET_WORLD_CSP, /trusted-types/, 'the page\'s Trusted Types rules don\'t follow it there');
+  // Nothing for the world when a page has no isolated scriptlets.
+  calls.length = 0;
+  applyFilters({ ipcRenderer: { sendSync: () => ({ styles: '', scripts: [], isolated: [] }) }, webFrame }, { origin: 'https://a.test' });
+  assert.deepEqual(calls, []);
 });
