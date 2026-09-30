@@ -52,7 +52,7 @@ function toResponse(answer) {
  * @param {object} [options]
  * @param {{ id?: string, kind?: string, tier?: string, version?: string }} [options.extension]
  * @param {{ type?: string, id?: string, presentation?: string|null }} [options.surface]
- * @param {object} [options.permissions]    as in extension.json: network, invokes, browser
+ * @param {object} [options.permissions]    as in extension.json: network, invokes, browser (and web, first-party)
  * @param {object} [options.state]          the saved state to start from
  * @param {object|Function} [options.fetch] URL → answer, or (request) => answer
  * @param {object|null} [options.location]  { lat, lon, label, mode } or null
@@ -106,9 +106,95 @@ export function createFakeAtmos(options = {}) {
   const timers = new Set();
   const controller = new AbortController();
 
+  // Web pages (first-party, SDK 1.2): refused as Atmos refuses them; for an
+  // official extension declaring "web": true, recorded in fake.web.
+  const webPages = new Map(); // tabId -> { url, title, private, zoom, muted, back: [], forward: [] }
+  const webRecord = { calls: [], surface: null, shown: null, options: { openLinks: false, askWhereToSave: true } };
+  const webAllowed = () => extension.tier !== 'third-party' && permissions.web === true;
+  const webRefusal = () => refuse(`${self} may not show web pages; that takes "web": true in its permissions, for official extensions`);
+  const webState = (tabId, page) => ({
+    tabId, private: page.private, url: page.url, title: page.title, loading: false, canGoBack: page.back.length > 0,
+    canGoForward: page.forward.length > 0, audible: false, muted: page.muted, zoom: page.zoom, secure: page.url.startsWith('https:'),
+  });
+  function fakeWeb() {
+    const guard = (name, run) => (...args) => {
+      if (!webAllowed()) return webRefusal();
+      webRecord.calls.push({ name, args: clone(args) });
+      return Promise.resolve().then(() => run(...args));
+    };
+    const page = tabId => { if (!webPages.has(tabId)) throw new Error(`no tab ${tabId}`); return webPages.get(tabId); };
+    const go = (tabId, url, type = 'navigated') => {
+      const current = page(tabId);
+      current.url = url;
+      current.title = url;
+      deliver('web', { type, tabId, url, title: current.title, inPage: false });
+      deliver('web', { type: 'state', tabId, ...webState(tabId, current) });
+    };
+    return {
+      open: guard('open', (tabId, { url = 'about:blank', private: isPrivate = false } = {}) => {
+        if (webPages.has(tabId)) throw new Error(`tab ${tabId} is already open`);
+        webPages.set(tabId, { url: 'about:blank', title: '', private: isPrivate === true, zoom: 1, muted: false, back: [], forward: [] });
+        if (url !== 'about:blank') go(tabId, url);
+        return webState(tabId, page(tabId));
+      }),
+      close: guard('close', tabId => { const had = webPages.delete(tabId); if (webRecord.shown === tabId) webRecord.shown = null; return had; }),
+      show: guard('show', tabId => { if (tabId !== null) page(tabId); webRecord.shown = tabId ?? null; return true; }),
+      list: guard('list', () => [...webPages].map(([tabId, value]) => webState(tabId, value))),
+      navigate: guard('navigate', (tabId, url) => {
+        const current = page(tabId);
+        if (!/^https?:\/\//i.test(url) && url !== 'about:blank') throw new Error(`${url} isn't opened in Atmos Browser`);
+        current.back.push(current.url);
+        current.forward = [];
+        go(tabId, url);
+        return 'loading';
+      }),
+      back: guard('back', tabId => { const current = page(tabId); if (current.back.length) { current.forward.push(current.url); go(tabId, current.back.pop()); } }),
+      forward: guard('forward', tabId => { const current = page(tabId); if (current.forward.length) { current.back.push(current.url); go(tabId, current.forward.pop()); } }),
+      reload: guard('reload', tabId => { page(tabId); }),
+      stop: guard('stop', tabId => { page(tabId); }),
+      zoom: guard('zoom', (tabId, direction) => {
+        const steps = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+        const current = page(tabId);
+        const at = steps.indexOf(current.zoom);
+        current.zoom = direction === 'reset' ? 1 : steps[Math.max(0, Math.min(steps.length - 1, at + (direction === 'in' ? 1 : -1)))];
+        return current.zoom;
+      }),
+      find: guard('find', (tabId, text) => { page(tabId); return text ? webRecord.calls.length : null; }),
+      stopFind: guard('stopFind', tabId => { page(tabId); }),
+      print: guard('print', tabId => { page(tabId); return true; }),
+      mute: guard('mute', (tabId, muted) => { page(tabId).muted = muted === true; return muted === true; }),
+      edit: guard('edit', tabId => { page(tabId); }),
+      download: guard('download', tabId => { page(tabId); }),
+      copyImage: guard('copyImage', tabId => { page(tabId); }),
+      focus: guard('focus', tabId => { page(tabId); }),
+      state: guard('state', tabId => webState(tabId, page(tabId))),
+      setSurface: guard('setSurface', rect => { webRecord.surface = clone(rect); }),
+      onEvent(fn) {
+        const off = on('web', fn);
+        if (!webAllowed()) { off(); console.error('[atmos-sdk] cannot follow web pages:', `${self} may not show web pages`); }
+        return off;
+      },
+      downloads: Object.fromEntries(['list', 'open', 'show', 'cancel', 'pause', 'resume', 'remove']
+        .map(name => [name, guard(`downloads.${name}`, () => (name === 'list' ? [] : true))])),
+      permissions: {
+        respond: guard('permissions.respond', () => true),
+        list: guard('permissions.list', () => []),
+        set: guard('permissions.set', () => []),
+      },
+      external: { respond: guard('external.respond', () => true) },
+      options: guard('options', () => ({ ...webRecord.options })),
+      setOptions: guard('setOptions', patch => { Object.assign(webRecord.options, clone(patch)); return { ...webRecord.options }; }),
+      clearData: guard('clearData', () => true),
+    };
+  }
+
   const fake = {
     /** The saved state now. */
     get state() { return clone(saved); },
+    /** Web pages (first-party): { pages, surface, shown, calls, options }. */
+    get web() { return { ...clone(webRecord), pages: Object.fromEntries([...webPages].map(([tabId, value]) => [tabId, webState(tabId, value)])) }; },
+    /** What Atmos would tell the extension's frames about its pages (atmos.web.onEvent listeners hear it). */
+    webEvent(event) { deliver('web', event); },
     /** Events emitted: [{ name, payload }]. */
     emitted: [],
     /** atmos.fetch() requests made: Request objects. */
@@ -193,7 +279,7 @@ export function createFakeAtmos(options = {}) {
   }
 
   const atmos = {
-    SDK_VERSION: '1.1.0',
+    SDK_VERSION: '1.2.0',
     ready: Promise.resolve({ extension }),
     extension,
     surface: {
@@ -352,6 +438,7 @@ export function createFakeAtmos(options = {}) {
     drawer: { state: null, onChange: fn => on('drawer', fn), onKey: fn => on('drawerKey', fn), open: async () => {}, close: async () => {}, expand: async () => {}, collapse: async () => {}, setBarPlacement: async () => {}, setPlacement: async () => {} },
     legacy: { readIndexedDB: async () => null, readState: async () => null, readLocalStorage: async () => ({}), deleteIndexedDB: async () => [] },
     background: async () => { throw new Error('background() is for first-party extensions'); },
+    web: fakeWeb(),
     fake,
   };
   return atmos;

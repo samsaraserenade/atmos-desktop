@@ -1,7 +1,7 @@
 {
   "all": {
     "declared": "all",
-    "sdkVersion": "1.1.0",
+    "sdkVersion": "1.2.0",
     "api": [
       "SDK_VERSION",
       "appearance",
@@ -26,7 +26,8 @@
       "ready",
       "state",
       "surface",
-      "wallpaper"
+      "wallpaper",
+      "web"
     ],
     "members": {
       "audio": [
@@ -202,11 +203,15 @@
     "libraryUndeclared": {
       "error": "AtmosPermissionError",
       "saysWhatToDeclare": true
+    },
+    "webRefused": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": false
     }
   },
   "none": {
     "declared": "none",
-    "sdkVersion": "1.1.0",
+    "sdkVersion": "1.2.0",
     "api": [
       "SDK_VERSION",
       "appearance",
@@ -231,7 +236,8 @@
       "ready",
       "state",
       "surface",
-      "wallpaper"
+      "wallpaper",
+      "web"
     ],
     "members": {
       "audio": [
@@ -378,6 +384,10 @@
     "libraryUndeclared": {
       "error": "AtmosPermissionError",
       "saysWhatToDeclare": true
+    },
+    "webRefused": {
+      "error": "AtmosPermissionError",
+      "saysWhatToDeclare": false
     }
   }
 }

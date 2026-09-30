@@ -1,5 +1,5 @@
 /**
- * Atmos SDK 1.1 — the only way a framed extension talks to Atmos.
+ * Atmos SDK 1.2 — the only way a framed extension talks to Atmos.
  *
  *   import atmos from 'atmos-sdk';
  *
@@ -21,14 +21,14 @@
  *                 expose, library, wallpaper, audio, fetch, location,
  *                 lifecycle, ready, SDK_VERSION
  *   experimental  notifications (not yet seen working on Windows)
- *   first-party   drawer, surface.onKey, background(), legacy.* — for
+ *   first-party   drawer, surface.onKey, background(), legacy.*, web — for
  *                 official extensions; Atmos refuses them to community
  *                 ones, and they may change in a minor version
  *
  * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = '1.1.0';
+export const SDK_VERSION = '1.2.0';
 
 let port = null;
 let nextId = 1;
@@ -854,10 +854,88 @@ export async function background({ timeout = 15000 } = {}) {
   }
 }
 
+/**
+ * First-party (SDK 1.2): web pages, for an official extension declaring
+ * "web": true in its permissions (Atmos Browser). Core shows each open tab's
+ * page in the extension's panel, where the panel says (setSurface), in the
+ * browser's own session and under Core's policy: navigation, pop-ups,
+ * permissions and downloads are Core's to decide. A tab id is the
+ * extension's own name for a tab (1–64 letters, digits, - or _).
+ *
+ *   open(tabId, { url, private })   a page for the tab (loads url)
+ *   close(tabId)                    its page goes (the tab is the extension's to keep)
+ *   show(tabId | null)              which tab's page the panel shows
+ *   navigate/back/forward/reload/stop/zoom/find/stopFind/print/mute/edit/download/copyImage/focus/state
+ *   setSurface({ x, y, width, height, over })   the panel: where the page goes, in
+ *                                   this frame's pixels; `over` are rectangles the
+ *                                   frame draws over the page (the page shows through
+ *                                   the rest). null: nowhere
+ *   onEvent(fn)                     what the pages do: { type, tabId, … }
+ *   downloads, permissions, external, options, setOptions, clearData
+ */
+const webAsk = (tabId, name, ...args) => ask('web.do', tabId, name, ...args);
+export const web = Object.freeze({
+  open: (tabId, options = {}) => ask('web.open', tabId, options),
+  close: tabId => ask('web.close', tabId),
+  show: tabId => ask('web.show', tabId ?? null),
+  list: () => ask('web.list'),
+  navigate: (tabId, url) => webAsk(tabId, 'navigate', url),
+  back: tabId => webAsk(tabId, 'back'),
+  forward: tabId => webAsk(tabId, 'forward'),
+  reload: (tabId, options = {}) => webAsk(tabId, 'reload', { hard: options.hard === true }),
+  stop: tabId => webAsk(tabId, 'stop'),
+  /** 'in', 'out' or 'reset'; kept per site. Resolves the new factor. */
+  zoom: (tabId, direction) => webAsk(tabId, 'zoom', direction),
+  /** Resolves a request id; results arrive as { type: 'find' } events. '' stops. */
+  find: (tabId, text, options = {}) => webAsk(tabId, 'find', text, { forward: options.forward !== false, findNext: options.findNext === true }),
+  stopFind: tabId => webAsk(tabId, 'stopFind'),
+  print: tabId => webAsk(tabId, 'print'),
+  mute: (tabId, muted) => webAsk(tabId, 'mute', muted === true),
+  /** 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'delete', 'selectAll'. */
+  edit: (tabId, action) => webAsk(tabId, 'edit', action),
+  /** Saves what `url` points at, through the browser's downloads. */
+  download: (tabId, url) => webAsk(tabId, 'download', url),
+  /** Copies the image at x, y in the page (a context-menu event's point). */
+  copyImage: (tabId, x, y) => webAsk(tabId, 'copyImage', x, y),
+  focus: tabId => webAsk(tabId, 'focus'),
+  state: tabId => webAsk(tabId, 'state'),
+  setSurface: rect => ask('web.setSurface', rect),
+  onEvent(fn) {
+    const off = subscribe('web', fn);
+    ask('web.subscribe').catch(error => console.warn('[atmos] web.onEvent:', error.message));
+    return off;
+  },
+  downloads: Object.freeze({
+    list: () => ask('web.downloads'),
+    open: id => ask('web.download', id, 'open'),
+    show: id => ask('web.download', id, 'show'),
+    cancel: id => ask('web.download', id, 'cancel'),
+    pause: id => ask('web.download', id, 'pause'),
+    resume: id => ask('web.download', id, 'resume'),
+    remove: id => ask('web.download', id, 'remove'),
+  }),
+  permissions: Object.freeze({
+    /** The user's answer to a { type: 'permission-request' } event. */
+    respond: (requestId, { allow = false, remember = true } = {}) => ask('web.permissionRespond', requestId, { allow, remember }),
+    list: () => ask('web.siteSettings'),
+    /** 'allow', 'block', or null to forget. */
+    set: (origin, name, value) => ask('web.siteSetting', origin, name, value),
+  }),
+  external: Object.freeze({
+    /** The user's answer to an { type: 'external-request' } event (a mailto: link, say). */
+    respond: (requestId, allow) => ask('web.externalRespond', requestId, allow === true),
+  }),
+  /** { openLinks, askWhereToSave } */
+  options: () => ask('web.options'),
+  setOptions: patch => ask('web.setOptions', patch),
+  /** { cookies, cache, siteSettings }: the ordinary session's (private tabs keep nothing). */
+  clearData: what => ask('web.clearData', what),
+});
+
 const atmos = Object.freeze({
   SDK_VERSION, ready, extension, surface, state, events, appearance, contextMenu, clipboard, panel,
   invoke, listen, call, expose, library, wallpaper, audio, fetch: atmosFetch, location: locationApi, lifecycle,
   notifications,
-  drawer, legacy, background,
+  drawer, legacy, background, web,
 });
 export default atmos;

@@ -365,7 +365,8 @@ make the block invalid.
   this keeps them from loading it.
 - **Something new in SDK 1.1** (marked "1.1" in section 4) needs
   `">=0.16.0"`: Atmos 0.15 reads `engines` and says the extension isn't for
-  it, rather than running it without the call.
+  it, rather than running it without the call. SDK 1.2's `atmos.web`
+  (official only) needs `">=0.17.0"`.
 
 ### Versions and dependencies
 
@@ -464,8 +465,9 @@ refused call rejects with an `AtmosPermissionError` naming what to declare.
 Subscriptions (`events.on`, `listen`, the `onChange`s) don't reject: a
 refusal is logged in the frame's console.
 
-**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.1.0'` (Atmos 0.16),
-and a later 1.x only adds. What 1.1 added is marked **1.1**. Everything below is **stable** unless marked
+**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.2.0'` (Atmos 0.17),
+and a later 1.x only adds. What 1.1 added is marked **1.1**; 1.2 added
+only `atmos.web`, for official extensions. Everything below is **stable** unless marked
 **experimental** (it may still change in a minor version). The calls in
 "Official extensions only" at the end of this section may change in a
 minor version too, and Atmos refuses them to community extensions.
@@ -477,7 +479,7 @@ minor version too, and Atmos refuses them to community extensions.
 | `atmos.extension` | `{ id, kind, tier, version }`: which extension this frame belongs to |
 | `atmos.surface` | `{ type, id, presentation, glass, drawer }`: `type` is `'panel'`, `'sidebar'`, `'settings'` or `'boot'`; `presentation` is `'full'`, `'tile'` or `'window'` (panels) and never changes, since a layout change makes a new frame |
 | `atmos.ready` | A promise that resolves once the frame is connected. Entry files already run after it |
-| `atmos.SDK_VERSION` | `'1.1.0'` (Atmos 0.16); `'1.0.0'` in Atmos 0.15 |
+| `atmos.SDK_VERSION` | `'1.2.0'` (Atmos 0.17); `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
 
 ### State and events
 
@@ -693,7 +695,8 @@ script them. `atmos.state` is kept in a file of its own
   own). Its Content-Security-Policy refuses them.
 - Navigate itself away from its origin, navigate Atmos, open windows or
   dialogs (`alert`, `confirm`, `prompt`: use your own interface), or embed
-  frames. Links and `window.open()` to the web open in the user's browser.
+  frames. Links and `window.open()` to the web open in the user's browser
+  (or in Atmos Browser, when the user asked for that).
 - Listen for keys pressed outside it. A panel's global key is declared
   (`"shortcut"`), not listened for.
 - Use browser permissions it didn't declare (and the user didn't approve).
@@ -741,6 +744,26 @@ same-origin window in the same process. Objects from it belong to that
 realm (`instanceof Array` is false for its arrays; use `Array.isArray`),
 and a view must remove every listener it gives them when its frame goes
 (`atmos.lifecycle`).
+
+**Web pages (1.2, Atmos 0.17).** With `"permissions": { "web": true }`, an
+official extension shows web pages in its panel: Atmos Browser does. The
+pages are Core's, not the extension's (section 7, "What is enforced"):
+each open tab's page is a `<webview>` Core keeps in a layer under the
+panel, in a browsing session of its own, and the main process decides what
+it may load and do. The extension names its tabs (1–64 letters, digits,
+`-` or `_`), says which one shows and where, and hears what pages do.
+
+| Call | What it does |
+|---|---|
+| `atmos.web.open(tabId, { url, private })` / `close(tabId)` | A page for the tab, loading `url` (`private: true` for the in-memory session); the page goes (the tab is the extension's to keep) |
+| `atmos.web.show(tabId \| null)` / `list()` | Which tab's page the panel shows; the pages open, with their state |
+| `atmos.web.setSurface({ x, y, width, height, over })` / `setSurface(null)` | Panel only: where the page goes, in the frame's pixels. The frame is cut away there, so the page shows through; `over` (up to 8 rectangles) is where the frame draws over the page itself (suggestions, prompts), and keeps. The page follows the panel through layout changes; a panel frame that goes takes it off screen |
+| `atmos.web.navigate(tabId, url)`, `back`, `forward`, `reload(tabId, { hard })`, `stop`, `zoom(tabId, 'in' \| 'out' \| 'reset')`, `find(tabId, text, { forward, findNext })`, `stopFind`, `print`, `mute(tabId, muted)`, `edit(tabId, 'copy' …)`, `download(tabId, url)`, `copyImage(tabId, x, y)`, `focus`, `state` | What a browser does to a page. `navigate` is checked in the main process like any navigation; zoom is kept per site |
+| `atmos.web.onEvent(fn)` | What pages do, `{ type, tabId, … }`: `opened`, `closed`, `state`, `navigated`, `progress`, `favicon`, `load-failed` (with `certificate`), `refused`, `crashed`, `find`, `fullscreen`, `context-menu`, `command` (the browser's shortcuts, taken before the page sees them), `open-tab`, `open-link` (a link from the rest of Atmos, when the user turned that on), `download`, `download-removed`, `permission-request`, `permission-settled`, `external-request`, `private-ended` |
+| `atmos.web.permissions.respond(requestId, { allow, remember })` / `list()` / `set(origin, name, 'allow' \| 'block' \| null)` | Answer a site's request (the extension draws the prompt; Atmos keeps the answer per site); the remembered answers, to show or take back |
+| `atmos.web.external.respond(requestId, allow)` | Answer a link to another program (`mailto:`…) |
+| `atmos.web.downloads.list()` / `open(id)` / `show(id)` / `cancel(id)` / `pause(id)` / `resume(id)` / `remove(id)` | This session's downloads. `open` refuses a program or script |
+| `atmos.web.options()` / `setOptions({ openLinks, askWhereToSave })` / `clearData({ cookies, cache, siteSettings })` | "Open links in Atmos Browser" (off by default), asking where to save; clearing the ordinary session's data |
 
 **Its own origin.** An official extension with `"isolation": "origin"` has
 `atmos-ext://first-party-<kind>-<id>` to itself. Without it, official
@@ -1183,6 +1206,7 @@ Every extension lists what it uses:
 | `electron` | Official only: Electron APIs used from the main process |
 | `ipc` | Official only: `main.cjs` registers IPC handlers or sends events |
 | `resources` | Official only: `atmos-resource://` providers it registers |
+| `web` | Official only (Atmos 0.17): `true` to show web pages in its panel through `atmos.web` (section 4, "Official extensions only"), in a browsing session of its own. Atmos Browser is the one extension with it |
 | `provides` | Accepted so older packages load; means nothing now (section 10) |
 
 Omitted keys mean none; `"permissions": {}` is a valid declaration of no
@@ -1216,9 +1240,9 @@ the summary line reads the same. Approvals are kept in
 A developer folder (`--dev-extension`) loads without approval: starting
 Atmos with it is the consent. Everything else about it is community.
 
-A community extension can't have a `main.cjs` or main-process permissions
-(`node`, `electron`, `ipc`, `provides`, `resources`): Atmos blocks it, and it
-can't be approved.
+A community extension can't have a `main.cjs`, main-process permissions
+(`node`, `electron`, `ipc`, `provides`, `resources`) or `web`: Atmos blocks
+it, and it can't be approved.
 
 ### Sharing with other extensions (`exports`)
 
@@ -1298,11 +1322,33 @@ safe for any of them, and say what it gives. Settings shows the user:
   declare: the Atmos page, what the system services and official libraries
   declare; each frame origin, what its extension declares (the shared
   official origin, what all of them declare). Everything else is denied.
-- **Navigation.** The Atmos window never leaves `atmos-app://local/`. Links
-  and `window.open()` to `http(s)` and `mailto` open in the default browser;
-  other schemes are refused. A frame's pop-ups go the same way (its sandbox
-  allows them only so they reach this handler, which never opens a window).
-  `<webview>` is disabled, and a frame navigates only within its origin.
+- **Navigation.** The Atmos window's own page never leaves
+  `atmos-app://local/`. Links and `window.open()` to `http(s)` and `mailto`,
+  from it and from frames, open in the default browser (an `http(s)` link
+  in Atmos Browser instead, when the user turned on "Open links in Atmos
+  Browser"); other schemes are refused. A frame's pop-ups go the same way
+  (its sandbox allows them only so they reach this handler, which never
+  opens a window). A frame navigates only within its origin and can't make
+  a `<webview>`: the only ones in the window are Core's, for web pages (next
+  item).
+- **Web pages** (Atmos 0.17). Only Core's web layer, in the Atmos page,
+  attaches a `<webview>`: in the browser's own sessions
+  (`persist:atmos-browser`, and an in-memory one for private tabs), starting
+  blank, with preferences Atmos fixes whatever the element asks (sandboxed,
+  context-isolated, web security on, no Node, no preload). Those sessions
+  have none of Atmos's schemes, storage or cookies. The main process applies
+  the browser's policy (`core/js/core/web-policy.cjs`, unit-tested) to every
+  page: `http(s)` and `about:blank` only, never Atmos's schemes, `file:`,
+  `chrome:` or `devtools:`; other schemes (`mailto:`…) only after the user
+  says yes; a pop-up with an opener (a sign-in window) in a small window of
+  its own; camera, microphone, location, notifications and reading the
+  clipboard only for sites the user allowed, everything else refused; no
+  way past a certificate error; safe download names, and no program opened
+  from Atmos. A site's icon is decoded in a sandboxed page of its own and
+  drawn again by Core, so nothing a site sends is decoded in the
+  extension's frames; a page in fullscreen is named over it ("Press Esc to
+  exit"). Only an official extension declaring `"web"` drives pages,
+  through `atmos.web`, and nothing in it loosens the policy.
 - **Sharing.** Other extensions' handlers, events and methods only as far as
   they share them, checked again in the main process for IPC.
 - **Approval.** Community extensions load only once approved, and again
@@ -1418,9 +1464,11 @@ user data). Unpackaged, `--extension-source=<folder or url>` (or
   The version an update replaced is kept in `extension-previous/` and loads
   instead if the new one can't; it's deleted once the new one has loaded.
   Deleting data removes the extension's state file, a `userData/<id>`
-  folder, and its own origin's storage (data an official extension without
-  `"isolation"` keeps in the shared origin stays, since Atmos can't tell
-  whose it is).
+  folder, and its own origin's storage: the IndexedDB and localStorage its
+  frames used (from Atmos 0.17; before, they stayed) and, for Atmos
+  Browser, its browsing session and site settings. Data an official
+  extension without `"isolation"` keeps in the shared origin stays, since
+  Atmos can't tell whose it is.
 - The footer's **Extensions** button (left of Settings) opens the page, and
   turns the negative colour, with a tooltip saying why, when an update is
   available, a change waits for a restart, or an extension failed to load.
@@ -1553,6 +1601,14 @@ Before sharing an extension:
     that check their arguments, shared only when they must be.
 
 ## 10. Compatibility
+
+**SDK 1.2 (Atmos 0.17).** Only additions; an SDK 1.1 extension runs
+unchanged.
+
+- `atmos.web` and the `"web"` permission, for official extensions: web
+  pages in a panel (Atmos Browser).
+- Removing an extension with its data deletes its frames' IndexedDB and
+  localStorage too (they used to stay behind).
 
 **SDK 1.1 (Atmos 0.16).** Only additions; an SDK 1.0 extension runs
 unchanged.

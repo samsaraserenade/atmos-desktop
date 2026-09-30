@@ -1,0 +1,712 @@
+'use strict';
+/**
+ * Atmos Browser, main-process side: the web pages Core shows for an official
+ * extension with "web": true in its permissions, under Core's policy
+ * (web-policy.cjs) whatever the extension asks.
+ *
+ *   this file       the browser's two sessions (web-policy.cjs PARTITIONS) and
+ *                   their handlers (permissions, downloads, certificates); the
+ *                   policy on every web contents in them (navigation, pop-ups,
+ *                   keys); the <webview> attach check for the Atmos page;
+ *                   commands on a tab's contents; downloads; site settings
+ *                   (web-settings.cjs); pop-up windows; favicons; links the
+ *                   rest of Atmos opens, when the user asked for them here
+ *   web-layer.js    in the Atmos page: one <webview> per open tab, placed
+ *                   where the extension's panel says; relays between the
+ *                   extension's frames (atmos.web) and here
+ *
+ * Every tab is a <webview> guest of the Atmos window. A page's contents are
+ * addressed here by their webContents id; the page knows which tab that is.
+ */
+const path = require('path');
+const fs = require('fs');
+const policy = require('./web-policy.cjs');
+const { createWebSettings } = require('./web-settings.cjs');
+
+const PERMISSION_WAIT_MS = 10 * 60 * 1000;
+const EXTERNAL_WAIT_MS = 2 * 60 * 1000;
+const ICON_DECODE_MS = 5000;
+const ICON_DECODER_IDLE_MS = 60 * 1000;
+const MAX_DOWNLOADS = 100;
+
+// Run in the icon decoder's page (see decodeIcon): the image drawn into a
+// square canvas, fitted and centred, and its pixels back as base64 RGBA.
+const DECODE_ICON = `(async (b64, type, size) => {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    const w = image.naturalWidth || size, h = image.naturalHeight || size;
+    const scale = Math.min(size / w, size / h);
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(image, (size - w * scale) / 2, (size - h * scale) / 2, w * scale, h * scale);
+    const data = context.getImageData(0, 0, size, size).data;
+    let text = '';
+    for (let i = 0; i < data.length; i += 1) text += String.fromCharCode(data[i]);
+    return btoa(text);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+})`;
+const EDIT_ACTIONS = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'delete', 'selectAll']);
+
+function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, isAppUrl, userData, isWebExtension = () => false, testOptions = {} }) {
+  const settings = createWebSettings({ dir: path.join(userData, 'browser') });
+  const openExternal = shell.openExternal.bind(shell); // the system's, before Core routes it (routeShell)
+  const ownerFile = path.join(userData, 'browser', 'owner.json');
+  let atmosWindow = null;
+  let linkListener = null; // the extension ("plugin:<id>") listening for links, while its frames run
+  let nextId = 1;
+  // Every contents in the browser's sessions: the tabs (<webview> guests of
+  // the Atmos window) and the pop-up windows they opened.
+  const live = new Map();            // webContents id -> { private, tab }
+  const permissionRequests = new Map(); // request id -> { guestId, origin, names, private, callback, timer }
+  const externalRequests = new Map();   // request id -> { guestId, url, timer }
+  const downloads = new Map();       // download id -> { item, record }
+  const faviconCache = new Map();    // "private|url" -> data URL
+
+  // The browser's two sessions, made and set up the first time a page
+  // attaches (configureSessions), never before: an Atmos without a web
+  // extension doesn't get a browser partition's databases on disk.
+  let webSessions = null; // { ordinary, private }
+  const isWebSession = candidate => !!candidate && !!webSessions && (candidate === webSessions.ordinary || candidate === webSessions.private);
+  const isPrivateSession = candidate => !!candidate && !!webSessions && candidate === webSessions.private;
+
+  function send(guestId, type, payload = {}) {
+    if (!atmosWindow || atmosWindow.isDestroyed() || atmosWindow.webContents.isDestroyed()) return;
+    atmosWindow.webContents.send('web:event', guestId, type, payload);
+  }
+
+  // ── What a tab's contents are doing ───────────────────────────────────────
+  function state(contents) {
+    const history = contents.navigationHistory;
+    return {
+      url: contents.getURL(),
+      title: contents.getTitle(),
+      loading: contents.isLoading(),
+      canGoBack: history.canGoBack(),
+      canGoForward: history.canGoForward(),
+      audible: contents.isCurrentlyAudible(),
+      muted: contents.isAudioMuted(),
+      zoom: Math.round(contents.getZoomFactor() * 100) / 100,
+      secure: /^https:/i.test(contents.getURL()),
+    };
+  }
+  const sendState = contents => { if (!contents.isDestroyed()) send(contents.id, 'state', state(contents)); };
+
+  function hostOf(url) { try { return new URL(url).host; } catch { return ''; } }
+
+  /** A page's own zoom per site (Chromium shares it between tabs of a site; this keeps it across starts). */
+  function applyZoom(contents) {
+    const host = hostOf(contents.getURL());
+    if (!host) return;
+    const factor = settings.zoom(host, { private: isPrivateSession(contents.session) });
+    if (Math.abs(contents.getZoomFactor() - factor) > 0.001) contents.setZoomFactor(factor);
+  }
+  function zoom(contents, direction) {
+    const factor = policy.nextZoom(contents.getZoomFactor(), direction);
+    contents.setZoomFactor(factor);
+    settings.setZoom(hostOf(contents.getURL()), factor, { private: isPrivateSession(contents.session) });
+    sendState(contents);
+    return factor;
+  }
+
+  // ── Site icons ────────────────────────────────────────────────────────────
+  // An icon is the site's own image data, so it's decoded in a renderer of
+  // its own: sandboxed, in a session with no network and nothing else in it
+  // (policy.ICON_PARTITION), not in the browser's UI frames (which can do
+  // more than a page can) nor here. What comes back is 32×32 pixels, which
+  // Core encodes as a PNG itself; that's all the extension ever gets. A
+  // decoder bug in an icon reaches nothing more than that throwaway page.
+  let iconDecoder = null; // { view, ready, idle }
+  let iconQueue = Promise.resolve();
+  let iconsWaiting = 0;
+
+  function closeIconDecoder() {
+    const decoder = iconDecoder;
+    iconDecoder = null;
+    if (!decoder) return;
+    clearTimeout(decoder.idle);
+    try { if (!decoder.view.webContents.isDestroyed()) decoder.view.webContents.close(); } catch { /* gone */ }
+  }
+
+  function iconDecoderPage() {
+    if (iconDecoder && !iconDecoder.view.webContents.isDestroyed()) return iconDecoder;
+    const ses = session.fromPartition(policy.ICON_PARTITION);
+    if (!ses.__atmosIconSession) {
+      ses.__atmosIconSession = true;
+      ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !/^(blob|data):/i.test(details.url) && details.url !== 'about:blank' }));
+      ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+      ses.setPermissionCheckHandler(() => false);
+    }
+    const view = new WebContentsView({
+      webPreferences: {
+        partition: policy.ICON_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false,
+        webSecurity: true, webgl: false, plugins: false, spellcheck: false, backgroundThrottling: false,
+      },
+    });
+    const decoder = { view, ready: view.webContents.loadURL('about:blank'), idle: null };
+    view.webContents.on('render-process-gone', () => { if (iconDecoder === decoder) iconDecoder = null; });
+    iconDecoder = decoder;
+    return decoder;
+  }
+
+  /** `bytes` of an image (`type` image/…): a PNG data URL made by Core from its pixels, or null. */
+  async function decodeIcon(bytes, type) {
+    const decoder = iconDecoderPage();
+    clearTimeout(decoder.idle);
+    let timer;
+    try {
+      await decoder.ready;
+      const script = `${DECODE_ICON}(${JSON.stringify(bytes.toString('base64'))}, ${JSON.stringify(type)}, ${policy.ICON_SIZE})`;
+      const answer = await Promise.race([
+        decoder.view.webContents.executeJavaScript(script),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('the icon took too long')), ICON_DECODE_MS); }),
+      ]);
+      const bitmap = policy.iconBitmap(typeof answer === 'string' ? Buffer.from(answer, 'base64') : null);
+      if (!bitmap) return null;
+      const png = nativeImage.createFromBitmap(bitmap, { width: policy.ICON_SIZE, height: policy.ICON_SIZE }).toPNG();
+      return png.length ? `data:image/png;base64,${png.toString('base64')}` : null;
+    } catch {
+      // Stuck or broken: a new page next time.
+      closeIconDecoder();
+      return null;
+    } finally {
+      clearTimeout(timer);
+      if (iconDecoder === decoder) decoder.idle = setTimeout(closeIconDecoder, ICON_DECODER_IDLE_MS);
+    }
+  }
+
+  /** At most `max` bytes of a response's body, or null if there are more. */
+  async function readCapped(response, max) {
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > max) return null;
+    const reader = response.body?.getReader();
+    if (!reader) return null;
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) { void reader.cancel().catch(() => {}); return null; }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  async function sendFavicon(contents, favicons) {
+    const url = (favicons || []).find(candidate => /^(https?:|data:image\/)/i.test(candidate));
+    if (!url) return;
+    const key = `${isPrivateSession(contents.session) ? 'p' : 'n'}|${url}`;
+    let dataUrl = faviconCache.get(key) || null;
+    if (!dataUrl) {
+      let image = /^data:/i.test(url) ? policy.imageDataUrlBytes(url) : null;
+      if (!image && /^https?:/i.test(url)) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 8000);
+          const response = await contents.session.fetch(url, { signal: controller.signal, credentials: 'include' });
+          const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+          const bytes = response.ok && /^image\/[a-z0-9.+-]+$/.test(type) ? await readCapped(response, policy.ICON_MAX_BYTES) : null;
+          clearTimeout(timer);
+          if (bytes?.length) image = { type, bytes };
+        } catch { image = null; }
+      }
+      // One at a time, and not an endless queue of them.
+      if (!image || iconsWaiting >= 20) return;
+      iconsWaiting += 1;
+      const decoded = iconQueue.then(() => decodeIcon(image.bytes, image.type));
+      iconQueue = decoded.catch(() => null);
+      try { dataUrl = await decoded; } catch { dataUrl = null; } finally { iconsWaiting -= 1; }
+    }
+    if (!dataUrl || contents.isDestroyed()) return;
+    if (faviconCache.size > 300) faviconCache.clear();
+    faviconCache.set(key, dataUrl);
+    send(contents.id, 'favicon', { dataUrl, pageUrl: contents.getURL() });
+  }
+
+  // ── Asking the user (the extension draws the prompt) ─────────────────────
+  function askPermission(contents, origin, names, callback) {
+    const guestId = contents.id;
+    const isPrivate = isPrivateSession(contents.session);
+    for (const request of permissionRequests.values()) {
+      // The same question from the same page is asked once.
+      if (request.guestId === guestId && request.origin === origin && request.names.join() === names.join()) {
+        request.callbacks.push(callback);
+        return;
+      }
+    }
+    const id = `p${nextId++}`;
+    const request = { id, guestId, origin, names, private: isPrivate, callbacks: [callback], timer: null };
+    request.timer = setTimeout(() => settlePermission(id, false, false), PERMISSION_WAIT_MS);
+    permissionRequests.set(id, request);
+    send(guestId, 'permission-request', { requestId: id, origin, permissions: names });
+  }
+  function settlePermission(id, allow, remember) {
+    const request = permissionRequests.get(id);
+    if (!request) return false;
+    permissionRequests.delete(id);
+    clearTimeout(request.timer);
+    if (remember) for (const name of request.names) settings.setPermission(request.origin, name, allow ? 'allow' : 'block', { private: request.private });
+    for (const callback of request.callbacks) { try { callback(allow === true); } catch { /* the page is gone */ } }
+    send(request.guestId, 'permission-settled', { requestId: id, allow: allow === true });
+    return true;
+  }
+  function dropRequestsOf(guestId) {
+    for (const request of [...permissionRequests.values()]) if (request.guestId === guestId) settlePermission(request.id, false, false);
+    for (const [id, request] of [...externalRequests]) if (request.guestId === guestId) { clearTimeout(request.timer); externalRequests.delete(id); }
+  }
+
+  /** A link to another program (mailto:, magnet:…): the user is asked first, once at a time per tab. */
+  function askExternal(contents, url, scheme) {
+    const guestId = contents.id;
+    if ([...externalRequests.values()].some(request => request.guestId === guestId)) return;
+    const id = `x${nextId++}`;
+    const timer = setTimeout(() => externalRequests.delete(id), EXTERNAL_WAIT_MS);
+    externalRequests.set(id, { guestId, url, timer });
+    send(guestId, 'external-request', { requestId: id, url: url.slice(0, 2048), scheme });
+  }
+
+  // ── The policy on every contents in the browser's sessions ───────────────
+  function applyPolicy(contents) {
+    const guestId = contents.id;
+    contents.setWindowOpenHandler(details => {
+      const verdict = policy.navigationPolicy(details.url, { frame: 'top' });
+      if (verdict.action === 'external') { askExternal(contents, details.url, verdict.scheme); return { action: 'deny' }; }
+      if (verdict.action !== 'allow') { send(guestId, 'refused', { url: details.url.slice(0, 2048), reason: verdict.reason }); return { action: 'deny' }; }
+      // A pop-up asked for with features (a sign-in window) keeps its opener in
+      // a small window of its own; a link or plain window.open becomes a tab.
+      if (details.disposition === 'new-window' && details.url !== 'about:blank') {
+        const size = features => {
+          const read = name => Number((features.match(new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*(\\d+)`, 'i')) || [])[1]);
+          return { width: read('width'), height: read('height') };
+        };
+        const wanted = size(details.features || '');
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            width: Math.max(320, Math.min(1400, wanted.width || 520)),
+            height: Math.max(240, Math.min(1000, wanted.height || 680)),
+            parent: atmosWindow && !atmosWindow.isDestroyed() ? atmosWindow : undefined,
+            modal: false,
+            autoHideMenuBar: true,
+            backgroundColor: '#ffffff',
+            title: policy.siteOf(details.url) || 'Atmos Browser',
+            webPreferences: { ...policy.WEB_PREFERENCES },
+          },
+        };
+      }
+      // A private page's links stay private.
+      send(guestId, 'open-tab', { url: details.url, background: details.disposition === 'background-tab', private: isPrivateSession(contents.session) });
+      return { action: 'deny' };
+    });
+    contents.on('did-create-window', win => watchPopup(win));
+    contents.on('will-navigate', details => {
+      const verdict = policy.navigationPolicy(details.url, { frame: 'top' });
+      if (verdict.action === 'allow') return;
+      details.preventDefault();
+      if (verdict.action === 'external') askExternal(contents, details.url, verdict.scheme);
+      else send(guestId, 'refused', { url: details.url.slice(0, 2048), reason: verdict.reason });
+    });
+    contents.on('will-frame-navigate', details => {
+      if (details.isMainFrame) return;
+      if (policy.navigationPolicy(details.url, { frame: 'sub' }).action !== 'allow') details.preventDefault();
+    });
+    contents.on('will-redirect', details => {
+      const verdict = policy.navigationPolicy(details.url, { frame: details.isMainFrame ? 'top' : 'sub' });
+      if (verdict.action !== 'allow') details.preventDefault();
+    });
+    contents.on('will-attach-webview', event => event.preventDefault());
+    // Web Bluetooth, and a device picker Electron would otherwise answer with the first device.
+    contents.on('select-bluetooth-device', (event, _devices, callback) => { event.preventDefault(); callback(''); });
+    let fullscreen = false;
+    contents.on('before-input-event', (event, input) => {
+      // Escape leaves a page's fullscreen (the page doesn't get the key).
+      if (fullscreen && input.type === 'keyDown' && input.key === 'Escape' && !input.control && !input.alt && !input.meta) {
+        event.preventDefault();
+        commands.exitFullscreen(contents);
+        return;
+      }
+      const command = policy.shortcutFor(input);
+      if (!command) return;
+      event.preventDefault();
+      send(guestId, 'command', { command });
+    });
+    // A click in a page doesn't move the Atmos page's keyboard focus to it on
+    // its own; the web layer focuses the element (and closes Atmos menus).
+    contents.on('before-mouse-event', (_event, mouse) => {
+      if (mouse.type === 'mouseDown') send(guestId, 'mouse-down');
+    });
+    contents.on('zoom-changed', (_event, direction) => zoom(contents, direction === 'in' ? 'in' : 'out'));
+    contents.on('context-menu', (_event, params) => send(guestId, 'context-menu', {
+      x: params.x, y: params.y, linkURL: params.linkURL, linkText: String(params.linkText || '').slice(0, 200),
+      srcURL: params.srcURL.slice(0, 4096), mediaType: params.mediaType, hasImageContents: params.hasImageContents,
+      selectionText: String(params.selectionText || '').slice(0, 500), isEditable: params.isEditable,
+      editFlags: { ...params.editFlags }, pageURL: params.pageURL,
+    }));
+    for (const name of ['did-start-loading', 'did-stop-loading', 'page-title-updated', 'audio-state-changed', 'dom-ready']) {
+      contents.on(name, () => sendState(contents));
+    }
+    contents.on('did-start-navigation', details => {
+      if (details.isMainFrame && !details.isSameDocument) {
+        dropRequestsOf(guestId);
+        send(guestId, 'progress', { value: 0.15 });
+      }
+    });
+    // A tab's page starts blank (web-layer.js) and is then sent where it's
+    // going: that blank start isn't somewhere Back should return to.
+    let started = contents.getType() !== 'webview';
+    contents.on('did-navigate', (_event, url) => {
+      if (!started && url !== 'about:blank') {
+        started = true;
+        contents.navigationHistory.clear();
+      }
+      applyZoom(contents);
+      send(guestId, 'navigated', { url, title: contents.getTitle(), inPage: false });
+      sendState(contents);
+    });
+    contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+      if (!isMainFrame) return;
+      send(guestId, 'navigated', { url, title: contents.getTitle(), inPage: true });
+      sendState(contents);
+    });
+    contents.on('did-frame-finish-load', (_event, isMainFrame) => { if (isMainFrame) send(guestId, 'progress', { value: 0.7 }); });
+    contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+      if (!isMainFrame || code === -3) return; // -3: aborted (a new navigation, or stopped)
+      send(guestId, 'load-failed', { url, code, description, certificate: code <= -200 && code > -300 });
+    });
+    contents.on('page-favicon-updated', (_event, favicons) => { void sendFavicon(contents, favicons); });
+    contents.on('found-in-page', (_event, result) => send(guestId, 'find', {
+      requestId: result.requestId, matches: result.matches, active: result.activeMatchOrdinal, final: result.finalUpdate,
+    }));
+    contents.on('enter-html-full-screen', () => { fullscreen = true; send(guestId, 'fullscreen', { on: true }); });
+    contents.on('leave-html-full-screen', () => { fullscreen = false; send(guestId, 'fullscreen', { on: false }); });
+    contents.on('render-process-gone', (_event, details) => send(guestId, 'crashed', { reason: details.reason }));
+    contents.on('destroyed', () => forgetGuest(guestId));
+  }
+
+  /** A pop-up window with its opener (a sign-in window): its site is always in its title. */
+  function watchPopup(win) {
+    const contents = win.webContents;
+    const title = () => {
+      if (win.isDestroyed()) return;
+      const site = policy.siteOf(contents.getURL()) || contents.getURL();
+      const page = contents.getTitle();
+      win.setTitle(page && page !== contents.getURL() ? `${site} — ${page}` : site);
+    };
+    contents.on('page-title-updated', event => { event.preventDefault(); title(); });
+    contents.on('did-navigate', title);
+    title();
+  }
+
+  function track(contents) {
+    if (live.has(contents.id)) return;
+    live.set(contents.id, { private: isPrivateSession(contents.session), tab: contents.getType() === 'webview' });
+  }
+
+  function forgetGuest(guestId) {
+    const gone = live.get(guestId);
+    live.delete(guestId);
+    dropRequestsOf(guestId);
+    if (gone?.private && ![...live.values()].some(other => other.private)) void endPrivateSession();
+  }
+
+  /** The last private tab closed: everything it kept goes. */
+  async function endPrivateSession() {
+    const privateSession = configureSessions().private;
+    settings.clearPrivate();
+    for (const key of [...faviconCache.keys()]) if (key.startsWith('p|')) faviconCache.delete(key);
+    for (const [id, entry] of [...downloads]) {
+      if (entry.record.private && entry.record.state !== 'progressing') { downloads.delete(id); send(null, 'download-removed', { id }); }
+    }
+    try {
+      await privateSession.clearStorageData();
+      await privateSession.clearCache();
+      await privateSession.clearAuthCache();
+      await privateSession.clearHostResolverCache();
+    } catch (error) { console.warn('[web] could not clear the private session:', error.message); }
+    send(null, 'private-ended');
+  }
+
+  // ── Sessions ─────────────────────────────────────────────────────────────
+  /** The browser's sessions, made and given their handlers the first time they're needed. */
+  function configureSessions() {
+    if (webSessions) return webSessions;
+    webSessions = { ordinary: session.fromPartition(policy.PARTITION), private: session.fromPartition(policy.PRIVATE_PARTITION) };
+    const userAgent = policy.chromeUserAgent();
+    for (const ses of [webSessions.ordinary, webSessions.private]) {
+      const isPrivate = ses === webSessions.private;
+      ses.setUserAgent(userAgent);
+      const settingFor = origin => permissionName => settings.permission(origin, permissionName, { private: isPrivate });
+      ses.setPermissionRequestHandler((contents, permission, callback, details) => {
+        const origin = policy.siteOf(details?.requestingUrl || contents?.getURL?.() || '');
+        const decision = policy.permissionDecision(permission, details || {}, settingFor(origin), { origin });
+        if (decision === 'allow') return callback(true);
+        // Only a tab asks: a pop-up has no browser around it to ask in.
+        if (decision === 'deny' || !contents || !live.get(contents.id)?.tab) return callback(false);
+        askPermission(contents, origin, policy.permissionNames(permission, details || {}), callback);
+      });
+      ses.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+        const origin = policy.siteOf(requestingOrigin || details?.requestingUrl || contents?.getURL?.() || '');
+        return policy.permissionCheck(permission, details || {}, settingFor(origin), { origin });
+      });
+      ses.setDevicePermissionHandler(() => false);
+      ses.setDisplayMediaRequestHandler((_request, callback) => callback({}));
+      ses.setBluetoothPairingHandler?.((_details, callback) => callback({ confirmed: false }));
+      ses.on('select-hid-device', (event, _details, callback) => { event.preventDefault(); callback(); });
+      ses.on('select-serial-port', (event, _ports, _contents, callback) => { event.preventDefault(); callback(''); });
+      ses.on('select-usb-device', (event, _details, callback) => { event.preventDefault(); callback(); });
+      ses.on('will-download', (_event, item, contents) => startDownload(item, contents, isPrivate));
+    }
+    return webSessions;
+  }
+
+  // ── Downloads ─────────────────────────────────────────────────────────────
+  function downloadRecord(id, item, contents, isPrivate) {
+    return {
+      id, guestId: contents?.id ?? null, url: item.getURL().slice(0, 2048), name: policy.downloadName(item.getFilename(), item.getURL()),
+      path: null, state: 'progressing', paused: false, received: 0, total: item.getTotalBytes() || 0,
+      started: Date.now(), private: isPrivate, openable: false,
+    };
+  }
+
+  function startDownload(item, contents, isPrivate) {
+    const id = `d${nextId++}`;
+    const record = downloadRecord(id, item, contents, isPrivate);
+    const folder = testOptions.downloadsDir || app.getPath('downloads');
+    const taken = name => fs.existsSync(path.join(folder, name));
+    if (testOptions.downloadsDir || !settings.options().askWhereToSave) {
+      item.setSavePath(path.join(folder, policy.uniqueName(record.name, taken)));
+    } else {
+      item.setSaveDialogOptions({ title: 'Save file', defaultPath: path.join(folder, policy.uniqueName(record.name, taken)) });
+    }
+    downloads.set(id, { item, record });
+    while (downloads.size > MAX_DOWNLOADS) {
+      const oldest = [...downloads.entries()].find(([, entry]) => entry.record.state !== 'progressing');
+      if (!oldest) break;
+      downloads.delete(oldest[0]);
+    }
+    const update = () => {
+      const savePath = item.getSavePath();
+      Object.assign(record, {
+        path: savePath || null, name: savePath ? path.basename(savePath) : record.name,
+        state: item.getState(), paused: item.isPaused(), received: item.getReceivedBytes(), total: item.getTotalBytes() || record.total,
+      });
+      record.openable = record.state === 'completed' && policy.openableDownload(record.name);
+      send(record.guestId, 'download', { ...record });
+    };
+    item.on('updated', update);
+    item.once('done', update);
+    send(record.guestId, 'download', { ...record });
+  }
+
+  function downloadAction(id, action) {
+    const entry = downloads.get(id);
+    if (!entry) throw new Error('no such download');
+    const { item, record } = entry;
+    if (action === 'cancel') { if (record.state === 'progressing') item.cancel(); return true; }
+    if (action === 'pause') { if (record.state === 'progressing') item.pause(); return true; }
+    if (action === 'resume') { if (item.canResume()) item.resume(); return true; }
+    if (action === 'remove') {
+      if (record.state === 'progressing') item.cancel();
+      downloads.delete(id);
+      send(null, 'download-removed', { id });
+      return true;
+    }
+    if (record.state !== 'completed' || !record.path || !fs.existsSync(record.path)) throw new Error('The file isn’t there any more');
+    if (action === 'show') { shell.showItemInFolder(record.path); return true; }
+    if (action === 'open') {
+      if (!policy.openableDownload(record.name)) throw new Error('Atmos doesn’t open programs; use Show in folder');
+      return shell.openPath(record.path).then(problem => { if (problem) throw new Error(problem); return true; });
+    }
+    throw new Error(`unknown download action ${action}`);
+  }
+
+  // ── Commands from the web layer ───────────────────────────────────────────
+  function guestOf(id) {
+    const contents = webContents.fromId(Number(id));
+    if (!contents || contents.isDestroyed() || !isWebSession(contents.session)) return null;
+    if (contents.hostWebContents !== atmosWindow?.webContents) return null;
+    track(contents);
+    return contents;
+  }
+
+  const commands = {
+    navigate(contents, url) {
+      const verdict = policy.navigationPolicy(String(url), { frame: 'top' });
+      if (verdict.action === 'external') { askExternal(contents, String(url), verdict.scheme); return 'external'; }
+      if (verdict.action !== 'allow') throw new Error(verdict.reason);
+      contents.loadURL(String(url)).catch(() => { /* reported through did-fail-load */ });
+      return 'loading';
+    },
+    back: contents => { if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack(); },
+    forward: contents => { if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward(); },
+    reload: (contents, options) => (options?.hard ? contents.reloadIgnoringCache() : contents.reload()),
+    stop: contents => contents.stop(),
+    zoom: (contents, direction) => zoom(contents, ['in', 'out', 'reset'].includes(direction) ? direction : 'reset'),
+    // options.findNext: the next match of the search already made (Enter
+    // again). Electron's own findNext means the opposite: "begin a new
+    // search", true for the first request of one.
+    find(contents, text, options) {
+      const query = String(text ?? '').slice(0, 500);
+      if (!query) { contents.stopFindInPage('clearSelection'); return null; }
+      return contents.findInPage(query, { forward: options?.forward !== false, findNext: options?.findNext !== true, matchCase: options?.matchCase === true });
+    },
+    stopFind: contents => contents.stopFindInPage('keepSelection'),
+    print: contents => new Promise(resolve => contents.print({}, success => resolve(success))),
+    mute: (contents, muted) => { contents.setAudioMuted(muted === true); sendState(contents); return contents.isAudioMuted(); },
+    edit(contents, action) {
+      if (!EDIT_ACTIONS.has(action)) throw new Error(`unknown edit ${action}`);
+      contents[action]();
+    },
+    download(contents, url) {
+      const target = String(url || '');
+      if (!/^(https?:|data:|blob:)/i.test(target) || target.length > 2_000_000) throw new Error('not something to download');
+      contents.downloadURL(target);
+    },
+    // The image at a point of the page (a context menu's), onto the clipboard.
+    copyImage(contents, x, y) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('copyImage(x, y)');
+      contents.copyImageAt(Math.round(x), Math.round(y));
+    },
+    focus: contents => contents.focus(),
+    state: contents => state(contents),
+    capture: async contents => {
+      const image = await contents.capturePage();
+      const size = image.getSize();
+      const scaled = size.width > 960 ? image.resize({ width: 960, quality: 'good' }) : image;
+      return `data:image/jpeg;base64,${scaled.toJPEG(76).toString('base64')}`;
+    },
+    // After the page attached it: settle its zoom, and tell the layer where it stands.
+    attached(contents) { applyZoom(contents); return { ...state(contents), private: isPrivateSession(contents.session) }; },
+    // Out of a page's HTML fullscreen (Escape, wherever the keyboard is).
+    exitFullscreen(contents) {
+      void contents.executeJavaScript('document.fullscreenElement ? document.exitFullscreen().then(() => true, () => false) : false', true).catch(() => false);
+    },
+  };
+
+  function fromAtmosPage(event) {
+    return !!atmosWindow && event.sender === atmosWindow.webContents && event.senderFrame === event.sender.mainFrame && isAppUrl(event.senderFrame?.url);
+  }
+  const handle = (channel, fn) => ipcMain.handle(channel, (event, ...args) => {
+    if (!fromAtmosPage(event)) throw new Error('Not allowed');
+    return fn(...args);
+  });
+
+  handle('web:do', (id, name, ...args) => {
+    const contents = guestOf(id);
+    if (!contents) throw new Error('That page is closed');
+    if (!Object.hasOwn(commands, name)) throw new Error(`unknown command ${name}`);
+    return commands[name](contents, ...args);
+  });
+  handle('web:downloads', () => [...downloads.values()].map(({ record }) => ({ ...record })).reverse());
+  handle('web:download-do', (id, action) => downloadAction(String(id), String(action)));
+  handle('web:permission-respond', (id, answer) => settlePermission(String(id), answer?.allow === true, answer?.remember !== false));
+  handle('web:external-respond', (id, allow) => {
+    const request = externalRequests.get(String(id));
+    if (!request) return false;
+    externalRequests.delete(String(id));
+    clearTimeout(request.timer);
+    if (allow === true) return openExternal(request.url).then(() => true, () => false);
+    return false;
+  });
+  handle('web:site-settings', () => settings.listPermissions());
+  handle('web:site-setting', (origin, name, value) => { settings.setPermission(String(origin), String(name), value === null ? null : String(value)); return settings.listPermissions(); });
+  handle('web:options', () => settings.options());
+  handle('web:set-options', patch => settings.setOptions(patch));
+  handle('web:clear-data', async what => {
+    const ses = configureSessions().ordinary;
+    if (what?.cookies) await ses.clearStorageData();
+    if (what?.cache) { await ses.clearCache(); faviconCache.clear(); }
+    if (what?.siteSettings) settings.clear({ permissions: true, zoom: true });
+    return true;
+  });
+  // A link meant for the browser that nobody took (its frames went meanwhile).
+  handle('web:open-external', url => (/^https?:\/\//i.test(String(url)) ? openExternal(String(url)).then(() => true) : false));
+  // The extension listening for links from the rest of Atmos, while its frames run.
+  handle('web:link-listener', ref => {
+    linkListener = typeof ref === 'string' && isWebExtension(ref) ? ref : null;
+    if (linkListener) {
+      try { fs.mkdirSync(path.dirname(ownerFile), { recursive: true }); fs.writeFileSync(ownerFile, JSON.stringify({ ref: linkListener })); } catch { /* best effort */ }
+    }
+    return !!linkListener;
+  });
+
+  // ── The <webview>s the Atmos page may attach ─────────────────────────────
+  function attachWebview(contents, event, webPreferences, params) {
+    const fromAtmosPage = !!atmosWindow && contents === atmosWindow.webContents && isAppUrl(contents.getURL());
+    const verdict = policy.webviewAttachment({ fromAtmosPage, params });
+    if (!verdict.ok) {
+      event.preventDefault();
+      console.warn('[web] refused a <webview>:', verdict.reason);
+      return;
+    }
+    // Its session has the browser's handlers before its page exists.
+    configureSessions();
+    for (const key of Object.keys(webPreferences)) delete webPreferences[key];
+    Object.assign(webPreferences, verdict.webPreferences);
+    for (const key of Object.keys(params)) delete params[key];
+    Object.assign(params, verdict.params);
+  }
+
+  /**
+   * A link the rest of Atmos would give the system browser: in a new tab of
+   * Atmos Browser instead, when the user asked for that and it's running.
+   * Returns whether it took the link.
+   */
+  function openLink(url) {
+    if (!settings.options().openLinks || !linkListener || !policy.isLoadable(url) || url === 'about:blank') return false;
+    if (!isWebExtension(linkListener)) { linkListener = null; return false; }
+    send(null, 'open-link', { url });
+    return true;
+  }
+
+  /**
+   * shell.openExternal for everything in the main process, Core's own code
+   * and official main.cjs alike, goes through openLink first, so "Open links
+   * in Atmos Browser" covers every link Atmos would send to the system browser.
+   */
+  function routeShell() {
+    shell.openExternal = (url, options) => (openLink(String(url)) ? Promise.resolve() : openExternal(url, options));
+  }
+
+  /** The extension that used the browser was removed with its data: its browsing data goes too. */
+  async function forgetExtensionData(ref) {
+    let owner = null;
+    try { owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8')).ref; } catch { return false; }
+    if (owner !== ref) return false;
+    if (webSessions) {
+      for (const ses of [webSessions.ordinary, webSessions.private]) {
+        try { await ses.clearStorageData(); await ses.clearCache(); } catch { /* best effort */ }
+      }
+    } else {
+      // Not opened this run (removals are applied at startup, before any
+      // page): the partition's folder goes whole.
+      fs.rmSync(path.join(userData, 'Partitions', policy.PARTITION.replace(/^persist:/, '')), { recursive: true, force: true });
+    }
+    fs.rmSync(path.join(userData, 'browser'), { recursive: true, force: true });
+    return true;
+  }
+
+  return {
+    isWebSession,
+    applyPolicy(contents) { applyPolicy(contents); track(contents); },
+    attachWebview,
+    configureSessions,
+    openLink,
+    openExternal,
+    routeShell,
+    forgetExtensionData,
+    setWindow(win) { atmosWindow = win; },
+    settings,
+  };
+}
+
+module.exports = { createWebHost };

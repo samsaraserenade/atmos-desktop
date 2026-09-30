@@ -69,6 +69,27 @@ contextBridge.exposeInMainWorld('atmosCore', {
     ipcRenderer.on('extensions:notification-click', listener);
     return () => ipcRenderer.removeListener('extensions:notification-click', listener);
   },
+  // Atmos Browser: Core's web layer in this page and the main process
+  // (web-layer.js, web-host.cjs). Pages are addressed by their contents' id.
+  web: {
+    command:           (id, name, ...args) => ipcRenderer.invoke('web:do', id, name, ...args),
+    downloads:         ()                  => ipcRenderer.invoke('web:downloads'),
+    download:          (id, action)        => ipcRenderer.invoke('web:download-do', id, action),
+    respondPermission: (id, answer)        => ipcRenderer.invoke('web:permission-respond', id, answer),
+    respondExternal:   (id, allow)         => ipcRenderer.invoke('web:external-respond', id, allow),
+    siteSettings:      ()                  => ipcRenderer.invoke('web:site-settings'),
+    setSiteSetting:    (origin, name, value) => ipcRenderer.invoke('web:site-setting', origin, name, value),
+    options:           ()                  => ipcRenderer.invoke('web:options'),
+    setOptions:        patch               => ipcRenderer.invoke('web:set-options', patch),
+    clearData:         what                => ipcRenderer.invoke('web:clear-data', what),
+    listenForLinks:    ref                 => ipcRenderer.invoke('web:link-listener', ref),
+    openExternal:      url                 => ipcRenderer.invoke('web:open-external', url),
+    onEvent: callback => {
+      const listener = (_event, id, type, payload) => callback(id, type, payload);
+      ipcRenderer.on('web:event', listener);
+      return () => ipcRenderer.removeListener('web:event', listener);
+    },
+  },
   // Each extension's atmos.state, one file each (extension-state.cjs).
   extensionState: {
     loadAll:  ()               => ipcRenderer.invoke('extension-state:load-all'),

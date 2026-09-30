@@ -54,7 +54,7 @@ function scanExtension(dir) {
   const id = path.basename(dir);
   const exclude = Array.isArray(manifest.auditExclude) ? manifest.auditExclude : [];
   const used = {
-    node: new Set(), electron: new Set(), ipc: false,
+    node: new Set(), electron: new Set(), ipc: false, web: false,
     provides: new Set(), resources: new Set(),
     browser: new Set(), network: new Set(), invokes: new Set(), handles: new Set(),
   };
@@ -104,6 +104,8 @@ function scanExtension(dir) {
       for (const [pattern, permission] of browser) {
         if (pattern.test(source)) { used.browser.add(permission); note('browser', permission, rel); }
       }
+      // Web pages in its panel (Atmos Browser): atmos.web, or the SDK's `web` imported.
+      if (/\batmos\.web\b|\bimport\s*\{[^}]*\bweb\b[^}]*\}\s*from\s*['"]atmos-sdk['"]/.test(source)) { used.web = true; note('web', 'true', rel); }
     }
     // Compiling WebAssembly (often inside a vendored library) needs "wasm".
     if (!main && /\bWebAssembly\.(?:instantiate|compile)|\.wasm['"`]/.test(source)) { used.browser.add('wasm'); note('browser', 'wasm', rel); }
@@ -142,6 +144,7 @@ function auditExtension(dir) {
   missing('node', used.node, value => declared.node.includes(value));
   missing('electron', used.electron, value => declared.electron.includes(value));
   if (used.ipc && !declared.ipc) problems.push(`${id}: registers IPC handlers without "ipc": true (${where['ipc:true'].join(', ')})`);
+  if (used.web && !declared.web) problems.push(`${id}: uses atmos.web without "web": true (${where['web:true'].slice(0, 3).join(', ')})`);
   missing('provides', used.provides, value => declared.provides.includes(value));
   missing('resources', used.resources, value => declared.resources.includes(value));
   missing('browser', used.browser, value => declared.browser.includes(value));
@@ -162,6 +165,7 @@ function auditExtension(dir) {
   unused('resources', declared.resources, used.resources);
   unused('browser', declared.browser, used.browser);
   if (declared.ipc && !used.ipc) problems.push(`${id}: declares "ipc": true but registers no IPC handlers`);
+  if (declared.web && !used.web) problems.push(`${id}: declares "web": true but never uses atmos.web`);
 
   // What it shares with other extensions must exist: the IPC handlers it
   // registers.

@@ -137,6 +137,8 @@ export async function runContract(atmos, { declared }) {
   report.invokeUndeclared = await outcome(() => atmos.invoke('service:somebody', 'thing'));
   report.callUndeclared = await outcome(() => atmos.call('service:somebody', 'thing'));
   report.libraryUndeclared = await outcome(() => atmos.library('service:somebody', 'index.js'));
+  // First-party (SDK 1.2): web pages are for official extensions declaring "web".
+  report.webRefused = await outcome(() => atmos.web.open('contract', { url: 'https://example.com/' }));
 
   return report;
 }

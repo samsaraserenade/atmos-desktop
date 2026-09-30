@@ -26,8 +26,8 @@
  *     pending     never approved — not loaded
  *     changed     files or permissions changed since approval — not loaded
  *     blocked     cannot be approved: it has main-process code (main.cjs),
- *                 asks for main-process permissions, or has a missing or
- *                 invalid extension.json — not loaded
+ *                 asks for main-process permissions or "web", or has a
+ *                 missing or invalid extension.json — not loaded
  *
  * Approval is consent plus tamper detection. Containment comes from the
  * runtime: approved third-party extensions run only in sandboxed frames
@@ -45,6 +45,9 @@ const { readJson, writeJson } = require('./json-files.cjs');
 const LOADABLE = new Set(['verified', 'unverified', 'approved', 'developer']);
 // Permissions only a main.cjs can use; third-party extensions cannot have one.
 const MAIN_PROCESS_KEYS = ['node', 'electron', 'ipc', 'provides', 'resources'];
+// Permissions only official extensions can have, though their frames use them:
+// web pages (atmos.web) cross a trust boundary Core keeps for Atmos Browser.
+const OFFICIAL_ONLY_KEYS = ['web'];
 
 function isLoadable(status) {
   return LOADABLE.has(status);
@@ -138,6 +141,10 @@ function createExtensionTrust({
     const mainOnly = MAIN_PROCESS_KEYS.filter(key => (key === 'ipc' ? permissions.ipc : permissions[key].length));
     if (mainOnly.length) {
       return { status: 'blocked', reason: `It asks for main-process permissions (${mainOnly.join(', ')}), which only official, signed extensions can have` };
+    }
+    const officialOnly = OFFICIAL_ONLY_KEYS.filter(key => permissions[key] === true);
+    if (officialOnly.length) {
+      return { status: 'blocked', reason: `It asks for permissions (${officialOnly.join(', ')}) only official, signed extensions can have` };
     }
     // Chosen by whoever started Atmos with --dev-extension: that is the
     // consent, and its files change all the time.

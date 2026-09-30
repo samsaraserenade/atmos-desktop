@@ -123,10 +123,17 @@ designed so that you can safely install things you did not write.
 - **Signed packages.** Official extensions are signed packages. Atmos
   checks every file against the signature when it starts and refuses to
   load one that has been changed.
-- **A locked-down core.** The Atmos window itself runs only Atmos's own
-  code: its Content-Security-Policy refuses injected scripts, it is
-  sandboxed, and developer tools are off in installed copies (unless
-  started with `--devtools`).
+- **A locked-down core.** The Atmos page, the window's own document, runs
+  only Atmos's own code and never navigates away from Atmos: its
+  Content-Security-Policy refuses injected scripts, it is sandboxed, and
+  developer tools are off in installed copies (unless started with
+  `--devtools`).
+- **Web pages kept apart.** The web shows inside Atmos only in Atmos
+  Browser, an official extension. Its pages are sandboxed, in a browsing
+  session of their own, where Atmos, its extensions and your files are out
+  of reach, and Atmos itself, not the extension, decides what a page may
+  load and do. Camera, microphone, location, notifications and reading the
+  clipboard stay off unless you allow a site.
 
 ---
 
@@ -171,6 +178,23 @@ A secure chat experience built directly into the workspace using
 - **`rev/` commands** in the message bar: `rev/go`, `rev/join`, `rev/dm`,
   `rev/create-room`, `rev/create-space`, `rev/invite`, `rev/leave` and
   `rev/notifications`.
+
+### Atmos Browser
+
+A web browser in a panel, in Atmos's own look.
+
+- **Tabs, bookmarks and history**, in the panel and in Tabs and Bookmarks
+  sidebar widgets. An address bar that searches or goes to an address,
+  with your search engine of choice.
+- **Private tabs** that keep nothing once the last one closes.
+- **Downloads, find in page, zoom per site, print**, and the shortcuts you
+  know from other browsers.
+- **Light on memory:** tabs you haven't used for a while are put away and
+  load again when you go back to them; restored tabs load only when opened.
+- **Careful by default:** sites ask before using the camera, microphone,
+  location or notifications, and the answer is remembered per site; no
+  way past a certificate warning; downloaded programs are never opened from
+  Atmos. It has no ad blocker, saved passwords or Safe Browsing yet.
 
 ### Finance
 
@@ -312,7 +336,7 @@ soon as it's approved. The guide is
 Atmos/
 ├── core/        # The runtime: window, panels, sidebar, settings, the extension host and SDK,
 │                #   and the system services (core/system: audio, location, wallpaper)
-├── plugins/     # User-facing extensions (audio-player, finance, matrix-chat)
+├── plugins/     # User-facing extensions (audio-player, browser, finance, matrix-chat)
 ├── services/    # Capabilities extensions call into (charting, currency, fullscreen-viewer,
 │                #   market-data, media-metadata)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
@@ -333,6 +357,7 @@ Atmos/
 | `npm run test:build` | The build hook (`scripts/after-pack.cjs`) |
 | `npm run test:sdk` | The extension template: it is made, its own tests pass, and the typings cover the SDK |
 | `cd plugins/audio-player && node --test tests/*.test.cjs` | Audio Player tests |
+| `node --test plugins/browser/tests/*.test.mjs` | Atmos Browser tests (the address bar, tabs, history and bookmarks, the engine against a fake Atmos) |
 | `cd plugins/matrix-chat && npm ci && npm test` | Matrix Chat tests (`npm run check:browser` adds the message-sanitizer attack checks in a browser; it uses Edge, so set `MATRIX_TEST_BROWSER` elsewhere) |
 | `npm run test:finance` | Finance and Markets tests |
 | `cd plugins/finance/backend && python -m unittest` | Portfolio server tests |

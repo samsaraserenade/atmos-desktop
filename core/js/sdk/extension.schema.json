@@ -88,7 +88,8 @@
         "electron": { "description": "Official extensions only: Electron APIs main.cjs uses.", "type": "array", "items": { "type": "string" } },
         "ipc": { "description": "Official extensions only: main.cjs registers IPC handlers or sends events.", "type": "boolean" },
         "resources": { "description": "Official extensions only: atmos-resource:// providers main.cjs registers (for its own frames).", "type": "array", "items": { "type": "string" } },
-        "provides": { "description": "Ignored since SDK 1.0 (kept so older packages load).", "type": "array", "items": { "type": "string" } }
+        "provides": { "description": "Ignored since SDK 1.0 (kept so older packages load).", "type": "array", "items": { "type": "string" } },
+        "web": { "description": "Official extensions only (Atmos 0.17, SDK 1.2): web pages in its panel through atmos.web, in the browser's own session (Atmos Browser).", "type": "boolean" }
       },
       "additionalProperties": false
     },

@@ -1,0 +1,47 @@
+{
+  "apiVersion": 4,
+  "engines": {
+    "atmos": ">=0.17.0"
+  },
+  "tier": "first-party",
+  "version": "1.0.0",
+  "publisher": "atmos",
+  "runtime": "frame",
+  "isolation": "origin",
+  "exports": {},
+  "displayName": "Atmos Browser",
+  "description": "A web browser in an Atmos panel: tabs, bookmarks, history, private tabs and downloads, in a browsing session of its own.",
+  "contributes": {
+    "panel": {
+      "label": "Browser",
+      "icon": "icon.svg",
+      "glass": true,
+      "shortcut": "[",
+      "shortcutToggles": true
+    },
+    "sidebar": [
+      {
+        "label": "Tabs",
+        "icon": "icon-tabs.svg",
+        "order": 50
+      },
+      {
+        "id": "bookmarks",
+        "entry": "sidebar-bookmarks.js",
+        "label": "Bookmarks",
+        "icon": "icon-bookmarks.svg",
+        "order": 51
+      }
+    ],
+    "settings": {
+      "label": "Atmos Browser",
+      "icon": "icon.svg"
+    },
+    "boot": {
+      "entry": "boot.js"
+    }
+  },
+  "permissions": {
+    "web": true
+  }
+}

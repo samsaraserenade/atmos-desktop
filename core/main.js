@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage } = require('electron');
 const fs   = require('fs');
 const path = require('path');
 
@@ -15,6 +15,7 @@ const { createLocationGate } = require('./js/core/location-gate.cjs');
 const { createExtensionFetch } = require('./js/core/extension-fetch.cjs');
 const frames = require('./js/core/extension-frames.cjs');
 const { resolveContainedPath } = require('./js/core/path-security.cjs');
+const { createWebHost } = require('./js/core/web-host.cjs');
 
 let _extensionPreferences = null;
 let _startupDisabled = { plugin: new Set(), service: new Set() };
@@ -307,9 +308,14 @@ function createWindow() {
       // ipcRenderer, webUtils), which a sandboxed preload has.
       sandbox:          true,
       preload:          preloadPath,
+      // Atmos Browser's pages are <webview>s Core's web layer makes in this
+      // page; will-attach-webview (web-host.cjs) fixes what each one runs
+      // with, and refuses any other.
+      webviewTag:       true,
     }
   });
   win.__atmosTransparentWindow = transparentWindow;
+  _web.setWindow(win);
 
   if (windowState.isMaximized && !windowState.isFullScreen) win.maximize();
 
@@ -350,7 +356,8 @@ function createWindow() {
         ? win.webContents.closeDevTools()
         : win.webContents.openDevTools({ mode: 'detach' });
     }
-    if (input.key === 'r' && input.control && input.type === 'keyDown') {
+    // Ctrl+R reloads Atmos, except in Atmos Browser's panel, where it reloads the tab.
+    if (input.key === 'r' && input.control && input.type === 'keyDown' && !_isWebExtensionFrame(win.webContents.focusedFrame)) {
       event.preventDefault();
       win.webContents.reload();
     }
@@ -939,14 +946,36 @@ ipcMain.on('extension-state:save-sync', (event, kind, id, data) => {
 
 // Extensions removed with their data at this start: the page forgets their
 // state namespaces (it asks once, at boot), and origins of their own lose
-// their storage.
+// their storage (_clearRemovedStorage, once the schemes are registered).
 const _dataCleanup = [];
 function _cleanUpRemovedData() {
   for (const { kind, id } of _manager.takeDataCleanup()) {
     _dataCleanup.push({ kind, id });
     try { _stateStore.remove(kind, id); } catch (error) { console.warn(`[extensions] could not delete ${kind}:${id}'s state:`, error.message); }
+    // Atmos Browser's: its session (cookies, storage, cache) and site settings.
+    _web.forgetExtensionData(`${kind}:${id}`).catch(error => console.warn(`[extensions] could not delete ${kind}:${id}'s browsing data:`, error.message));
+  }
+}
+
+/**
+ * The IndexedDB databases and localStorage of extensions removed with their
+ * data, in origins of their own. Chromium keys a frame's storage by the page
+ * it's in as well as its own origin, so clearStorageData({ origin }) doesn't
+ * reach what frames in the Atmos window stored: it's deleted from frames in
+ * Core's hidden storage page instead, as the shared-origin clean-up does.
+ * Before the window, so no frame of the same id holds it open.
+ */
+async function _clearRemovedStorage() {
+  for (const { kind, id } of _dataCleanup) {
     for (const host of [`${kind}-${id}`, `first-party-${kind}-${id}`]) {
-      session.defaultSession.clearStorageData({ origin: `atmos-ext://${host}` }).catch(() => {});
+      const origin = `${frames.SCHEME}://${host}`;
+      try {
+        await session.defaultSession.clearStorageData({ origin });
+        const deleted = await _withStoragePage(null, frames.storageHostScript({ from: origin, remove: { indexedDB: ['*'], localStorage: ['*'] } }), 60_000, { removeHost: host });
+        if (deleted?.length) console.log(`[extensions] deleted ${kind}:${id}'s storage in ${origin}:`, deleted.join(', '));
+      } catch (error) {
+        console.warn(`[extensions] could not delete ${kind}:${id}'s storage in ${origin}:`, error.message);
+      }
     }
   }
 }
@@ -1412,9 +1441,12 @@ function _registerAtmosExtProtocol() {
         });
       }
       // Core's pages that copy an extension's storage into its own origin,
-      // served only to the move running now (see _moveToOwnOrigins).
+      // or delete it, served only to the move or removal running now (see
+      // _moveToOwnOrigins, _clearRemovedStorage).
       if (_moveInProgress && (rel === '/__atmos/move.html' || rel === '/__atmos/move.js')) {
-        const role = host === frames.FIRST_PARTY_HOST ? 'export' : _moveInProgress.host && host === _moveInProgress.host ? 'import' : null;
+        // export: the shared origin, or the origin whose storage is being deleted (it reads and deletes).
+        const role = host === frames.FIRST_PARTY_HOST || (_moveInProgress.removeHost && host === _moveInProgress.removeHost) ? 'export'
+          : _moveInProgress.host && host === _moveInProgress.host ? 'import' : null;
         if (role && rel === '/__atmos/move.html') {
           return new Response(frames.moveDocument(role), {
             headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': frames.moveCsp(role) },
@@ -1526,14 +1558,22 @@ function _watchDeveloperFolders() {
 }
 
 // ── Web hardening ─────────────────────────────────────────────────────────────
-// The Atmos window only ever shows atmos-app://local/. Links and window.open()
-// to the web open in the user's browser; everything else is refused. No
-// <webview>s. Browser permissions (location, notifications, camera...) are
-// granted only to the Atmos page, and only those some active extension
-// declares in extension.json "permissions.browser".
+// The Atmos window's page is always atmos-app://local/: it never navigates
+// away. Links and window.open() to the web from it and from extension frames
+// open in the user's browser (or in Atmos Browser, when the user turned that
+// on); everything else is refused. Browser permissions (location,
+// notifications, camera...) are granted only to the Atmos page and frame
+// origins, and only those some active extension declares in extension.json
+// "permissions.browser".
+//
+// The one exception is Atmos Browser (web-host.cjs, web-layer.js): web pages
+// in <webview>s that only Core's web layer in the Atmos page attaches, in
+// two sessions of their own (never Atmos's), under the browser's policy
+// instead of this one: web-policy.cjs, unit-tested.
 const _APP_ORIGIN = 'atmos-app://local';
 const _EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 
+// shell.openExternal goes through Atmos Browser first (see _web.routeShell).
 function _openExternally(url) {
   try {
     if (_EXTERNAL_PROTOCOLS.has(new URL(url).protocol)) shell.openExternal(url);
@@ -1547,8 +1587,38 @@ function _isAppUrl(url) {
   return typeof url === 'string' && (url === _APP_ORIGIN || url.startsWith(`${_APP_ORIGIN}/`));
 }
 
+/** An active official extension declaring "web": true ("plugin:<id>"). */
+function _isWebExtension(ref) {
+  const entry = typeof ref === 'string' ? _entryOf(ref) : null;
+  return !!entry && entry.tier !== 'third-party' && _isActive(entry) && _trust?.get(entry)?.permissions.web === true;
+}
+
+/** Whether a frame of the Atmos window is one of a web extension's (its panel, say). */
+function _isWebExtensionFrame(frame) {
+  const origin = frame?.origin;
+  if (!origin || !origin.startsWith('atmos-ext://')) return false;
+  return _framedEntries().some(entry => frames.frameOrigin(entry) === origin && _isWebExtension(`${entry.kind}:${entry.id}`));
+}
+
+const _web = createWebHost({
+  app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain,
+  isAppUrl: _isAppUrl,
+  userData: app.getPath('userData'),
+  isWebExtension: _isWebExtension,
+  // Unpackaged, --browser-downloads=<dir> saves downloads there without asking (the end-to-end check).
+  testOptions: (() => {
+    const flag = app.isPackaged ? null : process.argv.find(arg => arg.startsWith('--browser-downloads='));
+    return flag ? { downloadsDir: path.resolve(flag.slice('--browser-downloads='.length)) } : {};
+  })(),
+});
+// Every shell.openExternal in the main process (Core's and official main.cjs)
+// gives Atmos Browser the link first, when the user asked for that.
+_web.routeShell();
+
 app.on('web-contents-created', (_, contents) => {
   if (contents.getType() === 'devtools') return;
+  // A page in Atmos Browser: the browser's policy, not the one below.
+  if (_web.isWebSession(contents.session)) { _web.applyPolicy(contents); return; }
   contents.setWindowOpenHandler(({ url }) => {
     _openExternally(url);
     return { action: 'deny' };
@@ -1558,7 +1628,9 @@ app.on('web-contents-created', (_, contents) => {
     event.preventDefault();
     _openExternally(url);
   });
-  contents.on('will-attach-webview', event => event.preventDefault());
+  // Refused everywhere except the Atmos page's own web layer, and there
+  // only in the browser's sessions, starting blank, with fixed preferences.
+  contents.on('will-attach-webview', (event, webPreferences, params) => _web.attachWebview(contents, event, webPreferences, params));
   // Frames only ever show extension documents. Core creates them; an
   // extension frame may reload or move within its own origin, never to the
   // web, to another extension's origin, or to Atmos itself.
@@ -1634,7 +1706,7 @@ const _MOVE_TIMEOUT_MS = (() => {
   const value = flag ? Number(flag.slice('--origin-move-timeout='.length)) : NaN;
   return Number.isFinite(value) && value > 0 ? value : 180_000;
 })();
-let _moveInProgress = null; // { host }: the move whose pages are served
+let _moveInProgress = null; // { host, removeHost }: the move (or removal) whose pages are served
 const _moveProblems = new Map(); // ref → reason, for Settings
 
 function _readMoves() {
@@ -1655,10 +1727,10 @@ function _writeMoves(moves) {
  * atmos-app page, so its frames see the same storage as extension frames in
  * the Atmos window (Chromium keys a frame's storage by the page it is in).
  */
-async function _withStoragePage(allowImportHost, script, timeoutMs) {
+async function _withStoragePage(allowImportHost, script, timeoutMs, { removeHost = null } = {}) {
   const { WebContentsView } = require('electron');
   const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
-  _moveInProgress = { host: allowImportHost };
+  _moveInProgress = { host: allowImportHost, removeHost };
   let timer;
   try {
     await view.webContents.loadURL(`${_APP_ORIGIN}/__atmos/storage.html`);
@@ -1836,7 +1908,10 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   // Storage moves decide which origin an extension runs from, so they come
   // before browser permissions (granted per origin) and the window.
   await _moveToOwnOrigins();
+  await _clearRemovedStorage();
   _installBrowserPermissions([...activePlugins, ...activeServices]);
+  // Atmos Browser's sessions are set up when its first page attaches
+  // (web-host.cjs configureSessions), so there are none without it.
   createWindow();
   _watchDeveloperFolders();
   void _cleanUpSharedOriginStorage();

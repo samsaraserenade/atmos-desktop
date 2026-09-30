@@ -60,3 +60,13 @@ test('everyHost names every host; otherwise four and a count', () => {
   assert.deepEqual(describePermissions({ network: six }, { everyHost: true }), [`Connect to ${six.join(', ')}`]);
   assert.deepEqual(describePermissions({ invokes: ['service:location', 'service:audio'] }), ['Play audio', 'Know your location, as set in Atmos']);
 });
+
+test('"web" is true or false, described, and an update that adds it says so', () => {
+  assert.equal(normalizePermissions({}).web, false);
+  assert.equal(normalizePermissions({ web: true }).web, true);
+  assert.throws(() => normalizePermissions({ web: 'yes' }), /web/);
+  assert.ok(describePermissions({ web: true }).some(line => /web pages/i.test(line)));
+  assert.ok(!describePermissions({ web: false }).some(line => /web pages/i.test(line)));
+  assert.deepEqual(permissionsAdded({ web: true }, { web: false }), { web: true });
+  assert.equal(permissionsAdded({ web: true }, { web: true }), null);
+});

@@ -1,5 +1,5 @@
 /**
- * Types for the Atmos SDK 1.1 (`import atmos from 'atmos-sdk'`).
+ * Types for the Atmos SDK 1.2 (`import atmos from 'atmos-sdk'`).
  *
  * The SDK is what a framed extension uses to talk to Atmos; Atmos serves it
  * to every frame. These typings let an editor check and complete calls; point
@@ -357,6 +357,101 @@ export declare const legacy: LegacyApi;
 /** @firstParty The window of this extension's own boot frame, once it has started. */
 export declare function background(options?: { timeout?: number }): Promise<Window>;
 
+/** @firstParty SDK 1.2: what Atmos knows of a tab's page. */
+export interface WebTabState {
+  tabId?: string;
+  private?: boolean;
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  audible?: boolean;
+  muted?: boolean;
+  zoom?: number;
+  secure?: boolean;
+}
+/** @firstParty SDK 1.2: a rectangle in the frame's own pixels. */
+export interface WebRect { x: number; y: number; width: number; height: number }
+/** @firstParty SDK 1.2: a download, as Atmos reports it. */
+export interface WebDownload {
+  id: string;
+  url: string;
+  name: string;
+  path: string | null;
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  paused: boolean;
+  received: number;
+  total: number;
+  started: number;
+  private: boolean;
+  /** False for programs and scripts: Atmos only shows those in their folder. */
+  openable: boolean;
+}
+/**
+ * @firstParty SDK 1.2: what pages do. `type` is one of 'opened', 'closed',
+ * 'state', 'navigated', 'progress', 'favicon', 'open-tab', 'open-link',
+ * 'context-menu', 'command', 'find', 'load-failed', 'refused', 'fullscreen',
+ * 'crashed', 'permission-request', 'permission-settled', 'external-request',
+ * 'download', 'download-removed', 'private-ended'.
+ */
+export interface WebEvent {
+  type: string;
+  tabId?: string | null;
+  [key: string]: unknown;
+}
+/**
+ * @firstParty SDK 1.2: web pages, for an official extension declaring
+ * "web": true in its permissions (Atmos Browser). Core shows each open tab's
+ * page in the extension's panel, in the browser's own session and under
+ * Core's policy; a tab id is the extension's own name for a tab.
+ */
+export interface WebApi {
+  open(tabId: string, options?: { url?: string; private?: boolean }): Promise<WebTabState>;
+  close(tabId: string): Promise<boolean>;
+  show(tabId: string | null): Promise<boolean>;
+  list(): Promise<WebTabState[]>;
+  navigate(tabId: string, url: string): Promise<'loading' | 'external'>;
+  back(tabId: string): Promise<void>;
+  forward(tabId: string): Promise<void>;
+  reload(tabId: string, options?: { hard?: boolean }): Promise<void>;
+  stop(tabId: string): Promise<void>;
+  zoom(tabId: string, direction: 'in' | 'out' | 'reset'): Promise<number>;
+  find(tabId: string, text: string, options?: { forward?: boolean; findNext?: boolean }): Promise<number | null>;
+  stopFind(tabId: string): Promise<void>;
+  print(tabId: string): Promise<boolean>;
+  mute(tabId: string, muted: boolean): Promise<boolean>;
+  edit(tabId: string, action: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'pasteAndMatchStyle' | 'delete' | 'selectAll'): Promise<void>;
+  download(tabId: string, url: string): Promise<void>;
+  /** The image at x, y in the page (a context-menu event's point), onto the clipboard. */
+  copyImage(tabId: string, x: number, y: number): Promise<void>;
+  focus(tabId: string): Promise<void>;
+  state(tabId: string): Promise<WebTabState>;
+  /** The panel: where the page goes (null: nowhere). `over`: what the frame draws over the page. */
+  setSurface(rect: (WebRect & { over?: WebRect[] }) | null): Promise<void>;
+  onEvent(fn: (event: WebEvent) => void): Unsubscribe;
+  readonly downloads: {
+    list(): Promise<WebDownload[]>;
+    open(id: string): Promise<boolean>;
+    show(id: string): Promise<boolean>;
+    cancel(id: string): Promise<boolean>;
+    pause(id: string): Promise<boolean>;
+    resume(id: string): Promise<boolean>;
+    remove(id: string): Promise<boolean>;
+  };
+  readonly permissions: {
+    respond(requestId: string, answer: { allow: boolean; remember?: boolean }): Promise<boolean>;
+    list(): Promise<{ origin: string; name: string; value: 'allow' | 'block' }[]>;
+    set(origin: string, name: string, value: 'allow' | 'block' | null): Promise<{ origin: string; name: string; value: 'allow' | 'block' }[]>;
+  };
+  readonly external: { respond(requestId: string, allow: boolean): Promise<boolean> };
+  options(): Promise<{ openLinks: boolean; askWhereToSave: boolean }>;
+  setOptions(patch: { openLinks?: boolean; askWhereToSave?: boolean }): Promise<{ openLinks: boolean; askWhereToSave: boolean }>;
+  clearData(what: { cookies?: boolean; cache?: boolean; siteSettings?: boolean }): Promise<boolean>;
+}
+/** @firstParty SDK 1.2 */
+export declare const web: WebApi;
+
 // ── The default export ──────────────────────────────────────────────────────
 
 export interface Atmos {
@@ -388,6 +483,8 @@ export interface Atmos {
   readonly legacy: LegacyApi;
   /** @firstParty */
   readonly background: typeof background;
+  /** @firstParty SDK 1.2 */
+  readonly web: WebApi;
 }
 
 declare const atmos: Atmos;

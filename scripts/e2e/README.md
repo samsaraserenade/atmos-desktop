@@ -18,6 +18,7 @@ frames.
 | `sdk.cjs` | SDK 1.0 from developer folders (`--dev-extension`): they load without approval as Community, and one whose `engines` needs a later Atmos doesn't; `atmos.fetch()` against a local HTTPS server that sends no CORS headers (`--fetch-test`), with a POST, a redirect, and the refusals (an undeclared host, a redirect to one, an address, plain http) and an abort; `atmos.location` before and after the location changes; `atmos.lifecycle` cleaning up as a frame goes; a saved file reloading the frame; a changed `extension.json` taking a new host without a restart; the extension template as `npm run new:extension` makes it, with its panel's glass and its widget's `atmos.fetch()`. |
 | `contract.cjs` | The SDK contract (`scripts/sdk-contract/contract.js`) in the panels of two developer folders, one declaring the system services and notifications and one declaring nothing, compared with `scripts/sdk-contract/expected.json` and with the fake Atmos running the same script. |
 | `approval.cjs` | Two community extensions copied in by hand (Skyloom reads the location and shares a snapshot with every extension; Sky Reader needs it and asks for the same panel key): the footer and Settings → Extensions say they wait for approval, Review opens Skyloom's card with what it shares and the location warning; Sky Reader approved alone waits for a restart, and approving Skyloom loads both at once; the key opens Skyloom's panel and Settings → Panels says Sky Reader asked for it too; Sky Reader gets Skyloom's snapshot but not the location; both load after a restart. |
+| `browser.cjs` | Atmos Browser (`plugins/browser`) on Core's web layer, against local pages over http and https (`browser-pages.cjs`; the https certificate isn't trusted), with real X input (`xinput.py`): no browser session on disk before the first page; the panel's key; the address bar (suggestions drawn over the page, an address or a search, `javascript:`, `file:` and `atmos-app:` refused); the site's icon decoded apart and drawn again by Core (a 32×32 PNG), and a broken one refused; links, back and forward, history; Ctrl+T, Ctrl+Tab, Ctrl+W, Ctrl+Shift+T, Ctrl+L; keys typed in a page reaching the page and never Atmos's single-key shortcuts; zoom per site; find in page; `target=_blank` and `window.open` as tabs, and a sign-in pop-up as a window with its opener; downloads (a safe name, a document opened, a program never); a `mailto:` link asking first; `file:` and `atmos-app:` links refused; a location prompt (Block and Allow remembered, taken back from Settings), notifications and reading the clipboard; the certificate interstitial with no way on; mixed content blocked; Chrome's user agent; a page that sets no background white, not see-through; Atmos's menu, Settings and Task View over a page; another panel, a column and a panel window; the Tabs widget; private tabs' cookies and history; the hostile page (Atmos's schemes, files and globals out of reach); links from Atmos with "Open links in Atmos Browser"; pages put away; HTML fullscreen with Atmos's notice over it naming the site, and Escape; tabs, bookmarks, history and the settings page after a restart; removing it with its data. |
 | `system-services.cjs` | From a developer folder: an audio channel with `loop: true` (silence at the loop point measured at the element's output, next to the seek-and-play workaround), `id` reported back; a wallpaper the extension sets, shown in Settings → Appearance as its own and restored there; a settings page and a widget with an `html, body { height: 100% }` reset sized to their content (the widget growing and shrinking); a widget whose content is all out of the flow warning in its console; `/__atmos/ui.css` giving a settings row Atmos's own padding, sizes and switch. |
 
 ## Running
@@ -41,7 +42,16 @@ node scripts/e2e/sdk.cjs          # screenshots in .tmp/e2e/sdk
 node scripts/e2e/contract.cjs     # reports in .tmp/e2e/contract
 node scripts/e2e/approval.cjs     # screenshots in .tmp/e2e/approval
 node scripts/e2e/system-services.cjs # screenshots in .tmp/e2e/system-services
+node scripts/e2e/browser.cjs      # report.json and screenshots in .tmp/e2e/browser (about 2 minutes)
 ```
+
+`browser.cjs` needs an X display (it sends real clicks and keys through
+XTest, as the OS would, since that is how input reaches a web page), so it
+needs python3-xlib (`pip install python-xlib`) and ImageMagick's `import`
+(it reads pixels off the screen). It takes the proxy variables out of
+Electron's environment, since its pages are local. `E2E_ELECTRON_ARGS` adds
+switches, e.g. `--use-angle=swiftshader --enable-unsafe-swiftshader` for
+GPU compositing (in software) where there is no GPU.
 
 They use the Electron from `devDependencies`; set `ELECTRON_PATH` to use
 another. They find the Atmos window with `atmosWindow()` (`isolate.cjs`),
@@ -154,6 +164,11 @@ The output is a JSON report, not pass/fail. What to expect:
     switch with `switchAppearance: "none"`;
   - `widgetTall` is 120 and `widgetShrunk` 40; `ghostWarning` is the SDK's
     "This widget measures 0 px tall" line; `errors` is empty.
+- `browser.cjs`: the report is pass/fail: `summary` is "99 of 99 checks
+  passed" and `failed` is empty (it exits 1 otherwise). `details` has what
+  each failed check saw, and `gpu` how Chromium draws on this machine.
+  `retriedCtrlT` is set when Xvfb lost the first Ctrl+T (a key sent before
+  the window has settled is lost now and then).
 - `security.cjs`:
   - `pageLockdown` is `{ inlineScript: "blocked", stringTimer: "blocked", sandboxed: true }`;
   - `run1` shows `pending` and `blocked`, `sneakyMainRan` is `false`, and

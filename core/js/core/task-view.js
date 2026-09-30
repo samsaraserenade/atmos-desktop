@@ -3,6 +3,7 @@ import {
   getActivePanelPluginId,
   listPanelPlugins,
 } from './panel-registry.js';
+import { previewParts } from './web-layer.js';
 
 let _initialized = false;
 let _overlay = null;
@@ -83,6 +84,41 @@ function _previewBounds(host) {
   return { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
 }
 
+function _image(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+/**
+ * Web pages (Atmos Browser) are <webview>s, which the window's own capture
+ * leaves out: each one showing is captured on its own and drawn in its place.
+ */
+async function _withWebPages(preview, bounds) {
+  let parts = [];
+  try { parts = await previewParts(bounds); } catch { parts = []; }
+  if (!preview || !parts.length) return preview;
+  try {
+    const base = await _image(preview);
+    const scale = base.naturalWidth / bounds.width;
+    const canvas = document.createElement('canvas');
+    canvas.width = base.naturalWidth;
+    canvas.height = base.naturalHeight;
+    const context = canvas.getContext('2d');
+    context.drawImage(base, 0, 0);
+    for (const part of parts) {
+      const page = await _image(part.image);
+      context.drawImage(page, (part.rect.x - bounds.x) * scale, (part.rect.y - bounds.y) * scale, part.rect.width * scale, part.rect.height * scale);
+    }
+    return canvas.toDataURL('image/jpeg', 0.76);
+  } catch {
+    return preview;
+  }
+}
+
 async function _captureActivePreview() {
   _captureTimer = null;
   if (_captureInFlight || _isOpen() || document.getElementById('boot-splash')) {
@@ -98,12 +134,12 @@ async function _captureActivePreview() {
 
   _captureInFlight = true;
   try {
-    const preview = await capture({
+    const preview = await _withWebPages(await capture({
       x: bounds.x,
       y: bounds.y,
       width: bounds.width,
       height: bounds.height,
-    });
+    }), bounds);
     if (preview && getActivePanelPluginId() === pluginId && !_isOpen()) {
       _previews.set(pluginId, preview);
     }
@@ -263,5 +299,7 @@ export function initTaskView() {
     _schedulePreviewCapture();
   });
   window.addEventListener('resize', () => _schedulePreviewCapture(800));
+  // What a panel shows changed without a panel switch (a web page loaded in Atmos Browser).
+  window.addEventListener('atmos:panel-content-changed', () => _schedulePreviewCapture(800));
   _schedulePreviewCapture();
 }

@@ -6,7 +6,9 @@
  *
  *   export  atmos-ext://first-party/__atmos/move.html?role=export. It reads
  *           the declared IndexedDB databases (schema and every record, Blobs
- *           included) and localStorage keys, and later deletes them.
+ *           included) and localStorage keys, and later deletes them. Served
+ *           in an extension's own origin too, only to delete everything
+ *           there when it was removed with its data (_clearRemovedStorage).
  *   import  atmos-ext://<the extension's own host>/__atmos/move.html?role=import.
  *           It writes what it is sent.
  *

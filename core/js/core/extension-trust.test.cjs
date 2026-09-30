@@ -118,6 +118,20 @@ test('third-party extensions cannot have main-process code or permissions', () =
   assert.throws(() => trust.approve('services', catalog.find('services', 'delta'), 'x'), /main\.cjs/);
 });
 
+test('web pages ("web": true) are for official extensions only: a community one asking is blocked, whatever else', () => {
+  const { write, setup } = fixture();
+  write('installed/plugins/surfer/extension.json', { apiVersion: 4, permissions: { web: true } });
+  write('installed/plugins/surfer/panel.js', 'export default 1;');
+  write('installed/plugins/plain/extension.json', { apiVersion: 4, permissions: { web: false } });
+  write('installed/plugins/plain/panel.js', 'export default 1;');
+  const { catalog, trust } = setup();
+  const surfer = trust.get(catalog.find('plugins', 'surfer'));
+  assert.equal(surfer.status, 'blocked');
+  assert.match(surfer.reason, /\(web\) only official, signed extensions/);
+  assert.throws(() => trust.approve('plugins', catalog.find('plugins', 'surfer'), 'x'));
+  assert.equal(trust.get(catalog.find('plugins', 'plain')).status, 'pending', '"web": false asks for nothing');
+});
+
 test('an installed copy of a bundled extension is ignored, not approvable', () => {
   const { write, setup } = fixture();
   write('bundled/plugins/alpha/extension.json', { apiVersion: 3, permissions: {} });

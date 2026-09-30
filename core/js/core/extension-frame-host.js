@@ -31,6 +31,7 @@ import { getCapability, onCapabilityChange } from './renderer-capabilities.js';
 import { createExtensionBridge } from './extension-bridge.js';
 import { createPanelDrawer } from './panel-drawer.js';
 import { panelState } from './panel-state.js';
+import { webFor } from './web-layer.js';
 
 // allow-popups: a link a frame opens in a new window (target="_blank") goes
 // to Atmos's window-open handler, which never opens a window: it hands
@@ -43,7 +44,7 @@ const APPEARANCE_VARS = [
 ];
 const BOOT_TIMEOUT_MS = 10000;
 // The SDK frames get (core/js/sdk/atmos-sdk.js SDK_VERSION; a test keeps them equal).
-export const SDK_VERSION = '1.1.0';
+export const SDK_VERSION = '1.2.0';
 
 const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>
@@ -687,6 +688,9 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
       if (!glassLayer) throw new Error('only panels declaring "glass" have Core-drawn glass');
       _paintGlass(glassLayer, regions);
     },
+    // Web pages (Atmos Browser), for an official extension declaring "web"
+    // (the bridge checks both again): see web-layer.js.
+    web: extension.tier !== 'third-party' && extension.permissions?.web === true ? webFor(extension, iframe, surface.type) : null,
   };
 
   let glassLayer = null;

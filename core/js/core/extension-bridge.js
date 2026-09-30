@@ -115,6 +115,16 @@ const MAX_FETCH_BODY = 5 * 1024 * 1024;
 const MAX_FETCHES_PER_FRAME = 32;
 let _bridgeSerial = 0;
 
+// Web pages (atmos.web): what a frame may ask Core to do to one of its tabs.
+const WEB_COMMANDS = new Set(['navigate', 'back', 'forward', 'reload', 'stop', 'zoom', 'find', 'stopFind', 'print', 'mute', 'edit', 'download', 'copyImage', 'focus', 'state']);
+const MAX_WEB_URL = 8192;
+const MAX_DOWNLOAD_URL = 2_000_000; // "Save image as…" on a data: image
+const WEB_TAB_ID = /^[A-Za-z0-9_-]{1,64}$/;
+function tabIdOf(value) {
+  if (typeof value !== 'string' || !WEB_TAB_ID.test(value)) throw new BridgeError('a tab id is 1–64 letters, digits, - or _', 'TypeError');
+  return value;
+}
+
 function parseTarget(target) {
   const match = typeof target === 'string' && target.match(/^(plugin|service):([a-z0-9][a-z0-9-]*)$/);
   if (!match) throw new BridgeError(`'${target}' is not an extension (use "plugin:<id>" or "service:<id>")`, 'TypeError');
@@ -140,6 +150,16 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
   let disposed = false;
   let wallpaperWatch = null;
   let locationWatch = null;
+  let webWatch = null;
+
+  /** Web pages: an official extension that declares "web": true, and Core's web layer to show them. */
+  const requireWeb = () => {
+    if (extension.tier === 'third-party' || extension.permissions?.web !== true) {
+      throw new BridgeError(`${self} may not show web pages; that takes "web": true in its permissions, for official extensions`);
+    }
+    if (!deps.web) throw new BridgeError('web pages are unavailable here', 'Error');
+    return deps.web;
+  };
 
   /** What a frame may ask its audio channel to load. */
   const audioSource = source => {
@@ -464,6 +484,71 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       if (!deps.showPanel?.(extension)) throw new BridgeError(`${self} has no panel`, 'Error');
     },
 
+    // Web pages (Atmos Browser): official extensions declaring "web": true.
+    // Core's web layer and the main process decide what a page may do; these
+    // only check who asks and the shape of what they send.
+    'web.open': (tabId, options) => {
+      const { url, private: isPrivate } = options && typeof options === 'object' ? options : {};
+      if (url !== undefined && (typeof url !== 'string' || url.length > MAX_WEB_URL)) throw new BridgeError('web.open(tabId, { url }): url must be text', 'TypeError');
+      return requireWeb().open(tabIdOf(tabId), { url: url || 'about:blank', private: isPrivate === true });
+    },
+    'web.close': tabId => requireWeb().close(tabIdOf(tabId)),
+    'web.show': tabId => requireWeb().show(tabId === null ? null : tabIdOf(tabId)),
+    'web.do': (tabId, name, ...args) => {
+      const web = requireWeb();
+      if (!WEB_COMMANDS.has(name)) throw new BridgeError(`unknown web command '${String(name).slice(0, 40)}'`, 'TypeError');
+      if (name === 'navigate' || name === 'download') {
+        if (typeof args[0] !== 'string' || args[0].length > (name === 'download' ? MAX_DOWNLOAD_URL : MAX_WEB_URL)) throw new BridgeError(`web.${name}(tabId, url): url must be text`, 'TypeError');
+      }
+      if (name === 'find' && args[0] != null && typeof args[0] !== 'string') throw new BridgeError('web.find(tabId, text)', 'TypeError');
+      if (name === 'copyImage' && !(Number.isFinite(args[0]) && Number.isFinite(args[1]))) throw new BridgeError('web.copyImage(tabId, x, y)', 'TypeError');
+      return web.do(tabIdOf(tabId), name, ...args.slice(0, 2));
+    },
+    'web.list': () => requireWeb().list(),
+    'web.setSurface': rect => {
+      const web = requireWeb();
+      if (surface.type !== 'panel') throw new BridgeError('only a panel shows web pages', 'Error');
+      if (rect === null) return web.clearSurface();
+      const clean = box => ({
+        x: Math.round(finiteOr(box?.x, 0)), y: Math.round(finiteOr(box?.y, 0)),
+        width: Math.max(0, Math.round(finiteOr(box?.width, 0))), height: Math.max(0, Math.round(finiteOr(box?.height, 0))),
+      });
+      return web.setSurface({
+        ...clean(rect),
+        over: (Array.isArray(rect?.over) ? rect.over : []).slice(0, 8).map(clean).filter(box => box.width > 0 && box.height > 0),
+      });
+    },
+    'web.subscribe': () => {
+      const web = requireWeb();
+      if (!webWatch) webWatch = web.subscribe(payload => post({ topic: 'web', payload }));
+    },
+    'web.downloads': () => requireWeb().downloads(),
+    'web.download': (id, action) => {
+      if (typeof id !== 'string' || !['open', 'show', 'cancel', 'remove', 'pause', 'resume'].includes(action)) throw new BridgeError('web.downloads.<action>(id)', 'TypeError');
+      return requireWeb().download(id, action);
+    },
+    'web.permissionRespond': (id, answer) => {
+      if (typeof id !== 'string') throw new BridgeError('web.permissions.respond(requestId, { allow, remember })', 'TypeError');
+      return requireWeb().respondPermission(id, { allow: answer?.allow === true, remember: answer?.remember !== false });
+    },
+    'web.externalRespond': (id, allow) => {
+      if (typeof id !== 'string') throw new BridgeError('web.external.respond(requestId, allow)', 'TypeError');
+      return requireWeb().respondExternal(id, allow === true);
+    },
+    'web.siteSettings': () => requireWeb().siteSettings(),
+    'web.siteSetting': (origin, name, value) => {
+      if (typeof origin !== 'string' || typeof name !== 'string' || ![null, 'allow', 'block'].includes(value)) {
+        throw new BridgeError('web.permissions.set(origin, name, "allow" | "block" | null)', 'TypeError');
+      }
+      return requireWeb().setSiteSetting(origin, name, value);
+    },
+    'web.options': () => requireWeb().options(),
+    'web.setOptions': patch => requireWeb().setOptions(plainObject(patch, 'web options')),
+    'web.clearData': what => {
+      const { cookies, cache, siteSettings } = plainObject(what, 'what to clear');
+      return requireWeb().clearData({ cookies: cookies === true, cache: cache === true, siteSettings: siteSettings === true });
+    },
+
     // One-off copy of data a first-party extension stored in the Atmos page
     // before it moved into a frame. Only databases its manifest lists.
     // An entry is a database name (all of it), or { name, keys } for only
@@ -571,6 +656,10 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     wallpaperWatch = null;
     locationWatch?.();
     locationWatch = null;
+    webWatch?.();
+    webWatch = null;
+    // A panel that goes takes its page with it (the tab stays open).
+    if (surface.type === 'panel' && deps.web) { try { deps.web.clearSurface(); } catch { /* not a web panel */ } }
     for (const requestId of fetches) deps.fetchAbort?.(self, requestId);
     fetches.clear();
     for (const pending of outgoingCalls.values()) pending.reject(new BridgeError('service stopped', 'Error'));

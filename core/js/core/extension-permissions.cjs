@@ -9,7 +9,8 @@
  *     "node":      ["fs", "path", "child_process"],  // modules main.cjs requires
  *     "electron":  ["dialog", "shell", "app", "BrowserWindow", "clipboard", "nativeImage", "net"],
  *     "ipc":       true,                              // main.cjs registers IPC handlers
- *     "resources": ["example-art"]                    // atmos-resource:// providers
+ *     "resources": ["example-art"],                   // atmos-resource:// providers
+ *     "web":       true                               // web pages in its panel (atmos.web; official only)
  *   }
  *
  * Core enforces what passes through it: the Electron objects, IPC and
@@ -22,7 +23,7 @@
  * made before SDK 1.0 load, but means nothing: nothing could use them.
  */
 
-const KEYS = ['network', 'browser', 'invokes', 'node', 'electron', 'ipc', 'provides', 'resources'];
+const KEYS = ['network', 'browser', 'invokes', 'node', 'electron', 'ipc', 'provides', 'resources', 'web'];
 // "wasm" is not a Chromium permission: it lets the extension's frames
 // compile WebAssembly (their CSP gets 'wasm-unsafe-eval').
 const BROWSER_PERMISSIONS = ['geolocation', 'clipboard-read', 'notifications', 'media', 'display-capture', 'wasm'];
@@ -32,7 +33,7 @@ const CONTEXT_ELECTRON = ['app', 'BrowserWindow', 'dialog', 'shell'];
 const BASELINE_BROWSER = ['clipboard-sanitized-write', 'fullscreen'];
 
 const EMPTY = Object.freeze({
-  network: [], browser: [], invokes: [], node: [], electron: [], ipc: false, provides: [], resources: [],
+  network: [], browser: [], invokes: [], node: [], electron: [], ipc: false, provides: [], resources: [], web: false,
 });
 
 // A network entry is a host name (a label or more, dots between, no
@@ -86,6 +87,7 @@ function normalizePermissions(permissions) {
   const unknown = Object.keys(permissions).filter(key => !KEYS.includes(key));
   if (unknown.length) throw new TypeError(`unknown permission ${unknown.map(key => `"${key}"`).join(', ')}`);
   if (permissions.ipc !== undefined && typeof permissions.ipc !== 'boolean') throw new TypeError('permissions.ipc must be true or false');
+  if (permissions.web !== undefined && typeof permissions.web !== 'boolean') throw new TypeError('permissions.web must be true or false');
   const normalized = {
     network: [...new Set(list(permissions.network, 'network').map(host => host.toLowerCase()))].sort(),
     browser: list(permissions.browser, 'browser'),
@@ -95,6 +97,7 @@ function normalizePermissions(permissions) {
     ipc: permissions.ipc === true,
     provides: list(permissions.provides, 'provides'),
     resources: list(permissions.resources, 'resources'),
+    web: permissions.web === true,
   };
   const badHosts = normalized.network.filter(entry => !isValidHost(entry));
   if (badHosts.length) {
@@ -152,6 +155,7 @@ function describePermissions(permissions, { hasMain = false, everyHost = false }
   lines.push(...node);
   lines.push(...p.electron.map(name => ELECTRON_TEXT[name]).filter(Boolean));
   lines.push(...p.browser.map(name => BROWSER_TEXT[name]));
+  if (p.web) lines.push('Show web pages from any site, in a browser session of its own');
   if (p.network.includes('*')) lines.push('Connect to any website or server');
   else if (p.network.length) {
     const shown = (everyHost ? p.network : p.network.slice(0, 4)).join(', ');
@@ -193,6 +197,7 @@ function permissionsAdded(current, approved) {
   const hosts = now.network.filter(entry => !hostCovered(entry, before.network));
   if (hosts.length) added.network = hosts;
   if (now.ipc && !before.ipc) added.ipc = true;
+  if (now.web && !before.web) added.web = true;
   return Object.keys(added).length ? added : null;
 }
 

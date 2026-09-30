@@ -3,7 +3,8 @@
   "plugins": [
     "audio-player",
     "matrix-chat",
-    "finance"
+    "finance",
+    "browser"
   ],
   "services": [
     "media-metadata",

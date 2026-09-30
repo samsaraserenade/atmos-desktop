@@ -89,7 +89,7 @@ test('the SDK surface: stable, experimental and first-party calls, nothing else'
   assert.deepEqual(Object.keys(atmos).sort(), [
     'SDK_VERSION', 'appearance', 'audio', 'background', 'call', 'clipboard', 'contextMenu', 'drawer', 'events', 'expose',
     'extension', 'fetch', 'invoke', 'legacy', 'library', 'lifecycle', 'listen', 'location', 'notifications', 'panel',
-    'ready', 'state', 'surface', 'wallpaper',
+    'ready', 'state', 'surface', 'wallpaper', 'web',
   ]);
   assert.equal(atmos.surface.onFileDrop, undefined, 'file drops went with SDK 1.0');
   assert.deepEqual({ ...atmos.extension }, { id: 'hello', kind: 'plugin', tier: 'third-party', version: '1.0.0' });

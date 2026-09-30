@@ -1,0 +1,11 @@
+{
+  "default": "duckduckgo",
+  "engines": [
+    { "id": "duckduckgo", "name": "DuckDuckGo", "search": "https://duckduckgo.com/?q=%s" },
+    { "id": "google", "name": "Google", "search": "https://www.google.com/search?q=%s" },
+    { "id": "bing", "name": "Bing", "search": "https://www.bing.com/search?q=%s" },
+    { "id": "brave", "name": "Brave Search", "search": "https://search.brave.com/search?q=%s" },
+    { "id": "startpage", "name": "Startpage", "search": "https://www.startpage.com/do/search?q=%s" },
+    { "id": "ecosia", "name": "Ecosia", "search": "https://www.ecosia.org/search?q=%s" }
+  ]
+}

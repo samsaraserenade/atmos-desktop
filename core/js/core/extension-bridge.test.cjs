@@ -450,3 +450,34 @@ test('location: read-only, only with "invokes": ["service:location"]', async t =
   assert.match(refusal.message, /service:location/);
   assert.equal((await denied.request('location.subscribe')).error.name, 'AtmosPermissionError');
 });
+
+test('web pages: official extensions declaring "web" only; tab ids, commands and the surface checked', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const calls = [];
+  const web = new Proxy({}, { get: (_, name) => (...args) => { calls.push([name, ...args]); return name === 'subscribe' ? () => calls.push(['unsubscribe']) : true; } });
+  const official = harness(createExtensionBridge, { extension: { permissions: { web: true } }, deps: { web } });
+  assert.equal((await official.request('web.open', 'tab-1', { url: 'https://example.com/', private: true })).result, true);
+  assert.deepEqual(calls.at(-1), ['open', 'tab-1', { url: 'https://example.com/', private: true }]);
+  assert.equal((await official.request('web.open', 'bad id!', {})).error.name, 'TypeError', 'a tab id is letters, digits, - and _');
+  assert.equal((await official.request('web.do', 'tab-1', 'executeJavaScript', 'alert(1)')).error.name, 'TypeError', 'only the listed commands');
+  assert.equal((await official.request('web.do', 'tab-1', 'navigate', 42)).error.name, 'TypeError');
+  assert.equal((await official.request('web.do', 'tab-1', 'copyImage', 'x', 1)).error.name, 'TypeError');
+  await official.request('web.do', 'tab-1', 'find', 'text', { forward: true }, 'extra');
+  assert.deepEqual(calls.at(-1), ['do', 'tab-1', 'find', 'text', { forward: true }], 'at most two arguments cross');
+  await official.request('web.setSurface', { x: 1.4, y: 2, width: -5, height: 10, over: [{ x: 0, y: 0, width: 5, height: 5 }, { x: 0, y: 0, width: 0, height: 9 }, ...Array(10).fill({ x: 1, y: 1, width: 1, height: 1 })], evil: true });
+  assert.deepEqual(calls.at(-1), ['setSurface', { x: 1, y: 2, width: 0, height: 10, over: [{ x: 0, y: 0, width: 5, height: 5 }, ...Array(6).fill({ x: 1, y: 1, width: 1, height: 1 })] }]);
+  assert.equal((await official.request('web.siteSetting', 'https://a.example', 'camera', 'maybe')).error.name, 'TypeError');
+  await official.request('web.subscribe');
+  official.bridge.dispose();
+  assert.deepEqual(calls.slice(-2), [['unsubscribe'], ['clearSurface']], 'a closed panel stops listening and shows no page');
+
+  const widget = harness(createExtensionBridge, { extension: { permissions: { web: true } }, surface: { type: 'sidebar' }, deps: { web } });
+  assert.match((await widget.request('web.setSurface', { x: 0, y: 0, width: 1, height: 1 })).error.message, /only a panel/);
+
+  for (const extension of [{ permissions: {} }, { tier: 'third-party', permissions: { web: true } }]) {
+    const refused = harness(createExtensionBridge, { extension, deps: { web } });
+    const reply = await refused.request('web.open', 'tab-1', {});
+    assert.equal(reply.error.name, 'AtmosPermissionError', JSON.stringify(extension));
+    assert.match(reply.error.message, /may not show web pages/);
+  }
+});
