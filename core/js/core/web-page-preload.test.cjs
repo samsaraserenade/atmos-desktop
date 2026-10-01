@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { installChromeMembers, applyFilters, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP } = require('./web-page-preload.cjs');
+const { installChromeMembers, applyFilters, collectTokens, watchTokens, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS } = require('./web-page-preload.cjs');
 
 // The page's location, which loadTimes() reads (Node has none).
 globalThis.location = { protocol: 'https:' };
@@ -104,3 +104,45 @@ test('the blocker\'s scriptlets: the page\'s world, then a world of their own wi
   applyFilters({ ipcRenderer: { sendSync: () => ({ styles: '', scripts: [], isolated: [] }) }, webFrame }, { origin: 'https://a.test' });
   assert.deepEqual(calls, []);
 });
+
+/** A DOM-like element for the token collector: an id, class names, a link. */
+function element({ id = '', classes = [], href = null, children = [] } = {}) {
+  return {
+    nodeType: 1, id, classList: classes, localName: href === null ? 'div' : 'a', href: href ?? undefined,
+    querySelectorAll: () => children.flatMap(child => [child, ...child.querySelectorAll()]),
+  };
+}
+
+test('a page\'s class names, ids and links: too long ones are dropped before they\'re kept or sent', () => {
+  const kinds = () => ({ classes: new Set(), ids: new Set(), hrefs: new Set() });
+  const seen = kinds();
+  const pending = kinds();
+  const long = 'x'.repeat(MAX_LENGTH.classes + 1);
+  collectTokens(element({
+    id: 'banner', classes: ['ad', long],
+    children: [
+      element({ id: 'y'.repeat(MAX_LENGTH.ids + 1), classes: ['z'.repeat(MAX_LENGTH.classes)] }),
+      element({ href: `https://a.test/${'p'.repeat(MAX_LENGTH.hrefs)}` }),
+      element({ href: 'https://a.test/fine' }),
+    ],
+  }), seen, pending);
+  assert.deepEqual([...pending.classes], ['ad', 'z'.repeat(MAX_LENGTH.classes)]);
+  assert.deepEqual([...pending.ids], ['banner']);
+  assert.deepEqual([...pending.hrefs], ['https://a.test/fine']);
+  assert.ok(!seen.classes.has(long), 'not even remembered');
+});
+
+test('a batch of tokens has a bound on its characters, the rest wait for the next', () => {
+  const sent = [];
+  const timers = { queue: [], setTimeout(fn) { this.queue.push(fn); return this.queue.length; } };
+  const many = Array.from({ length: 900 }, (_, i) => element({ classes: [`${'c'.repeat(250)}${i}`] }));
+  const doc = { readyState: 'complete', documentElement: element({ children: many }), addEventListener() {} };
+  class Observer { observe() {} }
+  watchTokens({ ipcRenderer: { invoke: (_channel, batch) => { sent.push(batch); return Promise.resolve(null); } }, webFrame: {}, doc, Observer, timers });
+  while (timers.queue.length) timers.queue.shift()();
+  const sizes = sent.map(batch => [...batch.classes, ...batch.ids, ...batch.hrefs].reduce((sum, value) => sum + value.length, 0));
+  assert.ok(sent.length > 1, 'more than one batch');
+  assert.ok(sizes.every(size => size <= MAX_BATCH_CHARS), sizes);
+  assert.equal(sent.reduce((sum, batch) => sum + batch.classes.length, 0), 900, 'every name sent, once');
+});
+

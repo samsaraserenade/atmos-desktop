@@ -401,16 +401,21 @@ export interface WebDownload {
   total: number;
   started: number;
   private: boolean;
-  /** False for programs and scripts: Atmos only shows those in their folder. */
+  /** True only for documents, media and archives: Atmos shows anything else in its folder. */
   openable: boolean;
 }
 /**
  * @firstParty SDK 1.2: what pages do. `type` is one of 'opened', 'closed',
- * 'state', 'navigated', 'progress', 'favicon', 'open-tab', 'open-link',
+ * 'state', 'navigated', 'progress', 'favicon', 'open-tab', 'open-link'
+ * (`background`: no click in Atmos just before, so not to the front),
  * 'context-menu', 'command', 'find', 'load-failed', 'refused', 'fullscreen',
- * 'crashed', 'permission-request', 'permission-settled', 'external-request',
+ * 'crashed', 'permission-request' (`origin`: the page's site, whichever
+ * frame asked), 'permission-settled', 'external-request' (`site`: the
+ * asking page's), 'popup-blocked' and 'download-blocked' (a page tried
+ * without a click; `url` to open or fetch it, when there is one),
  * 'download', 'download-removed', 'private-ended', 'adblock' (the blocker's
- * status changed).
+ * status changed; `untrusted` names uBlock Origin's lists in use from a
+ * copy without their trust).
  */
 export interface WebEvent {
   type: string;
@@ -462,7 +467,9 @@ export interface WebApi {
   };
   readonly permissions: {
     respond(requestId: string, answer: { allow: boolean; remember?: boolean }): Promise<boolean>;
+    /** Each site's remembered answers; `name` is a prompted permission, 'ads' (its shield down) or 'popups' (pop-ups without a click). */
     list(): Promise<{ origin: string; name: string; value: 'allow' | 'block' }[]>;
+    /** Remember or forget one; 'ads' and 'popups' are only ever 'allow' ('block' forgets them). */
     set(origin: string, name: string, value: 'allow' | 'block' | null): Promise<{ origin: string; name: string; value: 'allow' | 'block' }[]>;
   };
   readonly external: { respond(requestId: string, allow: boolean): Promise<boolean> };

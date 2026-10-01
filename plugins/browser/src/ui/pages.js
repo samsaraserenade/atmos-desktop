@@ -6,7 +6,7 @@
  */
 import atmos from 'atmos-sdk';
 import { h, icon, siteIcon, tabLabel } from './dom.js';
-import { hostOf, siteName } from '../address.js';
+import { hostOf, siteName, displayUrl } from '../address.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -30,13 +30,10 @@ function opener(engine, tab) {
 }
 
 // ── New tab ──────────────────────────────────────────────────────────────────
-export function renderNewTab(container, tab, { engine, focusAddress }) {
+// No search box of its own: the address bar is right above it, and a new
+// tab puts the keyboard there.
+export function renderNewTab(container, tab, { engine }) {
   const open = opener(engine, tab);
-  const search = h('div', { class: 'br-ntp-search', role: 'button', tabindex: '0', 'aria-label': 'Search or enter an address' },
-    icon('search'), h('input', { type: 'text', tabindex: '-1', readonly: true, placeholder: `Search with ${engine.searchEngines().find(item => item.id === engine.searchEngine())?.name || 'the web'} or enter an address` }));
-  // The address bar does the typing (with its suggestions).
-  search.addEventListener('pointerdown', event => { event.preventDefault(); focusAddress(); });
-  search.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusAddress(); } });
   const bookmarksEl = h('div', { class: 'br-tiles' });
   const topEl = h('div', { class: 'br-tiles' });
   const statEl = h('div', { class: 'br-ntp-stat', hidden: true });
@@ -44,7 +41,6 @@ export function renderNewTab(container, tab, { engine, focusAddress }) {
     tab.private ? h('div', { class: 'br-private-note' }, icon('private'), h('div', {},
       h('strong', { text: 'A private tab' }),
       'Pages you open here have a session of their own: sign-ins, cookies and site data here are separate from your other tabs, and nothing is kept once the last private tab closes. No history is kept. Files you download stay.')) : null,
-    search,
     statEl,
     h('div', { class: 'br-heading', text: 'Bookmarks' }), bookmarksEl,
     tab.private ? null : h('div', { class: 'br-heading', text: 'Most visited' }), tab.private ? null : topEl);
@@ -145,10 +141,10 @@ export function renderHistory(container, tab, { engine }) {
       h('div', { class: 'br-heading', text: group.label }),
       ...group.entries.map(entry => {
         const remove = h('button', { class: 'br-icon-button br-row-remove', title: 'Remove from history', 'aria-label': 'Remove from history' }, icon('close'));
-        const row = h('div', { class: 'br-row', title: entry.url },
+        const row = h('div', { class: 'br-row', title: displayUrl(entry.url) },
           h('span', { class: 'br-row-time', text: timeFormat.format(entry.lastVisit) }),
           h('span', { class: 'br-row-icon' }, siteIcon(engine.iconFor(entry.url))),
-          h('span', { class: 'br-row-title', text: entry.title || entry.url }),
+          h('span', { class: 'br-row-title', text: entry.title || displayUrl(entry.url) }),
           h('span', { class: 'br-row-host', text: hostOf(entry.url) }),
           remove);
         remove.addEventListener('click', event => { event.stopPropagation(); void engine.history.remove(entry.url); });
@@ -197,6 +193,9 @@ const FRIENDLY = {
   '-20': 'This page was blocked.',
   '-27': 'This page was blocked by the browser’s rules for what may load.',
   '-301': 'This address isn’t something Atmos Browser opens.',
+  // A site that signs you in with a certificate on this computer (a work or ID card's): Atmos sends none.
+  '-110': 'The site wants a certificate from this computer to sign you in (a work or ID-card one), and Atmos Browser doesn’t send them.',
+  '-117': 'The site wants a certificate from this computer to sign you in (a work or ID-card one), and Atmos Browser doesn’t send them.',
 };
 
 export function renderProblem(container, tab, { engine }) {

@@ -57,7 +57,7 @@ function freshRuntime() {
     shield: 'none',     // 'on', 'off' (the site's ads allowed), 'disabled', 'none'
     favicon: null,
     error: null,        // { kind: 'certificate' | 'load' | 'crashed', url, code, description }
-    notice: null,       // { text } something refused
+    notice: null,       // { text, id?, actions? } something refused, or blocked with ways to go ahead ([{ label, kind, … }])
     permissions: [],    // [{ requestId, origin, permissions }]
     external: null,     // { requestId, url, scheme }
     find: null,         // { text, matches, active }
@@ -83,6 +83,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
   let shown = undefined;             // what Core was last told to show
   let saveTimer = null;
   let started = false;
+  let noticeSerial = 0;              // each notice with a button is new, even with the same words
 
   // ── Telling the views ─────────────────────────────────────────────────────
   function emit(change) {
@@ -496,8 +497,47 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         return;
       }
       case 'open-link': {
-        newTab({ url: String(event.url || '') });
-        void atmos.panel.show().catch(() => {});
+        // Behind the tab you're on unless you just clicked or typed in Atmos (Core decides).
+        const background = event.background === true;
+        newTab({ url: String(event.url || ''), select: !background });
+        if (!background) void atmos.panel.show().catch(() => {});
+        return;
+      }
+      case 'popup-blocked': {
+        // A pop-up window's own pop-up is told in the tab you're on.
+        const target = tab ? id : list.selected;
+        if (!target) return;
+        const site = siteName(String(event.site || '')) || 'This page';
+        const url = isPageUrl(event.url) ? String(event.url) : null;
+        const isPrivate = event.private === true || list.get(target)?.private === true;
+        // Open: the address in a tab (a pop-up that answers its page, a
+        // sign-in, can't be one: allow the site, then click again). Always
+        // allow: the site's pop-ups from now on (an ordinary tab's choice,
+        // kept; not offered in a private tab, which keeps nothing).
+        const origin = /^https?:\/\//i.test(String(event.site || '')) ? String(event.site) : null;
+        rt(target).notice = {
+          id: ++noticeSerial,
+          text: `Pop-up blocked: ${site} tried to open one without a click.`,
+          actions: [
+            url ? { label: 'Open', kind: 'popup', url, private: isPrivate } : null,
+            origin && !isPrivate ? { label: 'Always allow', kind: 'allow-popups', origin } : null,
+          ].filter(Boolean),
+        };
+        emit({ type: 'tab', id: target });
+        return;
+      }
+      case 'download-blocked': {
+        const target = tab ? id : list.selected;
+        if (!target) return;
+        const site = siteName(String(event.site || '')) || 'This page';
+        const name = String(event.name || 'a file').slice(0, 120);
+        const url = /^(https?:|data:|blob:)/i.test(String(event.url || '')) ? String(event.url) : null;
+        rt(target).notice = {
+          id: ++noticeSerial,
+          text: `Download blocked: ${site} tried to save “${name}” without a click.`,
+          actions: url && tab ? [{ label: 'Download', kind: 'download', url }] : [],
+        };
+        emit({ type: 'tab', id: target });
         return;
       }
       case 'download': {
@@ -534,7 +574,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         // A pop-up window's link asks in the tab you're on.
         const target = tab ? id : list.selected;
         if (!target) return;
-        rt(target).external = { requestId: event.requestId, url: String(event.url || ''), scheme: String(event.scheme || '') };
+        rt(target).external = { requestId: event.requestId, url: String(event.url || ''), scheme: String(event.scheme || ''), site: String(event.site || '') };
         emit({ type: 'tab', id: target });
         return;
       }
@@ -649,12 +689,17 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     emit({ type: 'tab', id });
     return web.permissions.respond(requestId, { allow: false, remember: false });
   }
-  async function answerExternal(id, allow) {
+  /**
+   * The answer to the link prompt the user saw (`requestId`): nothing if
+   * another has taken its place meanwhile (a pop-up's link asks in the tab
+   * you're on), so a click meant for one never answers the next.
+   */
+  async function answerExternal(id, allow, requestId = undefined) {
     const state = rt(id);
     const request = state.external;
+    if (!request || (requestId !== undefined && request.requestId !== requestId)) return false;
     state.external = null;
     emit({ type: 'tab', id });
-    if (!request) return false;
     return web.external.respond(request.requestId, allow === true);
   }
   function dismissNotice(id) {
@@ -662,6 +707,24 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     if (!state?.notice) return;
     state.notice = null;
     emit({ type: 'tab', id });
+  }
+  /**
+   * A notice's button (`index`, in its order) on the notice the user saw
+   * (`noticeId`; nothing if another has replaced it meanwhile): open the
+   * blocked pop-up in a tab, allow the site's pop-ups from now on, or start
+   * the blocked download (as Core's own).
+   */
+  async function noticeAction(id, index = 0, noticeId = undefined) {
+    const state = runtime.get(id);
+    if (noticeId !== undefined && state?.notice?.id !== noticeId) return null;
+    const action = state?.notice?.actions?.[index];
+    if (!action) return null;
+    state.notice = null;
+    emit({ type: 'tab', id });
+    if (action.kind === 'popup') return newTab({ url: action.url, private: action.private === true, after: id, opener: id });
+    if (action.kind === 'allow-popups') return web.permissions.set(action.origin, 'popups', 'allow');
+    if (action.kind === 'download') return onLive(id, () => web.download(id, action.url));
+    return null;
   }
 
   // ── Suggestions for the address bar ───────────────────────────────────────
@@ -792,7 +855,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     copyImage: (id, x, y) => onLive(id, () => web.copyImage(id, x, y)),
     focusPage: id => onLive(id, () => web.focus(id)),
     find, stopFind,
-    answerPermission, dismissPermission, answerExternal, dismissNotice,
+    answerPermission, dismissPermission, answerExternal, dismissNotice, noticeAction,
     runCommand,
     suggest,
     // Collections

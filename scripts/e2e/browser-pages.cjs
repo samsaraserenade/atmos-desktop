@@ -52,7 +52,10 @@ function handler(requests, info) {
         html(doc('Links', `<style>body{font:15px sans-serif;background:#f5f5f4;padding:20px}a,button{display:block;margin:8px 0}</style>
           <a id="blank" href="/solid?title=Blank%20target&color=7c3aed" target="_blank">target=_blank</a>
           <button id="open-plain" onclick="window.open('/solid?title=Opened&color=0891b2')">window.open, no features</button>
+          <button id="open-two" onclick="window.open('/solid?title=First%20of%20two&color=0891b2');window.open('/solid?title=Second%20of%20two&color=0891b2')">two pop-ups from one click</button>
           <button id="signin" onclick="window.__popup=window.open('/oauth/authorize?state=xyz','signin','width=480,height=560')">Sign in (a pop-up)</button>
+          <button id="window" onclick="window.open('/fullscreen','win','width=480,height=400')">A pop-up window</button>
+          <iframe id="frame" src="http://${host === 'beta.test' ? 'alpha.test' : 'beta.test'}:${info.httpPort()}/frame-open" style="position:absolute;left:760px;top:20px;width:300px;height:80px;border:0"></iframe>
           <a id="mailto" href="mailto:someone@example.com?subject=Hi">mailto:</a>
           <a id="magnet" href="magnet:?xt=urn:btih:0123456789abcdef">magnet:</a>
           <a id="calc" href="ms-calculator:">ms-calculator:</a>
@@ -62,6 +65,32 @@ function handler(requests, info) {
           <a id="program" href="/download-program">a program</a>
           <img id="image" src="/favicon.png" width="64" height="64" alt="">
           <script>window.__messages=[];addEventListener('message',e=>{if(e.origin===location.origin)__messages.push(e.data)})</script>`));
+        return;
+      // A frame of another site whose button opens a pop-up (the click is in the frame's own process).
+      case '/frame-open':
+        html(doc('Frame', `<style>html,body{margin:0;height:100%}button{width:100%;height:100%;font:16px sans-serif}</style>
+          <button id="open" onclick="window.open('/solid?title=From%20a%20frame&color=0891b2')">open from a frame</button>`));
+        return;
+      // A page that starts two downloads on its own, without a click.
+      case '/auto-downloads':
+        html(doc('Auto downloads', `<p>Downloads on its own.</p>
+          <script>const get = name => { const a = document.createElement('a'); a.href = '/download-named?name=' + name; a.download = ''; document.body.append(a); a.click(); };
+          setTimeout(() => get('auto-one.txt'), 300); setTimeout(() => get('auto-two.txt'), 1500);</script>`));
+        return;
+      case '/download-named': {
+        const name = String(url.searchParams.get('name') || 'file.txt').replace(/[^a-z0-9.-]/gi, '');
+        res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="${name}"` });
+        res.end(`${name}\n`);
+        return;
+      }
+      // A page whose icon is on a local address (not its own host): Core never fetches it.
+      case '/local-icon':
+        html(doc('Local icon', '<p>Its icon is on 127.0.0.1.</p>', '', `http://127.0.0.1:${info.httpPort()}/favicon.png?local-icon=1`));
+        return;
+      // A page with a frame of another site that may ask for the location (allow=).
+      case '/permissions-frame':
+        html(doc('Permissions frame', `<p>A frame of another site asks.</p>
+          <iframe id="asker" src="http://127.0.0.1:${info.httpPort()}/permissions" allow="geolocation" style="width:400px;height:120px"></iframe>`));
         return;
       case '/oauth/authorize':
         html(doc('Sign in to Example', `<style>body{font:15px sans-serif;background:#fff;padding:20px}</style>

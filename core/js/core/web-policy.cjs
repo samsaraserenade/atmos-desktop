@@ -23,9 +23,16 @@
  *                 files and the browser's internals never; other schemes
  *                 (mailto:, magnet:…) only after asking, and a few that run
  *                 programs on Windows never
- *   permissions   denied unless the user allowed that site; fullscreen and
- *                 writing the clipboard need no prompt (as in Chrome)
- *   downloads     a safe file name, and no "Open" for a program
+ *   permissions   denied unless the user allowed that site (the page's,
+ *                 whichever of its frames asks); fullscreen (a tab's only)
+ *                 and writing the clipboard need no prompt (as in Chrome)
+ *   activation    a pop-up only just after a click or key in the page, one
+ *                 each; a download on its own once a page load, more after
+ *                 a click (as Chrome's pop-up blocker and download limiter)
+ *   downloads     a safe file name, and "Open" only for documents, media
+ *                 and archives
+ *   site icons    fetched without cookies, and never from a local address
+ *                 a page isn't on
  */
 
 // Ordinary tabs: cookies, storage and cache kept on disk (Partitions/atmos-browser).
@@ -55,7 +62,11 @@ const WEB_PREFERENCES = Object.freeze({
   disableBlinkFeatures: 'FedCm',
   navigateOnDragDrop: false,
   spellcheck: false,
+  // A page's alert() and confirm() are Electron's dialogs over the Atmos
+  // window, with no site named (Electron has no hook to add one). From the
+  // second, a box stops that page showing more.
   safeDialogs: true,
+  safeDialogsMessage: 'Don’t let this page show more dialogs',
   autoplayPolicy: 'document-user-activation-required',
   // A <webview>'s page is see-through by default (Electron): one that sets
   // no background would show Atmos's wallpaper. Opaque, it gets the
@@ -246,10 +257,32 @@ function permissionNames(permission, details = {}) {
 }
 
 /**
- * A request: 'allow', 'deny' or 'ask'. `setting(name)` is what the user
- * chose for the requesting site ('allow', 'block' or undefined).
+ * The site a permission is asked for and kept under: the page you're on
+ * (the tab's top-level origin), whichever of its frames asks, as Chrome
+ * does. A frame from another site gets as far as asking only when the page
+ * delegated the permission to it (an iframe's allow="camera", which
+ * Chromium checks before Atmos is asked), and the question then names the
+ * page. Notifications never come from a frame of another origin (Chrome
+ * refuses those too). `requestingUrl` is the asking frame's address,
+ * `topUrl` the page's. Returns the origin, or null: refused.
  */
-function permissionDecision(permission, details, setting, { origin } = {}) {
+function permissionSite(permission, { requestingUrl = '', topUrl = '' } = {}) {
+  const top = siteOf(topUrl);
+  if (!top) return null;
+  const asking = siteOf(requestingUrl);
+  if (permission === 'notifications' && asking && asking !== top) return null;
+  return top;
+}
+
+/**
+ * A request: 'allow', 'deny' or 'ask'. `setting(name)` is what the user
+ * chose for the site (permissionSite: 'allow', 'block' or undefined).
+ * `tab`: whether a tab asks. Only a tab goes fullscreen: Core names the
+ * site over it and takes it back with Escape (web-layer.js), which it
+ * can't do over a pop-up window.
+ */
+function permissionDecision(permission, details, setting, { origin, tab = true } = {}) {
+  if (permission === 'fullscreen' && !tab) return 'deny';
   const names = permissionNames(permission, details);
   if (names === null) return 'deny';
   if (!names.length) return 'allow';
@@ -261,11 +294,82 @@ function permissionDecision(permission, details, setting, { origin } = {}) {
 }
 
 /** A synchronous check (navigator.permissions, Notification.permission): only what the user allowed. */
-function permissionCheck(permission, details, setting, { origin } = {}) {
+function permissionCheck(permission, details, setting, { origin, tab = true } = {}) {
+  if (permission === 'fullscreen' && !tab) return false;
   const names = permissionNames(permission, details);
   if (names === null) return false;
   if (!names.length) return true;
   return !!origin && names.every(name => setting(name) === 'allow');
+}
+
+// ── What a page may do because you just used it ────────────────────────────
+
+/** How long a click or key counts (Chrome's transient user activation). */
+const USER_ACTIVATION_MS = 5000;
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock',
+  'Fn', 'FnLock', 'Hyper', 'Super', 'Symbol', 'SymbolLock', 'OS']);
+
+/**
+ * Whether an input event Electron reports for a page is the user using it
+ * (HTML's activation-triggering events, as Chromium has them): a mouse
+ * button pressed, a tap, or a key pressed that the page gets (not one held
+ * down and repeating, not Escape or a modifier alone, not the browser's
+ * own shortcut). `input` is a before-input-event Input, a
+ * before-mouse-event MouseInputEvent or an input-event InputEvent.
+ */
+function activatesUser(input) {
+  if (!input || typeof input.type !== 'string') return false;
+  if (input.type === 'mouseDown' || input.type === 'touchEnd' || input.type === 'gestureTap') return true;
+  if (input.type !== 'keyDown' && input.type !== 'rawKeyDown') return false;
+  const key = String(input.key || '');
+  if (input.isAutoRepeat || !key || key === 'Escape' || MODIFIER_KEYS.has(key)) return false;
+  return shortcutFor({ ...input, type: 'keyDown' }) === null;
+}
+
+/**
+ * When each page (or the Atmos window) was last used, and what that use
+ * has paid for: a pop-up opens only within USER_ACTIVATION_MS of a click
+ * or key in the page that opens it, one per click (Chrome consumes the
+ * activation the same way). `now` for the tests.
+ */
+function createActivations({ now = () => Date.now(), lifespan = USER_ACTIVATION_MS } = {}) {
+  const pages = new Map(); // id -> { at, used: Set }
+  const fresh = entry => !!entry && now() - entry.at < lifespan;
+  return {
+    /** The user clicked, tapped or pressed a key in `id`. */
+    activate(id) { pages.set(id, { at: now(), used: new Set() }); },
+    /** When `id` was last used (0: never). */
+    lastAt: id => pages.get(id)?.at || 0,
+    /** Whether `id` was used just now, and that use hasn't paid for `what` yet; if so it has now. */
+    take(id, what) {
+      const entry = pages.get(id);
+      if (!fresh(entry) || entry.used.has(what)) return false;
+      entry.used.add(what);
+      return true;
+    },
+    forget(id) { pages.delete(id); },
+  };
+}
+
+// ── "Leave site?" ────────────────────────────────────────────────────────────
+
+/** After you answer Cancel, how long the same page's next "Leave site?" are answered Cancel without asking. */
+const LEAVE_QUIET_MS = 30_000;
+/** …unless you did something yourself this recently (a click or key in it, Back, the address bar). */
+const LEAVE_ACTED_MS = 2_000;
+
+/**
+ * Whether to ask "Leave site?" for a page that objects to being left.
+ * Electron needs the answer synchronously, so the question holds all of
+ * Atmos while it's up; a page can start one navigation after another to
+ * bring it back as soon as it's answered. After a Cancel (`refusedAt`) the
+ * page stays, without a question, for half a minute (Chrome's "prevent
+ * this page from creating additional dialogs"), unless you just acted
+ * yourself (`actedAt`, after that Cancel).
+ */
+function askBeforeLeaving({ refusedAt = 0, actedAt = 0, now = Date.now() } = {}) {
+  if (!refusedAt || now - refusedAt >= LEAVE_QUIET_MS) return true;
+  return actedAt > refusedAt && now - actedAt < LEAVE_ACTED_MS;
 }
 
 // ── Downloads ────────────────────────────────────────────────────────────────
@@ -318,21 +422,26 @@ function uniqueName(name, exists) {
   return `${base} (${Date.now()})${extension}`;
 }
 
-// Opening one of these would run it: Atmos offers "Show in folder" only.
-const PROGRAM_EXTENSIONS = new Set([
-  'exe', 'msi', 'msix', 'msixbundle', 'appx', 'appxbundle', 'msp', 'mst', 'bat', 'cmd', 'com', 'scr', 'pif',
-  'cpl', 'msc', 'ps1', 'psm1', 'psd1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'wsc', 'hta', 'jar', 'lnk',
-  'url', 'reg', 'dll', 'sys', 'ocx', 'inf', 'ins', 'isp', 'sct', 'shb', 'shs', 'scf', 'gadget', 'application',
-  'appref-ms', 'settingcontent-ms', 'library-ms', 'search-ms', 'diagcab', 'xll', 'chm', 'hlp', 'mht', 'mhtml',
-  'iso', 'img', 'vhd', 'vhdx', 'app', 'command', 'sh', 'bash', 'zsh', 'run', 'bin', 'deb', 'rpm', 'dmg', 'pkg',
-  'apk', 'py', 'pyw', 'pl', 'rb', 'svg',
+// What "Open" hands to the file's default program: documents, images,
+// audio, video, text and archives. Everything else gets "Show in folder"
+// only: programs and scripts, and the many Windows types that run or
+// fetch something when opened (.rdp, .one, .msu, .wsb, .theme, .jnlp,
+// .iqy…), web pages and SVG (the default browser runs their script),
+// macro-enabled Office files, disk images. A list of what may open, not of
+// what may not, so a type nobody thought of stays shut.
+const OPENABLE_EXTENSIONS = new Set([
+  'pdf', 'txt', 'text', 'log', 'md', 'csv', 'tsv', 'epub',
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'odg',
+  'png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'avif', 'bmp', 'ico', 'tif', 'tiff', 'heic', 'heif',
+  'mp3', 'wav', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'wma', 'mid', 'midi',
+  'mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi', 'wmv', 'ogv', 'mpg', 'mpeg', '3gp',
+  'zip', '7z', 'rar', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst',
 ]);
 
-/** Whether Atmos may open a downloaded file with its default program (not a program or script itself). */
+/** Whether Atmos may open a downloaded file with its default program (OPENABLE_EXTENSIONS). */
 function openableDownload(name) {
   const [, extension] = splitExtension(String(name || ''));
-  const ext = extension.replace(/^\./, '').toLowerCase();
-  return !!ext && !PROGRAM_EXTENSIONS.has(ext);
+  return OPENABLE_EXTENSIONS.has(extension.replace(/^\./, '').toLowerCase());
 }
 
 // ── Keys ─────────────────────────────────────────────────────────────────────
@@ -385,6 +494,103 @@ function shortcutFor(input) {
 const ICON_PARTITION = 'atmos-browser-icons';
 const ICON_SIZE = 32;
 const ICON_MAX_BYTES = 256 * 1024;
+
+/** An IPv4 address (as the URL parser writes one) in a range that isn't the public internet. */
+function localIPv4(host) {
+  const parts = host.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = parts;
+  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+}
+
+/** An IPv6 address (brackets, a zone and a dotted IPv4 tail allowed) as its eight groups, or null. */
+function ipv6Groups(text) {
+  let address = String(text || '').toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+  const dotted = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(address);
+  if (dotted) {
+    const v4 = dotted[2].split('.').map(Number);
+    if (v4.some(part => part > 255)) return null;
+    address = `${dotted[1]}${((v4[0] << 8) | v4[1]).toString(16)}:${((v4[2] << 8) | v4[3]).toString(16)}`;
+  }
+  const halves = address.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : missing < 1) return null;
+  const groups = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...tail];
+  return groups.every(group => /^[0-9a-f]{1,4}$/.test(group)) ? groups.map(group => parseInt(group, 16)) : null;
+}
+
+/**
+ * An IPv6 address that isn't the public internet: loopback and unspecified,
+ * unique-local, link-local, site-local, multicast, and every way of
+ * writing an IPv4 address inside one (compatible, mapped, translated,
+ * NAT64's well-known prefix, 6to4), judged as that IPv4 address.
+ * Unparseable: local.
+ */
+function localIPv6(text) {
+  const groups = ipv6Groups(text);
+  if (!groups) return true;
+  const [a, b, c, d, e, f, g, h] = groups;
+  const v4 = (high, low) => localIPv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  const zeros = (...values) => values.every(value => value === 0);
+  if (zeros(a, b, c, d, e, f)) return v4(g, h);                       // ::, ::1, ::a.b.c.d
+  if (zeros(a, b, c, d, e) && f === 0xffff) return v4(g, h);          // ::ffff:a.b.c.d
+  if (zeros(a, b, c, d) && e === 0xffff && f === 0) return v4(g, h);  // ::ffff:0:a.b.c.d
+  if (a === 0x64 && b === 0xff9b && zeros(c, d, e, f)) return v4(g, h); // 64:ff9b::a.b.c.d
+  if (a === 0x2002) return v4(b, c);                                  // 6to4
+  return (a & 0xfe00) === 0xfc00 || (a & 0xffc0) === 0xfe80 || (a & 0xffc0) === 0xfec0 || (a & 0xff00) === 0xff00;
+}
+
+/** Whether an IP address (as a resolver reports it, v4 or v6) isn't on the public internet. */
+function isLocalAddress(address) {
+  const text = String(address || '');
+  return /^\d+(?:\.\d+){3}$/.test(text) ? localIPv4(text) : localIPv6(text);
+}
+
+/** A host as iconFetchAllowed compares them: lower case, no trailing dot. */
+const plainHost = parsed => parsed.hostname.toLowerCase().replace(/\.$/, '');
+
+/**
+ * Whether Core may fetch a page's icon from `iconUrl` for the page at
+ * `pageUrl`. The fetch is Core's, not the page's: the rules on what a
+ * page may reach don't apply to it, so the page mustn't be able to point
+ * it at your network. http(s) only, and not a local address (loopback, a
+ * private or link-local range, localhost, *.local, a name without a dot)
+ * unless the page is on that same host (a local server's own icon, or an
+ * intranet site's). A name that only resolves to a local address isn't
+ * caught here: web-host.cjs resolves it first (iconLookup). What that
+ * leaves: a name that resolves differently by the time it's fetched, and
+ * the page's own name doing so (DNS rebinding), for a blind GET without
+ * cookies.
+ */
+function iconFetchAllowed(iconUrl, pageUrl) {
+  const icon = parseUrl(iconUrl);
+  if (!icon || (icon.protocol !== 'https:' && icon.protocol !== 'http:') || !icon.hostname || icon.username || icon.password) return false;
+  const host = plainHost(icon);
+  const page = parseUrl(pageUrl);
+  if (page && (page.protocol === 'https:' || page.protocol === 'http:') && plainHost(page) === host) return true;
+  if (host.startsWith('[')) return !localIPv6(host);
+  if (/^\d+(?:\.\d+){3}$/.test(host)) return !localIPv4(host);
+  return host.includes('.') && host !== 'localhost' && !host.endsWith('.localhost') && !host.endsWith('.local')
+    && !host.endsWith('.internal') && !host.endsWith('.home.arpa') && !host.endsWith('.lan');
+}
+
+/**
+ * The name to resolve before fetching an icon iconFetchAllowed allowed,
+ * whose addresses must all be public (isLocalAddress), or null: the page's
+ * own host, or an address already judged.
+ */
+function iconLookup(iconUrl, pageUrl) {
+  const icon = parseUrl(iconUrl);
+  if (!icon) return null;
+  const host = plainHost(icon);
+  const page = parseUrl(pageUrl);
+  if ((page && plainHost(page) === host) || host.startsWith('[') || /^\d+(?:\.\d+){3}$/.test(host)) return null;
+  return host;
+}
 
 /**
  * The bytes of a `data:image/…` address (base64 or percent-encoded), or null:
@@ -459,9 +665,10 @@ function webviewAttachment({ fromAtmosPage, params }) {
 
 module.exports = {
   PARTITION, PRIVATE_PARTITION, PARTITIONS, WEB_PREFERENCES, PROMPTED, ZOOM_FACTORS,
-  ICON_PARTITION, ICON_SIZE, ICON_MAX_BYTES, imageDataUrlBytes, iconBitmap,
+  ICON_PARTITION, ICON_SIZE, ICON_MAX_BYTES, imageDataUrlBytes, iconBitmap, iconFetchAllowed, iconLookup, isLocalAddress,
   chromeUserAgent, uaBrands, CLIENT_HINTS_FILTER, withClientHints, navigationPolicy, isLoadable, siteOf, requestContext,
-  permissionNames, permissionDecision, permissionCheck,
+  permissionNames, permissionSite, permissionDecision, permissionCheck,
+  USER_ACTIVATION_MS, activatesUser, createActivations, LEAVE_QUIET_MS, LEAVE_ACTED_MS, askBeforeLeaving,
   downloadName, uniqueName, openableDownload,
   shortcutFor, nextZoom, webviewAttachment,
 };

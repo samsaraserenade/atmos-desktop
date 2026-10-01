@@ -196,9 +196,11 @@ A web browser in a panel, in Atmos's own look.
   address bar counts what was blocked and turns blocking off for a site
   that needs it.
 - **Careful by default:** sites ask before using the camera, microphone,
-  location or notifications, and the answer is remembered per site; no
-  way past a certificate warning; downloaded programs are never opened from
-  Atmos. It has no saved passwords or Safe Browsing yet.
+  location or notifications, and the answer is remembered per site; pop-ups
+  and repeated downloads need a click; no way past a certificate warning,
+  and no certificate from your computer sent to a site; only documents and
+  media are opened from the downloads list. It has no saved passwords or
+  Safe Browsing yet.
 
 ### Finance
 

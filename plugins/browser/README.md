@@ -3,7 +3,8 @@
 A web browser in an Atmos panel: tabs, an address bar that searches or goes
 to an address, bookmarks, history, private tabs, downloads, find in page and
 zoom, ads and trackers blocked (like Brave's shields), with a new-tab page
-and its settings in Atmos's own look. Official (first-party); the panel's
+(bookmarks, most visited, what's been blocked) and its settings in Atmos's
+own look. Official (first-party); the panel's
 key is `[`.
 
 ## How it works
@@ -77,18 +78,29 @@ fullscreen or private aren't put away.
   for them) and asks Core for the ad blocker's styles and scriptlets for
   that page, which Core answers only for the page's own address: nothing
   in a page can reach Atmos, Node or an extension.
-- A pop-up asked for with a size (a sign-in window) opens as a small window
-  of its own that keeps its opener, its site in its title; other new windows
+- A page opens a tab or a window only just after you click, tap or press
+  a key in it (5 s, one each), as with Chrome's pop-up blocker; one it
+  tries without shows "Pop-up blocked" with Open and Always allow (the
+  site's pop-ups from then on; take it back in Settings). A pop-up asked for with a
+  size (a sign-in window) opens as a small window of its own that keeps its
+  opener, its site in its title, and can't go fullscreen; other new windows
   become tabs.
 - Certificate errors show a warning with no way to continue. Mixed content
-  stays blocked.
+  stays blocked. A site that asks for a certificate from your computer (a
+  work or ID card's) gets none.
 - Camera, microphone, location, notifications and reading the clipboard are
   denied unless you allow the site when it asks, in the browser's own prompt.
-  Answers are remembered per site; take them back in Settings. Everything
-  else (USB, serial, HID, Bluetooth, screen capture…) is refused.
-- Downloads get safe file names; a downloaded program or script is never
-  opened from Atmos ("Show in folder" only). By default Atmos asks where to
-  save each file.
+  A frame embedded in a page asks as that page, and its notifications are
+  refused. Answers are remembered per site; take them back in Settings.
+  Everything else (USB, serial, HID, Bluetooth, screen capture…) is
+  refused. The prompt (like the other buttons drawn over a page) takes no
+  click for a moment after it appears, nor a click before the pointer has
+  moved onto it, so a page can't slip it under a click you were making.
+- Downloads get safe file names; Atmos opens only documents, pictures,
+  music, videos and archives from its list ("Show in folder" for anything
+  else). A page starts one download on its own, and one more each time you
+  click in it; more are stopped, with "Download blocked" and a Download
+  button. By default Atmos asks where to save each file.
 - The user agent is Chrome's own, with no Electron or Atmos token, and
   pages see what Chrome's see: `window.chrome`, the client hints sent with
   a navigation, and no FedCM (which Electron can't show), so sites use a
@@ -99,8 +111,15 @@ fullscreen or private aren't put away.
   small page scripts, scriptlets) the harder cases. The scriptlets and the
   stand-ins it redirects to ship with Atmos; the lists only choose among
   them, and lists that aren't uBlock Origin's own can't use the ones that
-  need trust. A page's own address is never blocked, only what it loads.
+  need trust, nor can a copy of uBlock Origin's own that didn't come from
+  its GitHub. A page's own address is never blocked, only what it loads.
   The shield turns it off per site; Settings for all.
+- A site's icon is fetched without your cookies, and Atmos checks it isn't
+  on your own network (by its name, and by what the name resolves to)
+  unless the page is there too.
+- The address bar shows an address without a user name or password in
+  front of the site (`https://bank.example@other.example/` shows as
+  `https://other.example/`).
 - A site's icon is decoded apart, in a sandboxed page of its own with no
   network, and drawn again by Core: nothing a site sends is decoded in the
   browser's own frames, which can do more than a page can.
@@ -116,10 +135,14 @@ The full account is in `docs/ARCHITECTURE.md` ("Web pages") and
 
 - **The same:** Chromium's renderer sandbox and a process per site.
 - **Stricter:** no `file:` pages, links to other programs ask first, every
-  permission is off until you allow a site, no browser extensions, no
-  saved passwords to steal, and downloaded programs are never opened from
-  Atmos. Like Brave (and unlike Chrome), ads and trackers are blocked from
-  the start.
+  permission is off until you allow a site, no client certificate is ever
+  sent, no browser extensions, no saved passwords to steal, and only
+  documents and media are opened from the downloads list. Like Brave (and
+  unlike Chrome), ads and trackers are blocked from the start.
+- **Like Chrome's, simpler:** pop-ups and repeated downloads need a click,
+  as with Chrome's pop-up blocker and download limiter, but Atmos knows
+  which page was clicked, not which frame in it, so after a click anywhere
+  in a page any frame in it (an ad's too) can open one pop-up.
 - **Weaker:** Chromium's security fixes arrive only with an Atmos release
   that brings a newer Electron, and Atmos doesn't update itself, where
   Chrome and Brave do within days. Keep Atmos up to date. There's no Safe
@@ -191,6 +214,23 @@ again) for the site; the page reloads.
   it's put away.
 
 ## Known limits
+
+- **Sites that sign you in with a certificate from your computer** (some
+  work and government sites) don't work: Atmos sends none, where Chrome
+  asks which to send. Use your system browser for those.
+- **A tap on a touch screen** inside a frame embedded in a page (another
+  site's: a "Sign in with Google" button is one) isn't seen by Atmos, so a
+  pop-up it opens is blocked. Use the notice's Always allow, then tap
+  again (Open opens the address in a tab, which can't finish a sign-in
+  that answers its page). Taps on the page itself count. With "Open links
+  in Atmos Browser" on, a link you tap in an extension opens in a tab
+  behind, for the same reason.
+- **A page's `alert()` and `confirm()`** are Electron's dialogs, over all
+  of Atmos, and don't name the site (Chrome's say "example.com says").
+  From a page's second one, a box stops it showing more.
+- **"Leave site?"** is a native dialog that holds all of Atmos until you
+  answer (Electron needs the answer at once). After you answer Cancel, the
+  same page stays without asking again for half a minute.
 
 - A site that **checks** a permission before asking sees "denied" while you
   haven't answered (Electron can only answer yes or no to a check), so it may

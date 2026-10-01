@@ -58,5 +58,5 @@ export const PERMISSION_WORDS = {
 /** Its short name, for Settings. */
 export const PERMISSION_NAMES = {
   camera: 'Camera', microphone: 'Microphone', geolocation: 'Location', notifications: 'Notifications', 'clipboard-read': 'Clipboard',
-  ads: 'Ads and trackers',
+  ads: 'Ads and trackers', popups: 'Pop-ups without a click',
 };

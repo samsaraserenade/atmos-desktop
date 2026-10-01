@@ -76,14 +76,21 @@ test('helpers: a list\'s expiry, what a list looks like, the DOM tokens a page m
   assert.deepEqual(clean.ids, []);
   assert.deepEqual(clean.hrefs, ['https://a.test/x']);
   assert.deepEqual(cleanMeta({ lists: { easylist: { etag: 1, fetchedAt: 'x' }, other: {} }, total: -5 }).lists, {
-    easylist: { etag: null, lastModified: null, fetchedAt: 0, changedAt: 0, expires: 4 * DAY, bytes: 0 },
+    easylist: { etag: null, lastModified: null, fetchedAt: 0, changedAt: 0, expires: 4 * DAY, bytes: 0, source: null },
   });
+  assert.equal(cleanMeta({ engine: { trusted: ['ublock-filters', 3] } }).engine.trusted.join(), 'ublock-filters');
+  assert.equal(cleanMeta({}).engine.trusted, null, 'not recorded by an older Atmos');
 });
 
-test('the lists are uBlock Origin\'s, EasyList and EasyPrivacy, from uBlock Origin\'s CDN over https', () => {
+test('the lists are uBlock Origin\'s, EasyList and EasyPrivacy, from uBlock Origin\'s CDN over https; trust only from GitHub', () => {
   assert.deepEqual(LISTS.map(list => list.id), ['ublock-filters', 'ublock-badware', 'ublock-privacy', 'ublock-unbreak', 'ublock-quick-fixes', 'easylist', 'easyprivacy']);
   assert.deepEqual(LISTS.filter(list => list.trusted).map(list => list.id), ['ublock-filters', 'ublock-badware', 'ublock-privacy', 'ublock-unbreak', 'ublock-quick-fixes']);
-  assert.ok(MIRRORS.length >= 2 && MIRRORS.every(url => url.startsWith('https://') && url.endsWith('/')));
+  assert.ok(MIRRORS.length >= 2 && MIRRORS.every(mirror => mirror.url.startsWith('https://') && mirror.url.endsWith('/')));
+  // The mirrors that keep a list's trust are uBlock Origin's repository on GitHub, tried first.
+  const trusted = MIRRORS.filter(mirror => mirror.trusted);
+  assert.ok(trusted.length >= 1 && trusted.every(mirror => /^https:\/\/(ublockorigin\.github\.io|raw\.githubusercontent\.com)\//.test(mirror.url)), trusted);
+  assert.ok(MIRRORS.findIndex(mirror => !mirror.trusted) > MIRRORS.findLastIndex(mirror => mirror.trusted), 'GitHub first');
+  assert.ok(MIRRORS.some(mirror => !mirror.trusted), 'and others to fall back on');
 });
 
 test('a list that isn\'t uBlock Origin\'s own can\'t reach a scriptlet that needs trust, however it\'s written', () => {
@@ -152,9 +159,12 @@ test('first start: the lists are downloaded, built into an engine, kept', async 
   assert.equal(builds.length, 1);
   assert.deepEqual(builds[0], LISTS.map(list => list.id));
   assert.equal(calls.length, LISTS.length);
-  assert.ok(calls.every(call => call.url.startsWith(MIRRORS[0])), 'the first mirror answered');
+  assert.ok(calls.every(call => call.url.startsWith(MIRRORS[0].url)), 'the first mirror answered');
   for (const file of ['state.json', 'engine.bin', 'lists/easylist.txt']) assert.ok(fs.existsSync(path.join(dir, file)), file);
   assert.ok(status.lists.every(list => list.changedAt && list.checkedAt));
+  assert.ok(status.lists.every(list => list.source === new URL(MIRRORS[0].url).host), status.lists);
+  assert.deepEqual(status.lists.filter(list => list.trusted).map(list => list.id), LISTS.filter(list => list.trusted).map(list => list.id));
+  assert.deepEqual(status.untrusted, []);
   assert.equal(status.error, null);
 });
 
@@ -361,11 +371,12 @@ test('updates: only lists past their expiry, conditionally; built again only whe
 });
 
 test('mirrors: the next one when one is down; nothing reachable leaves an error, then it recovers', async t => {
-  const down = cdn({ down: [MIRRORS[0]] });
+  const down = cdn({ down: [MIRRORS[0].url] });
   const one = blocker(t, { fetchText: down.fetchText });
   await one.adblock.start();
   assert.ok(one.adblock.ready());
-  assert.ok(down.calls.some(call => call.url.startsWith(MIRRORS[1])));
+  assert.ok(down.calls.some(call => call.url.startsWith(MIRRORS[1].url)));
+  assert.deepEqual(one.adblock.status().untrusted, [], 'raw GitHub keeps their trust');
 
   let offline = true;
   const server = cdn();
@@ -379,6 +390,163 @@ test('mirrors: the next one when one is down; nothing reachable leaves an error,
   await two.adblock.update();
   assert.equal(two.adblock.status().state, 'ready');
   assert.equal(two.adblock.status().error, null);
+});
+
+test('uBlock Origin\'s own lists from another mirror than GitHub: used, without the scriptlets that need trust, until GitHub serves them', async t => {
+  let clock = 1_000_000;
+  const github = MIRRORS.filter(mirror => mirror.trusted).map(mirror => mirror.url);
+  let githubDown = true;
+  const server = cdn();
+  const fetchText = async (url, options) => {
+    if (githubDown && github.some(prefix => url.startsWith(prefix))) throw new Error('unreachable');
+    return server.fetchText(url, options);
+  };
+  const { adblock, builds } = blocker(t, { fetchText, now: () => clock });
+  await adblock.start();
+  assert.ok(adblock.ready());
+  let page = adblock.pageStart('https://alpha.test/article');
+  assert.match(page.scripts[0], /adblockTest/, 'its ordinary scriptlets run');
+  assert.deepEqual(page.isolated, [], 'its trusted one doesn\'t');
+  let status = adblock.status();
+  assert.ok(status.untrusted.includes('uBlock filters – Ads'), status.untrusted);
+  const ads = status.lists.find(list => list.id === 'ublock-filters');
+  assert.equal(ads.trusted, false);
+  assert.equal(ads.source, new URL(MIRRORS.find(mirror => !mirror.trusted).url).host);
+  // Within the hour nothing is asked again; after it, GitHub is (and only
+  // unconditionally: the copy's ETag is another mirror's).
+  server.calls.length = 0;
+  clock += 10 * 60 * 1000;
+  await adblock.update();
+  assert.equal(server.calls.length, 0);
+  githubDown = false;
+  clock += 60 * 60 * 1000;
+  await adblock.update();
+  const asked = server.calls.filter(call => github.some(prefix => call.url.startsWith(prefix)));
+  assert.deepEqual([...new Set(asked.map(call => listFor(call.url).id))].sort(), LISTS.filter(list => list.trusted).map(list => list.id).sort());
+  assert.ok(asked.every(call => !call.etag), asked);
+  assert.equal(builds.length, 2, 'built again with their trust, though the text is the same');
+  page = adblock.pageStart('https://alpha.test/article');
+  assert.match(page.isolated[0] || '', /trustedcookie/);
+  status = adblock.status();
+  assert.deepEqual(status.untrusted, []);
+  assert.ok(status.lists.filter(list => list.id.startsWith('ublock-')).every(list => list.trusted && list.source === new URL(MIRRORS[0].url).host), status.lists);
+});
+
+test('a copy of uBlock Origin\'s own list that has its trust is replaced only from GitHub: GitHub out of reach leaves it as it is', async t => {
+  let clock = 1_000_000;
+  const github = MIRRORS.filter(mirror => mirror.trusted).map(mirror => mirror.url);
+  let githubDown = false;
+  const texts = { ...LIST_TEXT };
+  const server = cdn({ texts });
+  const asked = [];
+  const fetchText = async (url, options) => {
+    asked.push(url);
+    if (githubDown && github.some(prefix => url.startsWith(prefix))) throw new Error('unreachable');
+    return server.fetchText(url, options);
+  };
+  const { adblock, builds } = blocker(t, { fetchText, now: () => clock });
+  await adblock.start();
+  githubDown = true;
+  texts['ublock-filters'] = `${LIST_TEXT['ublock-filters']}alpha.test##+js(trusted-set-cookie, planted, 1)\n`;
+  asked.length = 0;
+  clock += 6 * DAY;
+  await adblock.update({ force: true });
+  const fromGithub = url => github.some(prefix => url.startsWith(prefix));
+  const ublock = asked.filter(url => listFor(url).trusted);
+  assert.ok(ublock.length > 0 && ublock.every(fromGithub), 'only GitHub was asked for them');
+  assert.ok(asked.some(url => !listFor(url).trusted && !fromGithub(url)), 'EasyList came from a fallback');
+  assert.equal(builds.length, 1, 'nothing changed: no new engine');
+  const page = adblock.pageStart('https://alpha.test/article');
+  assert.match(page.isolated[0], /trustedcookie/, 'still trusted');
+  assert.doesNotMatch(page.isolated[0], /planted/, 'and nothing a fallback served');
+  assert.match(adblock.status().error || '', /uBlock filters – Ads: unreachable/);
+});
+
+test('a copy kept by an older Atmos (no mirror recorded) keeps its trust, and is fetched from GitHub at once', async t => {
+  const dir = folder(t);
+  let clock = 1_000_000;
+  await blocker(t, { dir, now: () => clock }).adblock.start();
+  const file = path.join(dir, 'state.json');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const list of Object.values(state.lists)) delete list.source;
+  delete state.engine.trusted;
+  fs.writeFileSync(file, JSON.stringify(state));
+  const server = cdn();
+  clock += 2 * 60 * 60 * 1000;
+  const { adblock, builds } = blocker(t, { dir, fetchText: server.fetchText, now: () => clock });
+  await adblock.start();
+  assert.equal(builds.length, 0, 'its engine was kept, trust and all');
+  assert.match(adblock.pageStart('https://alpha.test/article').isolated[0], /trustedcookie/);
+  const asked = [...new Set(server.calls.map(call => listFor(call.url).id))].sort();
+  assert.deepEqual(asked, LISTS.filter(list => list.trusted).map(list => list.id).sort(), 'uBlock Origin\'s own fetched again (not yet due otherwise)');
+  assert.ok(server.calls.every(call => call.url.startsWith(MIRRORS[0].url) && !call.etag), server.calls);
+  assert.ok(adblock.status().lists.filter(list => list.id.startsWith('ublock-')).every(list => list.source === new URL(MIRRORS[0].url).host));
+});
+
+test('a backup mirror\'s copy stays untrusted across a restart, even when the first engine was never built', async t => {
+  const dir = folder(t);
+  const github = MIRRORS.filter(mirror => mirror.trusted).map(mirror => mirror.url);
+  const server = cdn();
+  const fetchText = async (url, options) => {
+    if (github.some(prefix => url.startsWith(prefix))) throw new Error('unreachable');
+    return server.fetchText(url, options);
+  };
+  // The first start's build doesn't finish (it fails, or Atmos quits during it).
+  const first = blocker(t, { dir, fetchText, build: () => { throw new Error('the filter-list builder stopped (1)'); } });
+  await first.adblock.start();
+  assert.equal(first.adblock.ready(), false);
+  // Each list's record was kept with its file: the next start knows where they came from.
+  const second = blocker(t, { dir, fetchText });
+  await second.adblock.start();
+  assert.ok(second.adblock.ready());
+  assert.deepEqual(second.adblock.pageStart('https://alpha.test/article').isolated, [], 'no trusted scriptlet from a backup copy');
+  assert.ok(second.adblock.status().untrusted.includes('uBlock filters – Ads'));
+  // A copy with no record at all (state.json lost) is trusted with nothing either.
+  fs.rmSync(path.join(dir, 'state.json'));
+  fs.rmSync(path.join(dir, 'engine.bin'));
+  const third = blocker(t, { dir, fetchText: async () => { throw new Error('offline'); } });
+  await third.adblock.start();
+  assert.ok(third.adblock.ready(), 'built from the kept copies');
+  assert.deepEqual(third.adblock.pageStart('https://alpha.test/article').isolated, []);
+});
+
+test('a trusted copy twice its expiry old gives way to a backup copy (untrusted) when GitHub stays out of reach', async t => {
+  let clock = 1_000_000;
+  const github = MIRRORS.filter(mirror => mirror.trusted).map(mirror => mirror.url);
+  let githubDown = false;
+  const texts = { ...LIST_TEXT };
+  const server = cdn({ texts });
+  const fetchText = async (url, options) => {
+    if (githubDown && github.some(prefix => url.startsWith(prefix))) throw new Error('unreachable');
+    return server.fetchText(url, options);
+  };
+  const { adblock } = blocker(t, { fetchText, now: () => clock });
+  await adblock.start();
+  githubDown = true;
+  texts['ublock-filters'] = `${LIST_TEXT['ublock-filters']}||newer.test^\n`;
+  clock += 6 * DAY; // past its 5 days, not yet twice that
+  await adblock.update();
+  assert.equal(adblock.match({ url: 'https://newer.test/x.js', type: 'script', sourceUrl: 'https://alpha.test/' }), null, 'the trusted copy kept');
+  clock += 5 * DAY; // 11 days: twice its expiry
+  await adblock.update();
+  assert.deepEqual(adblock.match({ url: 'https://newer.test/x.js', type: 'script', sourceUrl: 'https://alpha.test/' }), { cancel: true, blocked: true }, 'fresh from a backup mirror');
+  assert.deepEqual(adblock.pageStart('https://alpha.test/article').isolated, [], 'without the trust');
+  assert.ok(adblock.status().untrusted.includes('uBlock filters – Ads'));
+});
+
+test('a list changed but its engine never built (Atmos stopped in between): built at the next start', async t => {
+  const dir = folder(t);
+  let clock = 1_000_000;
+  const texts = { ...LIST_TEXT };
+  await blocker(t, { dir, fetchText: cdn({ texts }).fetchText, now: () => clock }).adblock.start();
+  texts.easylist = `${LIST_TEXT.easylist}||later.test^\n`;
+  clock += 5 * DAY;
+  const stopped = blocker(t, { dir, fetchText: cdn({ texts }).fetchText, now: () => clock, build: () => { throw new Error('stopped'); } });
+  await stopped.adblock.start();
+  const next = blocker(t, { dir, fetchText: async () => { throw new Error('offline'); }, now: () => clock });
+  await next.adblock.start();
+  assert.equal(next.builds.length, 1, 'built again from the newer list on disk');
+  assert.deepEqual(next.adblock.match({ url: 'https://later.test/x.js', type: 'script', sourceUrl: 'https://alpha.test/' }), { cancel: true, blocked: true });
 });
 
 test('an error page or an oversized answer isn\'t taken for a list', async t => {

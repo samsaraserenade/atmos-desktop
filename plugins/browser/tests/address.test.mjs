@@ -71,6 +71,11 @@ test('how an address reads', () => {
   assert.equal(siteName('https://xn--pypal-4ve.com/'), 'xn--pypal-4ve.com', 'look-alike names stay punycode');
   assert.equal(displayUrl('about:blank'), '');
   assert.equal(displayUrl('https://example.com/'), 'https://example.com/');
+  // A user name or password before the site: not shown, so the name can't pass for the site.
+  assert.equal(displayUrl('https://bank.example@evil.example/login'), 'https://evil.example/login');
+  assert.equal(displayUrl('http://user:secret@site.example:8080/a?b#c'), 'http://site.example:8080/a?b#c');
+  assert.equal(displayUrl('https://:pw@site.example/'), 'https://site.example/');
+  assert.equal(displayUrl('mailto:a@b.c'), 'mailto:a@b.c', 'not a web address: as it is');
   assert.ok(isPageUrl('http://x.y/') && isPageUrl('https://x.y/'));
   assert.ok(!isPageUrl('about:blank') && !isPageUrl('') && !isPageUrl('mailto:x'));
 });

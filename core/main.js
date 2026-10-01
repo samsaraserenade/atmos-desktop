@@ -16,6 +16,7 @@ const { createExtensionFetch } = require('./js/core/extension-fetch.cjs');
 const frames = require('./js/core/extension-frames.cjs');
 const { resolveContainedPath } = require('./js/core/path-security.cjs');
 const { createWebHost } = require('./js/core/web-host.cjs');
+const { fromAtmosPage, pageOnly } = require('./js/core/ipc-gate.cjs');
 
 let _extensionPreferences = null;
 let _startupDisabled = { plugin: new Set(), service: new Set() };
@@ -377,9 +378,28 @@ function createWindow() {
   win.loadURL('atmos-app://local/index.html');
 }
 
+// ── Who may call ──────────────────────────────────────────────────────────────
+// Every channel in this file answers the Atmos page and nothing else
+// (ipc-gate.cjs): each registers through _page, never ipcMain directly
+// (ipc-gate.test.cjs checks). The window controls below act on the sender's
+// window, which for one of Atmos Browser's tabs is the Atmos window too.
+const _page = pageOnly(ipcMain, event => _fromAtmosPage(event));
+
+// ── Client certificates ───────────────────────────────────────────────────────
+// A site that asks for a TLS client certificate gets none. Electron's
+// default is to answer with the first certificate in the store, without a
+// word: on a work or eID computer that's your name, employer and a stable
+// identifier, to any https site in Atmos Browser (an ordinary or a private
+// tab) and to anything else Atmos loads. Nothing in Atmos uses one; a site
+// that needs one says it couldn't sign you in.
+app.on('select-client-certificate', (event, _contents, _url, _list, callback) => {
+  event.preventDefault();
+  callback();
+});
+
 // ── Window controls ───────────────────────────────────────────────────────────
 
-ipcMain.handle('toggle-fullscreen', (event) => {
+_page.handle('toggle-fullscreen', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win) return false;
   const fullscreen = !win.isFullScreen();
@@ -389,17 +409,17 @@ ipcMain.handle('toggle-fullscreen', (event) => {
 
 // package.json sits at the repo root, outside the core/ folder atmos-app://
 // serves, so the renderer asks for the version instead of fetching it.
-ipcMain.handle('app:version', () => app.getVersion());
+_page.handle('app:version', () => app.getVersion());
 
-ipcMain.handle('is-fullscreen', (event) => {
+_page.handle('is-fullscreen', (event) => {
   return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false;
 });
 
-ipcMain.handle('is-maximized', (event) => {
+_page.handle('is-maximized', (event) => {
   return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
 });
 
-ipcMain.handle('task-view:capture-preview', async (event, requestedRect) => {
+_page.handle('task-view:capture-preview', async (event, requestedRect) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return null;
   const contentBounds = win.getContentBounds();
@@ -421,7 +441,7 @@ ipcMain.handle('task-view:capture-preview', async (event, requestedRect) => {
   }
 });
 
-ipcMain.handle('window-effects:get', event => {
+_page.handle('window-effects:get', event => {
   const win = BrowserWindow.fromWebContents(event.sender);
   return {
     active: win?.__atmosTransparentWindow === true,
@@ -429,7 +449,7 @@ ipcMain.handle('window-effects:get', event => {
   };
 });
 
-ipcMain.handle('window-effects:set-transparent', (event, enabled) => {
+_page.handle('window-effects:set-transparent', (event, enabled) => {
   _windowAppearance = { transparent: enabled === true };
   _saveWindowAppearance();
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -439,27 +459,27 @@ ipcMain.handle('window-effects:set-transparent', (event, enabled) => {
   };
 });
 
-ipcMain.on('win-minimize', (event) => {
+_page.on('win-minimize', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.minimize();
 });
 
-ipcMain.on('win-maximize', (event) => {
+_page.on('win-maximize', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win) return;
   win.isMaximized() ? win.unmaximize() : win.maximize();
 });
 
-ipcMain.on('win-close', (event) => {
+_page.on('win-close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
-ipcMain.on('set-window-click-through', (event, enabled) => {
+_page.on('set-window-click-through', (event, enabled) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed()) return;
   win.setIgnoreMouseEvents(enabled === true, enabled === true ? { forward: true } : undefined);
 });
 
-ipcMain.on('window-resize:start', (event, direction, screenX, screenY) => {
+_page.on('window-resize:start', (event, direction, screenX, screenY) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed() || win.isMaximized() || win.isFullScreen()) return;
   if (!/^(n|s|e|w|ne|nw|se|sw)$/.test(direction)) return;
@@ -472,7 +492,7 @@ ipcMain.on('window-resize:start', (event, direction, screenX, screenY) => {
   });
 });
 
-ipcMain.on('window-resize:update', (event, screenX, screenY) => {
+_page.on('window-resize:update', (event, screenX, screenY) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const session = _windowResizeSessions.get(event.sender);
   if (!win || win.isDestroyed() || !session || !Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
@@ -494,7 +514,7 @@ ipcMain.on('window-resize:update', (event, screenX, screenY) => {
   win.setBounds(next, false);
 });
 
-ipcMain.on('window-resize:end', event => {
+_page.on('window-resize:end', event => {
   _windowResizeSessions.delete(event.sender);
 });
 
@@ -814,11 +834,19 @@ function _managerSummary(status = _manager.status()) {
   };
 }
 
+/**
+ * The Atmos window, to send the page what changed. Not every BrowserWindow:
+ * a sign-in pop-up a web page opened in Atmos Browser is one too, and what
+ * Atmos tells its page (the extensions, their folders, what's waiting) is
+ * none of that page's business.
+ */
+function _atmosWindows() {
+  return BrowserWindow.getAllWindows().filter(win => !win.isDestroyed() && !win.webContents.isDestroyed() && !_web.isWebSession(win.webContents.session));
+}
+
 function _broadcastManager(status = _manager.status()) {
   const payload = { status, summary: _managerSummary(status) };
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('extensions:manager-changed', payload);
-  }
+  for (const win of _atmosWindows()) win.webContents.send('extensions:manager-changed', payload);
   return payload;
 }
 
@@ -837,9 +865,7 @@ async function _downloadForUpgrade() {
     _broadcastManager();
     if (changes.length) {
       _upgradeDownloaded = true;
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) win.webContents.send('extensions:upgrade-downloaded', { changes });
-      }
+      for (const win of _atmosWindows()) win.webContents.send('extensions:upgrade-downloaded', { changes });
     }
   } catch (error) {
     console.warn(`[extensions] upgrade: can't download extensions yet (${error.message}); trying again next start`);
@@ -858,15 +884,13 @@ async function _checkForUpdates() {
   }
 }
 
-// A sender must be the Atmos page itself: frames never reach these.
+// A sender must be the Atmos page itself: frames never reach these, nor do
+// web pages (ipc-gate.cjs).
 function _fromAtmosPage(event) {
-  return String(event.senderFrame?.url || event.sender.getURL()).startsWith('atmos-app://local/');
+  return fromAtmosPage(event, { isWebSession: candidate => _web.isWebSession(candidate) });
 }
 function _managerHandler(name, fn) {
-  ipcMain.handle(`extensions:${name}`, async (event, ...args) => {
-    if (!_fromAtmosPage(event)) throw new Error('Not allowed');
-    return fn(...args);
-  });
+  _page.handle(`extensions:${name}`, async (_event, ...args) => fn(...args));
 }
 
 _managerHandler('manager-status', () => ({ status: _manager.status(), summary: _managerSummary() }));
@@ -921,21 +945,16 @@ function _checkedExtension(kind, id) {
   return { kind, id };
 }
 
-ipcMain.handle('extension-state:load-all', event => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
-  return _stateStore.loadAll();
-});
-ipcMain.handle('extension-state:save', (event, kind, id, data) => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+_page.handle('extension-state:load-all', () => _stateStore.loadAll());
+_page.handle('extension-state:save', (_event, kind, id, data) => {
   _checkedExtension(kind, id);
   _stateStore.save(kind, id, data);
   return true;
 });
 // The same, synchronously: the page's last writes as it unloads (quitting,
 // restarting), when an asynchronous reply would never arrive.
-ipcMain.on('extension-state:save-sync', (event, kind, id, data) => {
+_page.on('extension-state:save-sync', (event, kind, id, data) => {
   try {
-    if (!_fromAtmosPage(event)) throw new Error('Not allowed');
     _checkedExtension(kind, id);
     _stateStore.save(kind, id, data);
     event.returnValue = true;
@@ -943,7 +962,7 @@ ipcMain.on('extension-state:save-sync', (event, kind, id, data) => {
     console.warn(`[extensions] could not save ${kind}:${id}'s state:`, error.message);
     event.returnValue = false;
   }
-});
+}, { refused: false });
 
 // Extensions removed with their data at this start: the page forgets their
 // state namespaces (it asks once, at boot), and origins of their own lose
@@ -1138,7 +1157,7 @@ function _describeExtension(entry, files, disabled) {
   };
 }
 
-ipcMain.handle('plugins:list', async () => {
+_page.handle('plugins:list', async () => {
   const disabled = _extensionPreferences?.disabledIds('plugin') ?? new Set();
   try {
     // Start order ("after", else alphabetical) decides the order the renderer
@@ -1168,7 +1187,7 @@ function _walkRelativeFiles(root, dir = root, files = []) {
   return files;
 }
 
-ipcMain.handle('services:list', async () => {
+_page.handle('services:list', async () => {
   const disabled = _extensionPreferences?.disabledIds('service') ?? new Set();
   try {
     return _catalog.list('services').map(entry => _describeExtension(entry, _walkRelativeFiles(entry.path), disabled));
@@ -1178,8 +1197,7 @@ ipcMain.handle('services:list', async () => {
   }
 });
 
-ipcMain.handle('extensions:set-enabled', async (event, kind, id, enabled) => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+_page.handle('extensions:set-enabled', async (_event, kind, id, enabled) => {
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (entry?.tier === 'system' && enabled === false) throw new Error(`'${id}' is a system extension and cannot be disabled`);
   const result = _extensionPreferences.setEnabled(kind, id, enabled);
@@ -1241,8 +1259,7 @@ function _loadApprovedNow(folder, entry) {
 // Third-party approval: the renderer passes the fingerprint it showed the
 // user; approval is refused if the files changed since. It loads at once
 // when it can (_loadApprovedNow), otherwise at the next start.
-ipcMain.handle('extensions:approve', async (event, kind, id, fingerprint) => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+_page.handle('extensions:approve', async (_event, kind, id, fingerprint) => {
   const folder = kind === 'plugin' ? 'plugins' : 'services';
   const entry = _catalog.find(folder, id);
   const result = _trust.approve(folder, entry, fingerprint);
@@ -1251,16 +1268,13 @@ ipcMain.handle('extensions:approve', async (event, kind, id, fingerprint) => {
   catch (error) { console.warn(`[extensions] ${kind} '${id}' approved; it loads at the next start (${error.message})`); }
   // The page registers their surfaces and starts their background frames.
   if (loaded) {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send('extensions:loaded', loaded);
-    }
+    for (const win of _atmosWindows()) win.webContents.send('extensions:loaded', loaded);
   }
   _broadcastManager();
   return loaded ? { ...result, restartRequired: false, loaded } : { ...result, loaded: [] };
 });
 
-ipcMain.handle('extensions:revoke', async (event, kind, id) => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+_page.handle('extensions:revoke', async (_event, kind, id) => {
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (!entry || entry.tier !== 'third-party') throw new Error('Only community extensions have approvals');
   _trust.revoke(entry);
@@ -1268,8 +1282,7 @@ ipcMain.handle('extensions:revoke', async (event, kind, id) => {
   return { restartRequired: true };
 });
 
-ipcMain.handle('extensions:restart', event => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+_page.handle('extensions:restart', () => {
   // quit() (not exit()) closes windows normally, so the renderer's unload
   // handlers flush pending saves and the window state is written.
   app.relaunch();
@@ -1281,7 +1294,7 @@ ipcMain.handle('extensions:restart', event => {
 // extension declares "notifications"; this checks again against its trust
 // record. A click brings Atmos forward and tells the extension's frames.
 const _shownNotifications = new Set(); // kept referenced until closed, so clicks arrive
-ipcMain.handle('extensions:notify', (event, kind, id, options) => {
+_page.handle('extensions:notify', (event, kind, id, options) => {
   if (!_isAppUrl(event.senderFrame?.url)) throw new Error('not allowed');
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (!entry || !_isActive(entry) || frames.resolveRuntime(entry) !== 'frame'
@@ -1330,8 +1343,7 @@ function _fetchTestOptions() {
 const _extensionFetch = createExtensionFetch({ userAgent: `Atmos/${app.getVersion()}`, ..._fetchTestOptions() });
 const _fetchesInFlight = new Map(); // "caller requestId" -> AbortController
 
-ipcMain.handle('extensions:fetch', async (event, caller, requestId, request) => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+_page.handle('extensions:fetch', async (_event, caller, requestId, request) => {
   const entry = typeof caller === 'string' ? _entryOf(caller) : null;
   if (!entry || !_isActive(entry) || frames.resolveRuntime(entry) !== 'frame') {
     return { error: { name: 'AtmosPermissionError', message: `${caller} is not running` } };
@@ -1347,12 +1359,11 @@ ipcMain.handle('extensions:fetch', async (event, caller, requestId, request) => 
     _fetchesInFlight.delete(key);
   }
 });
-ipcMain.on('extensions:fetch-abort', (event, caller, requestId) => {
-  if (_fromAtmosPage(event)) _fetchesInFlight.get(`${caller} ${requestId}`)?.abort();
+_page.on('extensions:fetch-abort', (_event, caller, requestId) => {
+  _fetchesInFlight.get(`${caller} ${requestId}`)?.abort();
 });
 
-ipcMain.handle('extensions:open-root', async (event, kind) => {
-  if (!_fromAtmosPage(event)) throw new Error('Not allowed');
+_page.handle('extensions:open-root', async (_event, kind) => {
   if (kind === 'plugins') return shell.openPath(_installedRoot('plugins'));
   if (kind === 'services' || kind === 'service') return shell.openPath(_installedRoot('services'));
   return 'Unsupported extension kind';
@@ -1539,9 +1550,7 @@ function _watchDeveloperFolders() {
         console.log(`[extensions] ${entry.kind} '${entry.id}': extension.json changed${restart ? '; restart Atmos to apply its surfaces' : ''}`);
       }
       const description = _describeExtension(entry, _walkRelativeFiles(entry.path), new Set());
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) win.webContents.send('extensions:developer-changed', { kind: entry.kind, id: entry.id, restart, extension: description });
-      }
+      for (const win of _atmosWindows()) win.webContents.send('extensions:developer-changed', { kind: entry.kind, id: entry.id, restart, extension: description });
     };
     try {
       fs.watch(entry.path, { recursive: true }, (_event, filename) => {
@@ -1602,7 +1611,7 @@ function _isWebExtensionFrame(frame) {
 }
 
 const _web = createWebHost({
-  app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, dialog,
+  app, session, net, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, dialog,
   isAppUrl: _isAppUrl,
   userData: app.getPath('userData'),
   isWebExtension: _isWebExtension,
@@ -1656,7 +1665,7 @@ app.on('web-contents-created', (_, contents) => {
 
 // Location stays off until you press Detect (see location-gate.cjs).
 const _locationGate = createLocationGate({ appOrigin: _APP_ORIGIN });
-ipcMain.handle('location:allow-detect', event => {
+_page.handle('location:allow-detect', event => {
   // Only the Atmos page itself (not a frame inside it) opens the gate.
   if (event.senderFrame !== event.sender.mainFrame || !_isAppUrl(event.senderFrame?.url)) return false;
   _locationGate.open();
@@ -1827,7 +1836,7 @@ async function _cleanUpSharedOriginStorage() {
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
 app.on('second-instance', () => {
-  const win = BrowserWindow.getAllWindows()[0];
+  const win = _atmosWindows()[0];
   if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
 });
 

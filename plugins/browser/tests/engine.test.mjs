@@ -173,8 +173,12 @@ test('what a page asks: a permission prompt, another program, a refusal, a faile
   await engine.dismissPermission(tab.id, 'p2');
   assert.deepEqual(calls('permissions.respond').at(-1).args, ['p2', { allow: false, remember: false }], 'dismissing isn’t remembered');
 
-  atmos.fake.webEvent({ type: 'external-request', tabId: tab.id, requestId: 'x1', url: 'mailto:a@b.c', scheme: 'mailto' });
+  atmos.fake.webEvent({ type: 'external-request', tabId: tab.id, requestId: 'x1', url: 'mailto:a@b.c', scheme: 'mailto', site: 'https://meet.example' });
   assert.equal(engine.tab(tab.id).external.scheme, 'mailto');
+  assert.equal(engine.tab(tab.id).external.site, 'https://meet.example', 'the asking page, for the prompt to name');
+  // An answer for a request that's no longer the one shown does nothing.
+  assert.equal(await engine.answerExternal(tab.id, true, 'x0'), false);
+  assert.equal(engine.tab(tab.id).external.requestId, 'x1');
   await engine.answerExternal(tab.id, false);
   assert.deepEqual(calls('external.respond').at(-1).args, ['x1', false]);
 
@@ -193,12 +197,66 @@ test('what a page asks: a permission prompt, another program, a refusal, a faile
   assert.equal(atmos.fake.web.shown, tab.id);
 });
 
-test('links from the rest of Atmos open in a new tab and bring the panel up', async () => {
+test('links from the rest of Atmos open in a new tab and bring the panel up, or wait behind without a click', async () => {
   const { engine, atmos } = await start();
   atmos.fake.webEvent({ type: 'open-link', url: 'https://docs.example/' });
   await settle();
   assert.equal(engine.selected().url, 'https://docs.example/');
   assert.equal(atmos.fake.panelShown, 1);
+  // No click in Atmos just before (Core says): a tab behind, the panel left as it is.
+  atmos.fake.webEvent({ type: 'open-link', url: 'https://later.example/', background: true });
+  await settle();
+  assert.ok(engine.tabs().some(tab => tab.url === 'https://later.example/' && !tab.selected));
+  assert.equal(engine.selected().url, 'https://docs.example/');
+  assert.equal(atmos.fake.panelShown, 1);
+});
+
+test('a pop-up or a download a page tried without a click: a notice in the tab, with a way to go ahead', async () => {
+  const { engine, atmos, calls } = await start();
+  engine.attachPanel();
+  const tab = engine.newTab({ url: 'https://site.example/' });
+  await settle();
+  const before = engine.tabs().length;
+  atmos.fake.webEvent({ type: 'popup-blocked', tabId: tab.id, url: 'https://ads.example/pop', site: 'https://site.example', private: false });
+  let notice = engine.tab(tab.id).notice;
+  assert.match(notice.text, /^Pop-up blocked: site\.example tried to open one without a click/);
+  assert.deepEqual(notice.actions.map(action => action.label), ['Open', 'Always allow']);
+  assert.equal(engine.tabs().length, before, 'nothing opened');
+  await engine.noticeAction(tab.id);
+  assert.equal(engine.tabs().length, before + 1);
+  assert.equal(engine.selected().url, 'https://ads.example/pop');
+  assert.equal(engine.tab(tab.id).notice, null);
+  // Nothing to open (about:blank, an address too long to pass on): told, and the site's pop-ups can be allowed.
+  atmos.fake.webEvent({ type: 'popup-blocked', tabId: tab.id, url: null, site: 'https://site.example' });
+  assert.deepEqual(engine.tab(tab.id).notice.actions.map(action => action.label), ['Always allow']);
+  await engine.noticeAction(tab.id, 0);
+  assert.deepEqual(calls('permissions.set').at(-1).args, ['https://site.example', 'popups', 'allow']);
+  // A private tab keeps nothing: no Always allow there.
+  const secret = engine.newTab({ url: 'https://secret.example/', private: true });
+  await settle();
+  atmos.fake.webEvent({ type: 'popup-blocked', tabId: secret.id, url: 'https://secret.example/pop', site: 'https://secret.example', private: true });
+  assert.deepEqual(engine.tab(secret.id).notice.actions.map(action => [action.label, action.private]), [['Open', true]]);
+  engine.closeTab(secret.id);
+  // A second download without a click; Download asks Core for it (which then lets it through).
+  atmos.fake.webEvent({ type: 'download-blocked', tabId: tab.id, url: 'https://site.example/second.zip', name: 'second.zip', site: 'https://site.example' });
+  notice = engine.tab(tab.id).notice;
+  assert.match(notice.text, /^Download blocked: site\.example tried to save “second\.zip” without a click/);
+  await engine.noticeAction(tab.id);
+  assert.deepEqual(calls('download').at(-1).args, [tab.id, 'https://site.example/second.zip']);
+  // From a pop-up window (no tab of its own): told in the tab you're on.
+  atmos.fake.webEvent({ type: 'popup-blocked', tabId: null, url: 'https://x.example/', site: 'https://login.example' });
+  assert.match(engine.selected().notice.text, /login\.example/);
+  // A click meant for one notice never acts on the one that replaced it.
+  const shownId = engine.selected().notice.id;
+  atmos.fake.webEvent({ type: 'popup-blocked', tabId: null, url: 'https://y.example/', site: 'https://other.example' });
+  const setsBefore = calls('permissions.set').length;
+  assert.equal(await engine.noticeAction(engine.selectedId(), 1, shownId), null);
+  assert.equal(calls('permissions.set').length, setsBefore, 'other.example not allowed by a click on login.example\'s notice');
+  assert.match(engine.selected().notice.text, /other\.example/, 'and its notice stays');
+  // The same words again are a new notice (the panel waits again before taking its button).
+  const first = engine.selected().notice.id;
+  atmos.fake.webEvent({ type: 'popup-blocked', tabId: null, url: 'https://x.example/', site: 'https://login.example' });
+  assert.notEqual(engine.selected().notice.id, first);
 });
 
 test('titles, icons, history and bookmarks follow the page', async () => {

@@ -96,6 +96,12 @@ const FIRST_BATCH_MS = 50;
 const BATCH_MS = 250;
 const MAX_SEEN = 20000;      // of each kind, per page
 const MAX_PER_BATCH = { classes: 1000, ids: 1000, hrefs: 300 };
+// The longest of each that Core looks at (web-adblock.cjs, cleanTokens):
+// longer ones are dropped here, before they're kept or sent. A page could
+// otherwise send class names of any length, copied into the main process
+// a batch at a time only to be thrown away there.
+const MAX_LENGTH = { classes: 256, ids: 256, hrefs: 1024 };
+const MAX_BATCH_CHARS = 128 * 1024; // all of one batch
 
 /**
  * The class names, ids and links of `root` and what's under it, new ones
@@ -104,7 +110,7 @@ const MAX_PER_BATCH = { classes: 1000, ids: 1000, hrefs: 300 };
 function collectTokens(root, seen, pending) {
   if (!root || root.nodeType !== 1) return;
   const add = (kind, value) => {
-    if (!value || typeof value !== 'string' || seen[kind].has(value) || seen[kind].size >= MAX_SEEN) return;
+    if (!value || typeof value !== 'string' || value.length > MAX_LENGTH[kind] || seen[kind].has(value) || seen[kind].size >= MAX_SEEN) return;
     seen[kind].add(value);
     pending[kind].add(value);
   };
@@ -128,8 +134,14 @@ function watchTokens({ ipcRenderer, webFrame, doc = document, Observer = Mutatio
     timer = null;
     const batch = {};
     let size = 0;
+    let chars = 0;
     for (const kind of ['classes', 'ids', 'hrefs']) {
-      batch[kind] = [...pending[kind]].slice(0, MAX_PER_BATCH[kind]);
+      batch[kind] = [];
+      for (const value of pending[kind]) {
+        if (batch[kind].length >= MAX_PER_BATCH[kind] || chars + value.length > MAX_BATCH_CHARS) break;
+        batch[kind].push(value);
+        chars += value.length;
+      }
       for (const value of batch[kind]) pending[kind].delete(value);
       size += batch[kind].length;
     }
@@ -202,4 +214,4 @@ if (electron && typeof electron === 'object') {
   }
 }
 
-if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens, applyFilters, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP };
+if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens, applyFilters, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS };

@@ -43,6 +43,11 @@ const EXTERNAL_WAIT_MS = 2 * 60 * 1000;
 const ICON_DECODE_MS = 5000;
 const ICON_DECODER_IDLE_MS = 60 * 1000;
 const MAX_DOWNLOADS = 100;
+const EXPECTED_DOWNLOAD_MS = 60 * 1000;          // a download Core asked a page for, before it starts
+// Where Core runs its own script in a page (leaving fullscreen): a world of
+// its own, so the page's scripts can't replace what it calls. Not Electron's
+// (999) nor the ad blocker's scriptlets' (1024, web-page-preload.cjs).
+const CORE_WORLD = 1025;
 
 // Run in the icon decoder's page (see decodeIcon): the image drawn into a
 // square canvas, fitted and centred, and its pixels back as base64 RGBA.
@@ -71,7 +76,7 @@ const DECODE_ICON = `(async (b64, type, size) => {
 })`;
 const EDIT_ACTIONS = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'delete', 'selectAll']);
 
-function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, dialog, isAppUrl, userData, isWebExtension = () => false, testOptions = {} }) {
+function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, dialog, isAppUrl, userData, isWebExtension = () => false, testOptions = {} }) {
   const settings = createWebSettings({ dir: path.join(userData, 'browser') });
   const openExternal = shell.openExternal.bind(shell); // the system's, before Core routes it (routeShell)
   const ownerFile = path.join(userData, 'browser', 'owner.json');
@@ -87,7 +92,17 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
   const faviconCache = new Map();    // "private|url" -> data URL
   const blockedByTab = new Map();    // webContents id -> { count, hosts: Map(host -> n), timer }
   const tokenBudget = new Map();     // webContents id -> page-token messages left for this page
+  const navigations = new Map();     // webContents id -> its page navigations started (the token budget's)
+  const budgetFor = new Map();       // webContents id -> the navigation its token budget was armed for
   const closing = new Set();         // webContents ids Atmos is closing (closePage)
+  // What a page may do because the user just used it (web-policy.cjs):
+  // pop-ups, and links Atmos opens here coming to the front ('atmos', the
+  // Atmos window's own input).
+  const activations = policy.createActivations();
+  const downloadReady = new Set();   // webContents ids that may start one download on their own
+  const expectedDownloads = new Map(); // "id\nurl" -> until when: downloads Core asked for (a menu's Save)
+  const leaveRefusedAt = new Map();  // webContents id -> when "Leave site?" was last answered Cancel
+  const coreActedAt = new Map();     // webContents id -> when the user last moved it from the browser (address bar, Back…)
   let quitting = false;              // Atmos is quitting: its windows close next
   app.on('before-quit', () => { quitting = true; });
   let adblock = null;                // web-adblock.cjs, made with the sessions
@@ -224,6 +239,80 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     return Buffer.concat(chunks);
   }
 
+  /**
+   * One request for an icon, without cookies: { image: { type, bytes } },
+   * { redirect: url } (not followed: the caller checks it first), or null.
+   * At most ICON_MAX_BYTES, an image type.
+   */
+  function requestIcon(ses, url) {
+    return new Promise(resolve => {
+      let settled = false;
+      let timer = null;
+      const finish = value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      let request;
+      try {
+        request = net.request({ url, session: ses, credentials: 'omit', useSessionCookies: false, redirect: 'manual' });
+      } catch { finish(null); return; }
+      const stop = () => { try { request.abort(); } catch { /* done already */ } finish(null); };
+      timer = setTimeout(stop, 8000);
+      // Not followed here (the request then ends): the caller checks where it goes first.
+      request.on('redirect', (_status, _method, next) => finish({ redirect: String(next) }));
+      request.on('response', response => {
+        const header = response.headers['content-type'];
+        const type = String(Array.isArray(header) ? header[0] : header || '').split(';')[0].trim().toLowerCase();
+        if (response.statusCode < 200 || response.statusCode > 299 || !/^image\/[a-z0-9.+-]+$/.test(type)) { stop(); return; }
+        const chunks = [];
+        let size = 0;
+        response.on('data', chunk => {
+          size += chunk.length;
+          if (size > policy.ICON_MAX_BYTES) { stop(); return; }
+          chunks.push(Buffer.from(chunk));
+        });
+        response.on('end', () => finish(size ? { image: { type, bytes: Buffer.concat(chunks) } } : null));
+        response.on('error', () => finish(null));
+      });
+      request.on('error', () => finish(null));
+      request.on('abort', () => finish(null));
+      request.end();
+    });
+  }
+
+  /**
+   * A site icon's bytes, fetched by Core: { type, bytes } or null. The
+   * request is Core's, not the page's (the page's CSP and the rules on what
+   * a page may reach don't apply to it), so it carries no cookies, and it
+   * goes only where iconFetchAllowed says: each address, redirects
+   * included, checked before it's asked, and a name that isn't the page's
+   * own host resolved first, every address it has public (iconLookup),
+   * unless the request goes through a proxy, which resolves it instead (and
+   * where a lookup here may not work at all). Five redirects at most.
+   */
+  async function fetchIcon(ses, url, pageUrl) {
+    let target = url;
+    for (let hop = 0; hop <= 5; hop += 1) {
+      if (!policy.iconFetchAllowed(target, pageUrl)) return null;
+      const name = policy.iconLookup(target, pageUrl);
+      let direct = true;
+      if (name) {
+        try { direct = /^\s*DIRECT\s*$/i.test(await ses.resolveProxy(target)); } catch { direct = true; }
+      }
+      if (name && direct) {
+        let endpoints = [];
+        try { ({ endpoints } = await ses.resolveHost(name)); } catch { return null; }
+        if (!endpoints?.length || endpoints.some(endpoint => policy.isLocalAddress(endpoint.address))) return null;
+      }
+      const answer = await requestIcon(ses, target);
+      if (!answer?.redirect) return answer?.image || null;
+      target = answer.redirect;
+    }
+    return null;
+  }
+
   async function sendFavicon(contents, favicons) {
     const url = (favicons || []).find(candidate => /^(https?:|data:image\/)/i.test(candidate));
     if (!url) return;
@@ -231,16 +320,8 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     let dataUrl = faviconCache.get(key) || null;
     if (!dataUrl) {
       let image = /^data:/i.test(url) ? policy.imageDataUrlBytes(url) : null;
-      if (!image && /^https?:/i.test(url)) {
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          const response = await contents.session.fetch(url, { signal: controller.signal, credentials: 'include' });
-          const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-          const bytes = response.ok && /^image\/[a-z0-9.+-]+$/.test(type) ? await readCapped(response, policy.ICON_MAX_BYTES) : null;
-          clearTimeout(timer);
-          if (bytes?.length) image = { type, bytes };
-        } catch { image = null; }
+      if (!image && /^https?:/i.test(url) && policy.iconFetchAllowed(url, contents.getURL())) {
+        image = await fetchIcon(contents.session, url, contents.getURL());
       }
       // One at a time, and not an endless queue of them.
       if (!image || iconsWaiting >= 20) return;
@@ -267,7 +348,12 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     return listsSession;
   }
 
-  /** A filter list, conditionally when there's a copy: { status, text, etag, lastModified }. */
+  /**
+   * A filter list, conditionally when there's a copy: { status, text, etag,
+   * lastModified }. From the address asked for only: a redirect isn't
+   * followed (the mirror asked is the one that served it, which decides
+   * what the list may do: web-adblock.cjs).
+   */
   async function fetchList(url, { etag = null, lastModified = null } = {}) {
     const headers = {};
     if (etag) headers['If-None-Match'] = etag;
@@ -275,7 +361,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000);
     try {
-      const response = await listSession().fetch(url, { headers, signal: controller.signal, cache: 'no-store', credentials: 'omit', redirect: 'follow' });
+      const response = await listSession().fetch(url, { headers, signal: controller.signal, cache: 'no-store', credentials: 'omit', redirect: 'error' });
       if (response.status === 304) return { status: 304 };
       const bytes = response.ok ? await readCapped(response, MAX_LIST_BYTES) : null;
       return {
@@ -364,7 +450,6 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     const entry = blockedByTab.get(id);
     if (entry) clearTimeout(entry.timer);
     blockedByTab.delete(id);
-    tokenBudget.delete(id);
   }
 
   /**
@@ -436,7 +521,15 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     try {
       const page = pageFrom(event);
       if (page && blockingFor(page.url, page.isPrivate)) {
-        tokenBudget.set(page.contents.id, TOKEN_MESSAGES);
+        // The page's budget of token messages, once per navigation: this
+        // message comes from the page's preload once, but a page whose
+        // renderer was taken over could send it again to refill it.
+        const id = page.contents.id;
+        const navigation = navigations.get(id) || 0;
+        if (budgetFor.get(id) !== navigation) {
+          budgetFor.set(id, navigation);
+          tokenBudget.set(id, TOKEN_MESSAGES);
+        }
         const found = adblock.pageStart(page.url);
         if (found) reply = { styles: found.styles, scripts: found.scripts, isolated: found.isolated, watch: true };
       }
@@ -489,23 +582,80 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     for (const [id, request] of [...externalRequests]) if (request.guestId === guestId) { clearTimeout(request.timer); externalRequests.delete(id); }
   }
 
-  /** A link to another program (mailto:, magnet:…): the user is asked first, once at a time per tab. */
+  /**
+   * A link to another program (mailto:, magnet:…): the user is asked first,
+   * once at a time per tab. `site` is the asking page's (a pop-up's link is
+   * asked in the tab you're on, which may be another site).
+   */
   function askExternal(contents, url, scheme) {
     const guestId = contents.id;
     if ([...externalRequests.values()].some(request => request.guestId === guestId)) return;
     const id = `x${nextId++}`;
     const timer = setTimeout(() => externalRequests.delete(id), EXTERNAL_WAIT_MS);
     externalRequests.set(id, { guestId, url, timer });
-    send(guestId, 'external-request', { requestId: id, url: url.slice(0, 2048), scheme });
+    send(guestId, 'external-request', { requestId: id, url: url.slice(0, 2048), scheme, site: policy.siteOf(contents.getURL()) || '' });
+  }
+
+  // ── What a page may do because the user used it ──────────────────────────
+  /** A click, tap or key in a page (or its pop-up): a pop-up, and another download, may follow. */
+  function userActed(contents) {
+    activations.activate(contents.id);
+    downloadReady.add(contents.id);
+  }
+
+  const sameUrl = url => { try { return /^https?:/i.test(url) ? new URL(url).href : url; } catch { return url; } };
+
+  /** Core asked this page for a download (a menu's Save, the notice's Download): it starts without a click. */
+  function expectDownload(contents, url) {
+    const now = Date.now();
+    for (const [key, until] of expectedDownloads) if (until < now) expectedDownloads.delete(key);
+    if (expectedDownloads.size < 200) expectedDownloads.set(`${contents.id}\n${sameUrl(url)}`, now + EXPECTED_DOWNLOAD_MS);
+  }
+
+  /**
+   * Whether a download a page started goes ahead, as Chrome's download
+   * limiter has it: one Core asked for; one after each click or key in the
+   * page; one on its own when a tab or pop-up opens, and each time the user
+   * sends it somewhere from the browser (the address bar, Back, a reload).
+   * A page's own navigations don't renew it (Chrome's neither), so a page
+   * can't pile files into Downloads without a click by moving on; the
+   * browser says what it stopped.
+   */
+  function downloadMayStart(contents, item) {
+    const id = contents.id;
+    if (!live.has(id)) return true;
+    let first = '';
+    try { first = item.getURLChain()[0] || item.getURL(); } catch { first = item.getURL(); }
+    const key = `${id}\n${sameUrl(first)}`;
+    if (expectedDownloads.has(key)) {
+      const fresh = expectedDownloads.get(key) >= Date.now();
+      expectedDownloads.delete(key);
+      if (fresh) return true;
+    }
+    return downloadReady.delete(id);
   }
 
   // ── The policy on every contents in the browser's sessions ───────────────
   function applyPolicy(contents) {
     const guestId = contents.id;
+    // A new tab or pop-up may start one download on its own (as Chrome allows).
+    downloadReady.add(guestId);
     contents.setWindowOpenHandler(details => {
       const verdict = policy.navigationPolicy(details.url, { frame: 'top' });
       if (verdict.action === 'external') { askExternal(contents, details.url, verdict.scheme); return { action: 'deny' }; }
       if (verdict.action !== 'allow') { send(guestId, 'refused', { url: details.url.slice(0, 2048), reason: verdict.reason }); return { action: 'deny' }; }
+      // A new tab or window only just after a click or key in the page, one
+      // each (Chrome's pop-up blocker): Electron has none, and pages opened
+      // tabs and windows from a timer. Blocked, the browser says so and
+      // offers to open it, or to allow the site's pop-ups from then on (its
+      // "popups" setting, as Chrome's "Always allow pop-ups").
+      const site = policy.siteOf(contents.getURL());
+      const isPrivate = isPrivateSession(contents.session);
+      if (!(site && settings.popupsAllowed(site, { private: isPrivate })) && !activations.take(guestId, 'popup')) {
+        const target = details.url.length <= 2048 && details.url !== 'about:blank' ? details.url : null;
+        send(guestId, 'popup-blocked', { url: target, private: isPrivate, site: site || '' });
+        return { action: 'deny' };
+      }
       // A pop-up asked for with features (a sign-in window) keeps its opener in
       // a small window of its own; a link or plain window.open becomes a tab.
       if (details.disposition === 'new-window' && details.url !== 'about:blank') {
@@ -553,16 +703,23 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     // used it). Closing it (a tab, or Atmos) goes ahead once its last
     // events have run (closePage). Leaving it for another address, Back or
     // a reload asks first, as Chrome does: Electron's default cancels
-    // without a word, so a link or the address bar did nothing.
+    // without a word, so a link or the address bar did nothing. Electron
+    // needs the answer at once, so the question holds all of Atmos while
+    // it's up: it names the site, and after a Cancel the page stays without
+    // asking for half a minute, unless you act yourself (web-policy.cjs,
+    // askBeforeLeaving), so a page can't bring it back again and again.
     contents.on('will-prevent-unload', event => {
       if (closing.has(contents.id)) { event.preventDefault(); return; }
+      const actedAt = Math.max(activations.lastAt(contents.id), coreActedAt.get(contents.id) || 0);
+      if (!policy.askBeforeLeaving({ refusedAt: leaveRefusedAt.get(contents.id) || 0, actedAt, now: Date.now() })) return;
       const owner = (contents.getType() === 'window' && BrowserWindow.fromWebContents(contents)) || atmosWindow;
+      const site = (() => { try { return new URL(contents.getURL()).host; } catch { return ''; } })();
       const question = {
         type: 'question', buttons: ['Leave', 'Cancel'], defaultId: 0, cancelId: 1, noLink: true,
-        title: 'Leave site?', message: 'Leave site?', detail: 'Changes you made may not be saved.',
+        title: 'Leave site?', message: site ? `Leave ${site}?` : 'Leave site?', detail: 'Changes you made may not be saved.',
       };
       const answer = owner && !owner.isDestroyed() ? dialog.showMessageBoxSync(owner, question) : dialog.showMessageBoxSync(question);
-      if (answer === 0) event.preventDefault();
+      if (answer === 0) { leaveRefusedAt.delete(contents.id); event.preventDefault(); } else leaveRefusedAt.set(contents.id, Date.now());
     });
     // Web Bluetooth, and a device picker Electron would otherwise answer with the first device.
     contents.on('select-bluetooth-device', (event, _devices, callback) => { event.preventDefault(); callback(''); });
@@ -575,14 +732,27 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
         return;
       }
       const command = policy.shortcutFor(input);
-      if (!command) return;
+      if (!command) {
+        // Keys reach this for every frame of the page.
+        if (policy.activatesUser(input)) userActed(contents);
+        return;
+      }
       event.preventDefault();
       send(guestId, 'command', { command });
     });
     // A click in a page doesn't move the Atmos page's keyboard focus to it on
     // its own; the web layer focuses the element (and closes Atmos menus).
+    // Electron reports mouse events for every frame's widget, an embedded
+    // frame of another site included.
     contents.on('before-mouse-event', (_event, mouse) => {
-      if (mouse.type === 'mouseDown') send(guestId, 'mouse-down');
+      if (mouse.type !== 'mouseDown') return;
+      userActed(contents);
+      send(guestId, 'mouse-down');
+    });
+    // A tap: Electron reports touch only for the page's own frame (not a
+    // frame of another site in it).
+    contents.on('input-event', (_event, input) => {
+      if ((input.type === 'touchEnd' || input.type === 'gestureTap') && policy.activatesUser(input)) userActed(contents);
     });
     contents.on('zoom-changed', (_event, direction) => zoom(contents, direction === 'in' ? 'in' : 'out'));
     contents.on('context-menu', (_event, params) => send(guestId, 'context-menu', {
@@ -596,6 +766,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     }
     contents.on('did-start-navigation', details => {
       if (details.isMainFrame && !details.isSameDocument) {
+        navigations.set(guestId, (navigations.get(guestId) || 0) + 1);
         dropRequestsOf(guestId);
         resetBlocked(guestId);
         send(guestId, 'progress', { value: 0.15 });
@@ -609,6 +780,11 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
         started = true;
         contents.navigationHistory.clear();
       }
+      // A new page: the click that led here was the page before's (a
+      // landing page doesn't get a pop-up from it, as in Chrome), and so
+      // was a "Leave site?" answered there.
+      activations.forget(guestId);
+      leaveRefusedAt.delete(guestId);
       applyZoom(contents);
       send(guestId, 'navigated', { url, title: contents.getTitle(), inPage: false });
       sendState(contents);
@@ -645,6 +821,11 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     contents.on('page-title-updated', event => { event.preventDefault(); title(); });
     contents.on('did-navigate', title);
     title();
+    // Its own close button (or Atmos quitting) is the user acting, though
+    // not in the page: "Leave site?" asks again rather than keeping the
+    // window open without a word after an earlier Cancel. Emitted before
+    // the page's beforeunload.
+    win.on('close', () => { if (!contents.isDestroyed()) coreActedAt.set(contents.id, Date.now()); });
   }
 
   function track(contents) {
@@ -658,6 +839,10 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     closing.delete(guestId);
     dropRequestsOf(guestId);
     resetBlocked(guestId);
+    for (const map of [tokenBudget, navigations, budgetFor, leaveRefusedAt, coreActedAt]) map.delete(guestId);
+    activations.forget(guestId);
+    downloadReady.delete(guestId);
+    for (const key of [...expectedDownloads.keys()]) if (key.startsWith(`${guestId}\n`)) expectedDownloads.delete(key);
     if (gone?.private && ![...live.values()].some(other => other.private)) void endPrivateSession();
   }
 
@@ -703,6 +888,9 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
       await privateSession.clearCache();
       await privateSession.clearAuthCache();
       await privateSession.clearHostResolverCache();
+      // Its connections too: one kept open would carry over to the next
+      // private session (the in-memory session lives as long as Atmos).
+      await privateSession.closeAllConnections();
     } catch (error) { console.warn('[web] could not clear the private session:', error.message); }
     send(null, 'private-ended');
   }
@@ -731,18 +919,27 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
       ses.webRequest.onBeforeSendHeaders({ urls: [...filter.urls], types: [...filter.types] }, (details, callback) => {
         callback({ requestHeaders: policy.withClientHints(details.requestHeaders) });
       });
+      // A permission is the page's, whichever of its frames asks (named and
+      // kept for the site you're on: web-policy.cjs, permissionSite).
       const settingFor = origin => permissionName => settings.permission(origin, permissionName, { private: isPrivate });
+      const isTab = contents => !!contents && live.get(contents.id)?.tab === true;
       ses.setPermissionRequestHandler((contents, permission, callback, details) => {
-        const origin = policy.siteOf(details?.requestingUrl || contents?.getURL?.() || '');
-        const decision = policy.permissionDecision(permission, details || {}, settingFor(origin), { origin });
+        const topUrl = contents?.getURL?.() || '';
+        const origin = policy.permissionSite(permission, { requestingUrl: details?.requestingUrl || topUrl, topUrl });
+        const decision = policy.permissionDecision(permission, details || {}, settingFor(origin), { origin, tab: isTab(contents) });
         if (decision === 'allow') return callback(true);
         // Only a tab asks: a pop-up has no browser around it to ask in.
-        if (decision === 'deny' || !contents || !live.get(contents.id)?.tab) return callback(false);
+        if (decision === 'deny' || !isTab(contents)) return callback(false);
         askPermission(contents, origin, policy.permissionNames(permission, details || {}), callback);
       });
+      // Electron passes no contents for a frame of another origin, nor for
+      // notifications; then the page is the embedding origin it names (the
+      // top-level page's), or, for the page itself, the one asking.
       ses.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
-        const origin = policy.siteOf(requestingOrigin || details?.requestingUrl || contents?.getURL?.() || '');
-        return policy.permissionCheck(permission, details || {}, settingFor(origin), { origin });
+        const requestingUrl = requestingOrigin || details?.requestingUrl || '';
+        const topUrl = details?.embeddingOrigin || contents?.getURL?.() || requestingUrl;
+        const origin = policy.permissionSite(permission, { requestingUrl, topUrl });
+        return policy.permissionCheck(permission, details || {}, settingFor(origin), { origin, tab: isTab(contents) });
       });
       ses.setDevicePermissionHandler(() => false);
       ses.setDisplayMediaRequestHandler((_request, callback) => callback({}));
@@ -750,7 +947,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
       ses.on('select-hid-device', (event, _details, callback) => { event.preventDefault(); callback(); });
       ses.on('select-serial-port', (event, _ports, _contents, callback) => { event.preventDefault(); callback(''); });
       ses.on('select-usb-device', (event, _details, callback) => { event.preventDefault(); callback(); });
-      ses.on('will-download', (_event, item, contents) => startDownload(item, contents, isPrivate));
+      ses.on('will-download', (event, item, contents) => startDownload(event, item, contents, isPrivate));
     }
     // The blocker loads what it kept (or fetches its lists) now, off to the side.
     adblocker();
@@ -778,7 +975,16 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     };
   }
 
-  function startDownload(item, contents, isPrivate) {
+  function startDownload(event, item, contents, isPrivate) {
+    if (contents && !contents.isDestroyed() && !downloadMayStart(contents, item)) {
+      event.preventDefault();
+      const url = item.getURL();
+      send(contents.id, 'download-blocked', {
+        url: url.length <= 2048 ? url : null, name: policy.downloadName(item.getFilename(), url),
+        site: policy.siteOf(contents.getURL()) || '', private: isPrivate,
+      });
+      return;
+    }
     const id = `d${nextId++}`;
     const record = downloadRecord(id, item, contents, isPrivate);
     const folder = testOptions.downloadsDir || app.getPath('downloads');
@@ -824,7 +1030,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     if (record.state !== 'completed' || !record.path || !fs.existsSync(record.path)) throw new Error('The file isn’t there any more');
     if (action === 'show') { shell.showItemInFolder(record.path); return true; }
     if (action === 'open') {
-      if (!policy.openableDownload(record.name)) throw new Error('Atmos doesn’t open programs; use Show in folder');
+      if (!policy.openableDownload(record.name)) throw new Error('Atmos opens only documents, media and archives; use Show in folder');
       return shell.openPath(record.path).then(problem => { if (problem) throw new Error(problem); return true; });
     }
     throw new Error(`unknown download action ${action}`);
@@ -839,17 +1045,28 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     return contents;
   }
 
+  /**
+   * The user sent a page somewhere from the browser (the address bar, Back,
+   * a reload): "Leave site?" may ask (askBeforeLeaving), and what it loads
+   * may be a download.
+   */
+  function userMoved(contents) {
+    coreActedAt.set(contents.id, Date.now());
+    downloadReady.add(contents.id);
+  }
+
   const commands = {
     navigate(contents, url) {
       const verdict = policy.navigationPolicy(String(url), { frame: 'top' });
       if (verdict.action === 'external') { askExternal(contents, String(url), verdict.scheme); return 'external'; }
       if (verdict.action !== 'allow') throw new Error(verdict.reason);
+      userMoved(contents);
       contents.loadURL(String(url)).catch(() => { /* reported through did-fail-load */ });
       return 'loading';
     },
-    back: contents => { if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack(); },
-    forward: contents => { if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward(); },
-    reload: (contents, options) => (options?.hard ? contents.reloadIgnoringCache() : contents.reload()),
+    back: contents => { if (contents.navigationHistory.canGoBack()) { userMoved(contents); contents.navigationHistory.goBack(); } },
+    forward: contents => { if (contents.navigationHistory.canGoForward()) { userMoved(contents); contents.navigationHistory.goForward(); } },
+    reload: (contents, options) => { userMoved(contents); return options?.hard ? contents.reloadIgnoringCache() : contents.reload(); },
     stop: contents => contents.stop(),
     zoom: (contents, direction) => zoom(contents, ['in', 'out', 'reset'].includes(direction) ? direction : 'reset'),
     // options.findNext: the next match of the search already made (Enter
@@ -870,6 +1087,7 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     download(contents, url) {
       const target = String(url || '');
       if (!/^(https?:|data:|blob:)/i.test(target) || target.length > 2_000_000) throw new Error('not something to download');
+      expectDownload(contents, target);
       contents.downloadURL(target);
     },
     // The image at a point of the page (a context menu's), onto the clipboard.
@@ -909,9 +1127,12 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     attached(contents) { applyZoom(contents); return { ...state(contents), private: isPrivateSession(contents.session) }; },
     // The tab closing (or put away): its page's last events first (closePage).
     close: contents => closePage(contents),
-    // Out of a page's HTML fullscreen (Escape, wherever the keyboard is).
+    // Out of a page's HTML fullscreen (Escape, wherever the keyboard is). In
+    // a world of Core's own, where the page's scripts can't have replaced
+    // document.exitFullscreen.
     exitFullscreen(contents) {
-      void contents.executeJavaScript('document.fullscreenElement ? document.exitFullscreen().then(() => true, () => false) : false', true).catch(() => false);
+      const code = 'document.fullscreenElement ? document.exitFullscreen().then(() => true, () => false) : false';
+      void contents.executeJavaScriptInIsolatedWorld(CORE_WORLD, [{ code }], true).catch(() => false);
     },
   };
 
@@ -1001,12 +1222,15 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
   /**
    * A link the rest of Atmos would give the system browser: in a new tab of
    * Atmos Browser instead, when the user asked for that and it's running.
+   * It comes to the front only just after a click or key in Atmos (one link
+   * each); otherwise it waits in a tab behind, so an extension can't raise
+   * the browser, and a page in your browsing session, whenever it likes.
    * Returns whether it took the link.
    */
   function openLink(url) {
     if (!settings.options().openLinks || !linkListener || !policy.isLoadable(url) || url === 'about:blank') return false;
     if (!isWebExtension(linkListener)) { linkListener = null; return false; }
-    send(null, 'open-link', { url });
+    send(null, 'open-link', { url, background: !activations.take('atmos', 'link') });
     return true;
   }
 
@@ -1049,6 +1273,13 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     closePages,
     setWindow(win) {
       atmosWindow = win;
+      // The Atmos window's own input (its page and extensions' frames; a
+      // tap only on Atmos's own page, as Electron reports touch): a link
+      // Atmos then opens here comes to the front (openLink).
+      const acted = () => activations.activate('atmos');
+      win.webContents.on('before-input-event', (_event, input) => { if (policy.activatesUser(input)) acted(); });
+      win.webContents.on('before-mouse-event', (_event, mouse) => { if (mouse.type === 'mouseDown') acted(); });
+      win.webContents.on('input-event', (_event, input) => { if (input.type === 'touchEnd' || input.type === 'gestureTap') acted(); });
       // Before the window goes (closed, or Atmos quitting), its tabs' pages
       // close as Chrome closes them: destroying the window would destroy
       // its <webview>s without their last events. Once per window.

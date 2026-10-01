@@ -121,9 +121,22 @@ export function siteName(url) {
   return host.replace(/^www\./i, '');
 }
 
-/** How the address bar shows `url` while you aren't typing in it. */
+/**
+ * How the address bar shows `url` while you aren't typing in it: as it is,
+ * less a user name and password, as Chrome shows it. With them,
+ * "https://bank.example@other.example/" reads as the bank while the site
+ * is other.example.
+ */
 export function displayUrl(url) {
   if (!url || url === 'about:blank') return '';
+  try {
+    const parsed = new URL(url);
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && (parsed.username || parsed.password)) {
+      parsed.username = '';
+      parsed.password = '';
+      return parsed.href;
+    }
+  } catch { /* not an address: as it is */ }
   return String(url);
 }
 

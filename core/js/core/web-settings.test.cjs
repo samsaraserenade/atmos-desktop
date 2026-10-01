@@ -122,7 +122,21 @@ test('a site\'s shield: ads allowed per site, kept; private tabs follow unless t
   assert.equal(createWebSettings({ dir }).adsAllowed('https://c.example', { private: true }), false);
   settings.clearPrivate();
   assert.equal(settings.adsAllowed('https://c.example', { private: true }), false);
-  assert.throws(() => settings.setPermission('https://a.example', 'popups', 'allow'), /not a site permission/);
+  assert.throws(() => settings.setPermission('https://a.example', 'midi', 'allow'), /not a site permission/);
+});
+
+test('a site\'s pop-ups allowed without a click: per site, kept, only ever "allow"; private tabs follow', t => {
+  const dir = folder(t);
+  const settings = createWebSettings({ dir });
+  assert.equal(settings.popupsAllowed('https://a.example'), false);
+  settings.setPermission('https://a.example', 'popups', 'allow');
+  assert.equal(settings.popupsAllowed('https://a.example'), true);
+  assert.equal(createWebSettings({ dir }).popupsAllowed('https://a.example'), true, 'kept across starts');
+  assert.equal(settings.popupsAllowed('https://a.example', { private: true }), true, 'a private tab follows');
+  assert.equal(settings.adsAllowed('https://a.example'), false, 'nothing to do with its shield');
+  settings.setPermission('https://a.example', 'popups', 'block');
+  assert.equal(settings.popupsAllowed('https://a.example'), false, 'blocked is the default: forgotten');
+  assert.deepEqual(settings.listPermissions(), []);
 });
 
 test('clearing site settings', t => {

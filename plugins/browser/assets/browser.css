@@ -151,7 +151,7 @@ html[data-presentation="window"] .br-chrome { border-top: 0; }
 }
 .br-heading .br-heading-action { margin-left: auto; text-transform: none; letter-spacing: .01em; }
 
-/* New tab */
+/* New tab (and the history page's search, which shares the field's look) */
 .br-ntp { justify-content: flex-start; padding-top: clamp(40px, 16vh, 150px); }
 .br-ntp-search {
   display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px;
@@ -252,6 +252,7 @@ html[data-presentation="window"] .br-chrome { border-top: 0; }
 .br-notice svg { width: 14px; height: 14px; color: var(--br-warning); }
 .br-notice span { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
 .br-notice .br-icon-button { width: 22px; height: 22px; }
+.br-notice .br-button { flex: none; white-space: nowrap; }
 .br-notice .br-icon-button svg { color: inherit; width: 11px; height: 11px; }
 
 .br-find { display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 5px 0 10px; width: 330px; }
@@ -305,5 +306,5 @@ html[data-atmos-surface="settings"] body { font-size: 12px; }
   min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px; background: var(--br-fill-3); color: var(--br-ink);
   font-size: 9.5px; line-height: 14px; font-variant-numeric: tabular-nums; text-align: center;
 }
-.br-ntp-stat { display: flex; align-items: center; justify-content: center; gap: 6px; margin: -6px 0 14px; font-size: 11px; color: var(--br-ink-3); }
+.br-ntp-stat { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0 0 4px; font-size: 11px; color: var(--br-ink-3); }
 .br-ntp-stat svg { width: 13px; height: 13px; }

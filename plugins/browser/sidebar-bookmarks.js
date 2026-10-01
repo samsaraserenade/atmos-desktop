@@ -6,7 +6,7 @@
 import atmos from 'atmos-sdk';
 import { engine, follow } from './src/ui/engine-client.js';
 import { h, siteIcon, soon } from './src/ui/dom.js';
-import { siteName } from './src/address.js';
+import { siteName, displayUrl } from './src/address.js';
 
 document.head.append(h('link', { rel: 'stylesheet', href: new URL('./assets/browser.css', import.meta.url).href }));
 const list = h('div', { class: 'br-list', role: 'list' });
@@ -37,7 +37,7 @@ function row(item) {
     queueMicrotask(() => { input.focus(); input.select(); });
     return h('div', { class: 'br-row' }, h('span', { class: 'br-row-icon' }, siteIcon(engine.iconFor(item.url))), input);
   }
-  const element = h('div', { class: 'br-row', role: 'listitem', title: `${item.title}\n${item.url}`, dataset: { bookmark: item.id } },
+  const element = h('div', { class: 'br-row', role: 'listitem', title: `${item.title}\n${displayUrl(item.url)}`, dataset: { bookmark: item.id } },
     h('span', { class: 'br-row-icon' }, siteIcon(engine.iconFor(item.url))),
     h('span', { class: 'br-row-title', text: item.title || siteName(item.url) }));
   element.addEventListener('click', event => open(item.url, { newTab: event.ctrlKey || event.metaKey }));

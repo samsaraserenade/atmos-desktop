@@ -5,12 +5,15 @@
 // clicks and keys, as the OS would send them), so this needs an X display:
 // xvfb-run -a on a machine without one.
 //
-// Browsing, the address bar, tabs and their shortcuts, pop-ups (one with an
-// opener, as a sign-in window has), downloads, a permission prompt, links to
-// other programs, the certificate interstitial, mixed content, fullscreen,
-// Atmos's menus, Settings and Task View over a page, switching panels and
-// layouts, private tabs' cookies, pages put away, the hostile page, links
-// from the rest of Atmos, and tabs restored after a restart.
+// Browsing, the address bar, tabs and their shortcuts, pop-ups (only after
+// a click, one each; one with an opener, as a sign-in window has), downloads
+// (more than one without a click stopped), a permission prompt (no answer
+// the moment it appears; a frame's request is the page's), links to other
+// programs, the certificate interstitial and client certificates, mixed
+// content, fullscreen (a tab's only), Atmos's menus, Settings and Task View
+// over a page, switching panels and layouts, private tabs' cookies, pages
+// put away, the hostile page (Atmos's own IPC refused to it), links from the
+// rest of Atmos, and tabs restored after a restart.
 //
 // Usage: node scripts/e2e/browser.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
@@ -85,6 +88,7 @@ function xinput() {
   const send = line => new Promise(resolve => { waiting.push(resolve); proc.stdin.write(`${line}\n`); });
   return {
     click: (x, y, button = 1) => send(`click ${Math.round(x)} ${Math.round(y)} ${button}`),
+    move: (x, y) => send(`move ${Math.round(x)} ${Math.round(y)}`),
     key: combo => send(`key ${combo}`),
     type: text => send(`type ${text}`),
     close: () => proc.kill(),
@@ -159,6 +163,7 @@ setTimeout(() => {
   }).catch(() => {});
   const x = {
     click: async (...args) => { await focusWindow(); return input.click(...args); },
+    move: (...args) => input.move(...args),
     key: combo => input.key(combo),
     type: text => input.type(text),
     close: () => input.close(),
@@ -191,6 +196,61 @@ setTimeout(() => {
     const box = layer.getBoundingClientRect();
     return { x: box.left, y: box.top, width: box.width, height: box.height };
   });
+  /**
+   * A real click on an element of a tab's page, as the user's: its box from
+   * the page, the page's place from the layer (near its left edge: a link
+   * spans the page's width).
+   */
+  const clickIn = async (prefix, selector) => {
+    const rect = JSON.parse(await inPage(prefix, `JSON.stringify(document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect())`));
+    const layer = await layerBox();
+    await x.click(layer.x + rect.x + Math.min(rect.width / 2, 60), layer.y + rect.y + rect.height / 2);
+  };
+  /**
+   * Watch, from the panel, for `selector` to appear and click its `label`
+   * button at once (as a click the user was already making would land):
+   * resolves whether it was still showing just after.
+   */
+  const clickAsItAppears = (selector, label) => panel().then(frame => frame.evaluate(([sel, text]) => new Promise(resolve => {
+    const started = performance.now();
+    const tick = () => {
+      const element = document.querySelector(sel);
+      const button = element && !element.hidden ? [...element.querySelectorAll('button')].find(b => b.textContent === text) : null;
+      if (button) {
+        button.click();
+        setTimeout(() => resolve({ stillShown: !element.hidden, at: Math.round(performance.now() - started) }), 120);
+        return;
+      }
+      if (performance.now() - started > 6000) resolve({ stillShown: null, at: 'never appeared' });
+      else setTimeout(tick, 5);
+    };
+    tick();
+  }), [selector, label]));
+  /**
+   * A real click on one of the panel's buttons (a prompt's, a notice's), as
+   * the user's: the pointer moves onto it, then clicks. Returns whether
+   * the button was there.
+   */
+  const clickPanelButton = async (selector, label) => {
+    const point = await (await panel()).evaluate(([sel, text]) => {
+      const button = [...document.querySelectorAll(`${sel} button`)].find(b => b.textContent === text);
+      if (!button || button.closest('[hidden]')) return null;
+      const box = button.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }, [selector, label]);
+    if (!point) return false;
+    const frame = await page.evaluate(() => {
+      const element = [...document.querySelectorAll('iframe')].find(f => f.src.includes('ext=plugin%3Abrowser') && f.src.includes('surface=panel'));
+      const box = element.getBoundingClientRect();
+      return { x: box.left, y: box.top };
+    });
+    await x.move(frame.x + point.x - 30, frame.y + point.y + 25);
+    await wait(80);
+    await x.move(frame.x + point.x - 2, frame.y + point.y);
+    await wait(80);
+    await x.click(frame.x + point.x, frame.y + point.y);
+    return true;
+  };
   const atmosWindowDo = fn => app.evaluate(({ BrowserWindow }, source) => {
     const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith('atmos-app://local/index.html'));
     return new Function('win', `return (${source})(win)`)(win);
@@ -354,20 +414,79 @@ setTimeout(() => {
     await page.keyboard.press('Escape');
 
     // ── Pop-ups ───────────────────────────────────────────────────────────
+    // Only just after a click or key in the page, one each (Chrome's pop-up
+    // blocker; Electron has none). The clicks here are real ones.
     step('pop-ups');
     await go(`${A}/links`);
-    const before = (await tabs()).length;
-    await inPage(`${A}/links`, 'document.getElementById("blank").click()');
-    await until(async () => (await tabs()).length === before + 1 && (await selected()).title === 'Blank target');
-    check('target=_blank opens a tab', (await selected()).title === 'Blank target', await tabs());
+    let before = (await tabs()).length;
+    // Without a click: blocked, and the browser says so (its Open takes no click at once).
+    const earlyOpen = clickAsItAppears('[data-test="notice"]', 'Open');
+    await inPage(`${A}/links`, 'setTimeout(() => { window.__unasked = window.open("/solid?title=Unasked&color=dc2626") === null; }, 50); true');
+    const early = await earlyOpen;
+    const blockedNotice = (await selected()).notice;
+    check('a pop-up without a click is blocked, and the browser says so, with Open', /Pop-up blocked/.test(blockedNotice?.text || '') && blockedNotice.actions?.[0]?.label === 'Open'
+      && (await tabs()).length === before && await inPage(`${A}/links`, 'window.__unasked') === true, { blockedNotice, tabs: (await tabs()).length });
+    check('…whose Open takes no click the moment it appears (the page chose the moment)', early.stillShown === true && (await tabs()).length === before, early);
+    grab('05a-popup-blocked');
+    await wait(650);
+    await clickPanelButton('[data-test="notice"]', 'Open');
+    await until(async () => (await selected()).title === 'Unasked', { timeout: 5000 });
+    check('…and a moment later, Open opens it', (await selected()).title === 'Unasked', await tabs());
     await engine(e => e.closeTab(e.selectedId()));
     await engine(e => e.selectTab(e.tabs().find(t => t.title === 'Links').id));
-    await inPage(`${A}/links`, 'document.getElementById("open-plain").click()');
+    await wait(400);
+    // Always allow: the site's pop-ups open without a click from then on (its setting, to take back in Settings).
+    await inPage(`${A}/links`, 'setTimeout(() => window.open("/solid?title=Unasked%20again&color=dc2626"), 50); true');
+    await until(async () => /Pop-up blocked/.test((await selected()).notice?.text || ''), { timeout: 4000 });
+    await wait(650);
+    await clickPanelButton('[data-test="notice"]', 'Always allow');
+    const allowedSetting = await until(async () => (await engine(e => e.sitePermissions())).find(item => item.origin === A && item.name === 'popups'), { timeout: 3000 });
+    await inPage(`${A}/links`, 'setTimeout(() => window.open("/solid?title=Allowed&color=0891b2"), 50); true');
+    const allowedTab = await until(async () => (await tabs()).find(t => t.title === 'Allowed'), { timeout: 5000 });
+    check('…and Always allow lets the site open pop-ups without a click, kept as its setting', !!allowedTab && allowedSetting?.value === 'allow'
+      && !(await tabs()).some(t => t.title === 'Unasked again'), { allowedSetting, tabs: (await tabs()).map(t => t.title) });
+    if (allowedTab) await engine((e, id) => e.closeTab(id), allowedTab.id);
+    await engine((e, origin) => e.setSitePermission(origin, 'popups', null), A);
+    await engine(e => e.selectTab(e.tabs().find(t => t.title === 'Links').id));
+    await wait(400);
+    before = (await tabs()).length;
+    // With a click.
+    await clickIn(`${A}/links`, '#blank');
+    await until(async () => (await tabs()).length === before + 1 && (await selected()).title === 'Blank target');
+    check('target=_blank opens a tab (a real click)', (await selected()).title === 'Blank target', await tabs());
+    await engine(e => e.closeTab(e.selectedId()));
+    await engine(e => e.selectTab(e.tabs().find(t => t.title === 'Links').id));
+    await wait(400);
+    await clickIn(`${A}/links`, '#open-plain');
     await until(async () => (await tabs()).length === before + 1 && (await selected()).title === 'Opened');
     check('window.open without features opens a tab', (await selected()).title === 'Opened', await tabs());
     await engine(e => e.closeTab(e.selectedId()));
     await engine(e => e.selectTab(e.tabs().find(t => t.title === 'Links').id));
-    await inPage(`${A}/links`, 'document.getElementById("signin").click()');
+    await wait(400);
+    // One click, two pop-ups asked for: the first.
+    await clickIn(`${A}/links`, '#open-two');
+    await until(async () => (await tabs()).some(t => t.title === 'First of two'), { timeout: 5000 });
+    await wait(800);
+    const linksTab = (await engine(e => e.tabs())).find(t => t.title === 'Links');
+    check('one click opens one pop-up (the second it asked for is blocked, and said so)', (await tabs()).length === before + 1
+      && !(await tabs()).some(t => t.title === 'Second of two') && /Pop-up blocked/.test(linksTab?.notice?.text || ''), { tabs: (await tabs()).map(t => t.title), notice: linksTab?.notice });
+    await engine(e => e.closeTab(e.tabs().find(t => t.title === 'First of two').id));
+    await engine(e => e.selectTab(e.tabs().find(t => t.title === 'Links').id));
+    await engine(e => e.dismissNotice(e.selectedId()));
+    await wait(400);
+    // A click in a frame of another site (its own process: Electron reports its mouse too).
+    const frameProcess = await app.evaluate(({ webContents }, start) => {
+      const contents = webContents.getAllWebContents().find(w => w.getType() === 'webview' && w.getURL().startsWith(start));
+      const frame = contents.mainFrame.frames.find(f => f.url.includes('/frame-open'));
+      return frame ? { own: frame.osProcessId !== contents.mainFrame.osProcessId, url: frame.url } : null;
+    }, `${A}/links`);
+    await clickIn(`${A}/links`, '#frame');
+    await until(async () => (await selected()).title === 'From a frame', { timeout: 5000 });
+    check('a click in an embedded frame of another site lets that frame open one', (await selected()).title === 'From a frame' && frameProcess?.own === true, { frameProcess, tabs: (await tabs()).map(t => t.title) });
+    await engine(e => e.closeTab(e.selectedId()));
+    await engine(e => e.selectTab(e.tabs().find(t => t.title === 'Links').id));
+    await wait(400);
+    await clickIn(`${A}/links`, '#signin');
     const popup = await until(() => app.evaluate(({ BrowserWindow, session }) => {
       const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/oauth/authorize'));
       return win && win.getTitle() ? {
@@ -381,20 +500,59 @@ setTimeout(() => {
     check('…with its opener: it answers the page and closes', message?.token === 'secret-token' && message.state === 'xyz', message);
     check('…and Chrome\'s window.chrome members, as a tab has (Core\'s page preload)', message?.chrome === 'loadTimes,csi,app', message);
     check('…and the page\'s tab stays', (await tabs()).length === before);
+    // A pop-up window never goes fullscreen: there's no notice over it naming its site.
+    await wait(300);
+    await clickIn(`${A}/links`, '#window');
+    const popupWindow = await until(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some(w => w.webContents.getURL().includes('/fullscreen'))), { timeout: 5000 });
+    const popupAsked = await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/fullscreen'));
+      return Promise.race([
+        win.webContents.executeJavaScript('document.getElementById("box").requestFullscreen().then(() => "entered", e => e.name)', true),
+        new Promise(resolve => setTimeout(() => resolve('no answer'), 2000)),
+      ]);
+    });
+    await wait(600);
+    const popupFullscreen = await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/fullscreen'));
+      const fullscreen = win ? win.isFullScreen() : null;
+      win?.close();
+      return fullscreen;
+    });
+    check('a pop-up window can\'t go fullscreen (only a tab, with Atmos\'s notice over it)', !!popupWindow && popupFullscreen === false && popupAsked !== 'entered', { popupAsked, popupFullscreen });
+    await wait(300);
 
     // ── Downloads ─────────────────────────────────────────────────────────
     step('downloads');
-    await inPage(`${A}/links`, 'document.getElementById("download").click()');
+    await clickIn(`${A}/links`, '#download');
     const done = await until(async () => (await engine(e => e.downloads())).find(item => item.state === 'completed' && /report/.test(item.name)), { timeout: 10000 });
     check('a download is saved, its name made safe', !!done && !done.name.includes('/') && fs.existsSync(path.join(downloads, done.name)), done && { name: done.name, path: done.path });
     check('the downloads list opens by itself', await (await panel()).evaluate(() => !document.querySelector('[data-test="downloads"]').hidden));
     grab('06-downloads');
     check('a finished document can be opened', done?.openable === true);
-    await inPage(`${A}/links`, 'document.getElementById("program").click()');
+    await (await panel()).evaluate(() => window.__browserPanel.overlays.closeDownloads());
+    await wait(300);
+    await clickIn(`${A}/links`, '#program');
     const program = await until(async () => (await engine(e => e.downloads())).find(item => item.state === 'completed' && item.name === 'setup.exe'), { timeout: 10000 });
     const openProgram = await engine((e, id) => e.downloadAction(id, 'open').then(() => 'opened', error => error.message), program?.id);
-    check('a downloaded program is never opened from Atmos', program?.openable === false && /doesn’t open programs/.test(openProgram), { openable: program?.openable, openProgram });
+    check('a downloaded program is never opened from Atmos (Open is for documents, media and archives)', program?.openable === false && /opens only documents/.test(openProgram), { openable: program?.openable, openProgram });
     await (await panel()).evaluate(() => window.__browserPanel.overlays.closeDownloads());
+    // A page downloading on its own: one file as it opens (as Chrome allows), the next stopped until you say so.
+    const autoTab = await engine((e, url) => e.newTab({ url }), `${A}/auto-downloads`);
+    const autoOne = await until(async () => (await engine(e => e.downloads())).find(item => item.name === 'auto-one.txt' && item.state === 'completed'), { timeout: 8000 });
+    const autoStopped = await until(async () => { const t = await engine((e, id) => e.tab(id), autoTab.id); return /Download blocked/.test(t?.notice?.text || '') ? t.notice : null; }, { timeout: 6000 });
+    await wait(400);
+    const autoTwoEarly = (await engine(e => e.downloads())).some(item => item.name === 'auto-two.txt') || fs.existsSync(path.join(downloads, 'auto-two.txt'));
+    check('a page downloading on its own: the first file goes through, the second is stopped, and the browser says so', !!autoOne && !!autoStopped && autoStopped.actions?.[0]?.label === 'Download' && !autoTwoEarly, { autoOne: !!autoOne, autoStopped, autoTwoEarly });
+    grab('06b-download-blocked');
+    await (await panel()).evaluate(() => window.__browserPanel.overlays.closeDownloads());
+    await wait(650);
+    await clickPanelButton('[data-test="notice"]', 'Download');
+    const autoTwo = await until(async () => (await engine(e => e.downloads())).find(item => item.name === 'auto-two.txt' && item.state === 'completed'), { timeout: 8000 });
+    check('…and its Download fetches it', !!autoTwo && fs.existsSync(path.join(downloads, 'auto-two.txt')), autoTwo && { name: autoTwo.name });
+    await (await panel()).evaluate(() => window.__browserPanel.overlays.closeDownloads());
+    await engine((e, id) => e.closeTab(id), autoTab.id);
+    await engine(e => e.selectTab(e.tabs().find(t => t.title === 'Links').id));
+    await wait(400);
 
     // ── Links to other programs, and refused ones ──────────────────────────
     step('links to other programs');
@@ -415,18 +573,24 @@ setTimeout(() => {
     // ── A permission prompt (localhost is a secure context) ────────────────
     step('permissions');
     await go(`${LOCAL}/permissions`);
+    // A click on Allow the moment the prompt appears (one the user was already making on the page) isn't an answer.
+    const earlyAllow = clickAsItAppears('[data-test="permission"]', 'Allow');
     const asking = inPage(`${LOCAL}/permissions`, 'askLocation()');
+    const earlyAnswer = await earlyAllow;
     const request = await until(async () => (await selected()).permission, { timeout: 5000 });
     const promptShown = await until(() => panel().then(f => f.evaluate(() => !document.querySelector('[data-test="permission"]').hidden)), { timeout: 3000 });
     check('a site asking for location gets a prompt in the browser', request?.permissions?.includes('geolocation') && promptShown, request);
+    check('…which takes no click the moment it appears', earlyAnswer.stillShown === true && (await selected()).permission?.requestId === request?.requestId, earlyAnswer);
     await wait(200);
     grab('08-permission-prompt');
-    const answer = (requestId, label) => until(() => panel().then(f => f.evaluate(([id, text]) => {
-      const prompt = document.querySelector('[data-test="permission"]');
-      if (prompt.hidden || prompt.dataset.request !== id) return false;
-      [...prompt.querySelectorAll('button')].find(b => b.textContent === text).click();
-      return true;
-    }, [requestId, label])), { timeout: 4000 });
+    // An answer as the user gives one: the pointer onto the button, a moment after the prompt appeared.
+    const answer = async (requestId, label) => {
+      const shown = id => panel().then(f => f.evaluate(want => { const prompt = document.querySelector('[data-test="permission"]'); return !prompt.hidden && prompt.dataset.request === want; }, id));
+      if (!await until(() => shown(requestId), { timeout: 4000 })) return false;
+      await wait(650);
+      await clickPanelButton('[data-test="permission"]', label);
+      return until(async () => !await shown(requestId), { timeout: 3000 });
+    };
     await answer(request?.requestId, 'Block');
     const blocked = await within(asking);
     const again = await within(inPage(`${LOCAL}/permissions`, 'askLocation()'));
@@ -453,6 +617,26 @@ setTimeout(() => {
     if (clipboardAsk) await engine((e, id) => e.dismissPermission(e.selectedId(), id), clipboardAsk.requestId);
     const clipboardResult = await within(clipboard.catch(error => String(error)));
     check('reading the clipboard asks first (and a dismissed prompt denies)', (clipboardAsk?.permissions?.includes('clipboard-read') && /denied/.test(clipboardResult)) || /denied/.test(clipboardResult), { clipboardResult, clipboardAsk });
+    // A frame of another site the page lets ask (allow="geolocation"): the
+    // question names the page you're on and is kept for it, as in Chrome;
+    // notifications from such a frame are refused without asking.
+    await engine((e, origin) => e.setSitePermission(origin, 'geolocation', null), LOCAL);
+    await go(`${LOCAL}/permissions-frame`);
+    await wait(500);
+    const inFrame = code => app.evaluate(({ webContents }, [start, source]) => {
+      const contents = webContents.getAllWebContents().find(w => w.getType() === 'webview' && w.getURL().startsWith(start));
+      const frame = contents.mainFrame.frames.find(f => f.url.includes('127.0.0.1'));
+      return frame.executeJavaScript(source, true);
+    }, [`${LOCAL}/permissions-frame`, code]);
+    const frameAsking = inFrame('askLocation()');
+    const frameRequest = await until(async () => (await selected()).permission, { timeout: 5000 });
+    check('a frame of another site asking for location: the prompt names the page\'s site', frameRequest?.origin === LOCAL && frameRequest.permissions.includes('geolocation'), frameRequest);
+    if (frameRequest) await engine((e, id) => e.dismissPermission(e.selectedId(), id), frameRequest.requestId);
+    await within(frameAsking.catch(error => String(error)));
+    const frameNotify = await within(inFrame('askNotifications()').catch(error => String(error)));
+    const noNotifyPrompt = !(await selected()).permission;
+    check('…and its notifications are refused without asking', frameNotify === 'denied' && noNotifyPrompt, { frameNotify, noNotifyPrompt });
+    await engine((e, origin) => e.setSitePermission(origin, 'geolocation', 'block'), LOCAL);
 
     // ── Certificates and mixed content ─────────────────────────────────────
     step('certificates');
@@ -467,6 +651,15 @@ setTimeout(() => {
     check('…with no way to continue to the site', /isn’t private/.test(interstitial.text) && !interstitial.buttons.some(label => /continue|proceed|anyway/i.test(label)), interstitial);
     check('…and Core shows no page there', (await layerBox()) === null);
     grab('09-certificate');
+    // A site asking for a TLS client certificate: Electron's default would send the first in the store, unasked.
+    const clientCertificate = await app.evaluate(({ app: electronApp }) => {
+      let prevented = false;
+      let answered = 'not answered';
+      electronApp.emit('select-client-certificate', { preventDefault() { prevented = true; } }, null, 'https://client-auth.test.example/',
+        [{ subjectName: 'CN=Someone', issuerName: 'CN=Work CA' }], (...args) => { answered = args.length && args[0] ? 'a certificate' : 'none'; });
+      return { prevented, answered };
+    });
+    check('a site asking for a client certificate gets none, without a question', clientCertificate.prevented && clientCertificate.answered === 'none', clientCertificate);
     // Trust the test certificate for one host only (a test hook from outside Core), for mixed content.
     await app.evaluate(({ session }) => {
       session.fromPartition('persist:atmos-browser').setCertificateVerifyProc((request, callback) => callback(request.hostname === 'other.test.example' ? 0 : -3));
@@ -720,6 +913,9 @@ setTimeout(() => {
     check('…as the site sees it too', privateRequests.length >= 2 && !privateRequests.some(item => /private/.test(item.cookie)) && privateRequests.some(item => item.cookie === 'probe=normal'), privateRequests.map(item => item.cookie));
     const privateHistory = await engine(e => e.history.search('Cookie').then(list => list.map(item => item.url)));
     check('private tabs leave no history', !privateHistory.some(url => url.includes('v=private')), privateHistory);
+    // The site's icon is Core's request, not the page's: no cookies go with it.
+    const iconRequests = pages.requests.filter(item => item.host === 'private.test' && item.path === '/favicon.png');
+    check('a site\'s icon is fetched without its cookies', iconRequests.length >= 1 && iconRequests.every(item => item.cookie === ''), iconRequests.map(item => item.cookie));
     grab('17-private');
     for (const t of (await tabs()).filter(item => item.private)) await engine((e, id) => e.closeTab(id), t.id);
     await wait(800);
@@ -780,18 +976,72 @@ setTimeout(() => {
     await wait(1500);
     const brokenIcon = await selected();
     check('a broken site icon is refused (no icon), and the browser carries on', !brokenIcon.favicon && brokenIcon.title === 'Broken icon', { favicon: (brokenIcon.favicon || '').slice(0, 40), title: brokenIcon.title });
+    // An icon on a local address that isn't the page's host: never fetched.
+    await go(`${A}/local-icon`);
+    await wait(1200);
+    const localIcon = await selected();
+    const localIconRequests = pages.requests.filter(item => item.query.includes('local-icon=1')).length;
+    check('a site\'s icon on a local address (not its own host) is never fetched', localIcon.title === 'Local icon' && localIconRequests === 0, { title: localIcon.title, localIconRequests });
+    // Atmos's own IPC, as a page whose renderer was taken over could send it:
+    // the main process answers the Atmos page only (ipc-gate.cjs).
+    await go(`${A}/hostile`);
+    const asTab = await app.evaluate(({ ipcMain, webContents, BrowserWindow }, [channels, where]) => {
+      const tab = webContents.getAllWebContents().find(w => w.getType() === 'webview' && w.getURL().includes(where));
+      const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith('atmos-app://local/'));
+      const invoke = (channel, sender, ...args) => {
+        const handler = ipcMain._invokeHandlers?.get(channel);
+        if (!handler) return Promise.resolve({ missing: true });
+        return Promise.resolve().then(() => handler({ sender, senderFrame: sender.mainFrame, processId: 0, frameId: 0 }, ...args))
+          .then(value => ({ answered: typeof value }), error => ({ refused: String(error?.message || error) }));
+      };
+      return (async () => {
+        const out = {};
+        for (const channel of channels) out[channel] = await invoke(channel, tab, { x: 0, y: 0, width: 40, height: 40 });
+        out.fromAtmos = await invoke('is-maximized', win.webContents);
+        const bounds = JSON.stringify(win.getBounds());
+        const event = { sender: tab, senderFrame: tab.mainFrame };
+        ipcMain.emit('window-resize:start', event, 'se', 100, 100);
+        ipcMain.emit('window-resize:update', event, 400, 400);
+        ipcMain.emit('window-resize:end', event);
+        out.resized = JSON.stringify(win.getBounds()) !== bounds;
+        return out;
+      })();
+    }, [['task-view:capture-preview', 'plugins:list', 'services:list', 'toggle-fullscreen', 'window-effects:set-transparent', 'extensions:manager-status', 'extension-state:load-all', 'web:downloads'], '/hostile']);
+    const refusedAll = Object.entries(asTab).filter(([name]) => name.includes(':') || name.includes('-')).every(([, value]) => value?.refused === 'Not allowed');
+    check('a tab\'s page gets nothing from Atmos\'s own IPC: no screenshot, no extensions list, no window controls', refusedAll && asTab.fromAtmos?.answered === 'boolean' && asTab.resized === false, asTab);
     grab('18-hostile');
 
     // ── Links from the rest of Atmos ──────────────────────────────────────
     step('links from atmos');
     await engine(e => e.setOptions({ openLinks: true }));
-    const count = (await tabs()).length;
+    let count = (await tabs()).length;
+    const onTab = (await selected()).id;
+    // No click in Atmos just before: a tab behind, the browser not raised.
+    await wait(5200);
+    await app.evaluate(({ shell }, url) => shell.openExternal(url), `${B}/solid?title=Behind&color=0f766e`);
+    await until(async () => (await tabs()).length === count + 1, { timeout: 5000 });
+    await wait(300);
+    check('with "Open links in Atmos Browser", a link Atmos opens with no click just before waits in a tab behind', (await selected()).id === onTab
+      && (await tabs()).some(t => t.url.includes('title=Behind') && !t.selected), (await tabs()).map(t => [t.title || t.url, t.selected]));
+    // A click in Atmos (the browser's address bar), then a link: a new tab, in front.
+    const addressPoint = await (await panel()).evaluate(() => { const box = document.querySelector('.br-address-input').getBoundingClientRect(); return { x: box.left + 30, y: box.top + box.height / 2 }; });
+    const panelBox = await page.evaluate(() => {
+      const element = [...document.querySelectorAll('iframe')].find(f => f.src.includes('ext=plugin%3Abrowser') && f.src.includes('surface=panel'));
+      const box = element.getBoundingClientRect();
+      return { x: box.left, y: box.top };
+    });
+    await x.click(panelBox.x + addressPoint.x, panelBox.y + addressPoint.y);
+    await wait(200);
+    await x.key('Escape');
+    count = (await tabs()).length;
     await app.evaluate(({ shell }, url) => shell.openExternal(url), `${B}/solid?title=From%20Atmos&color=0f766e`);
     await settled('From Atmos', 5000);
-    check('with "Open links in Atmos Browser", a link Atmos opens goes to a new tab', (await tabs()).length === count + 1 && (await selected()).title === 'From Atmos');
+    check('…and just after a click in Atmos, in front', (await tabs()).length === count + 1 && (await selected()).title === 'From Atmos');
+    count = (await tabs()).length;
     await page.evaluate(url => window.open(url), `${B}/solid?title=From%20the%20page&color=0f766e`);
-    await settled('From the page', 5000);
-    check('…and so does a link opened in the Atmos page', (await selected()).title === 'From the page');
+    await until(async () => (await tabs()).length === count + 1, { timeout: 5000 });
+    check('…and a link opened in the Atmos page goes there too (behind: that click was spent)', (await tabs()).some(t => t.url.includes('From%20the%20page') && !t.selected) && (await selected()).title === 'From Atmos', (await tabs()).map(t => [t.title || t.url, t.selected]));
+    await engine(e => { for (const t of e.tabs().filter(tab => /Behind|From%20the%20page/.test(tab.url))) e.closeTab(t.id); });
     await engine(e => e.setOptions({ openLinks: false }));
 
     // ── Pages put away ────────────────────────────────────────────────────
@@ -837,6 +1087,16 @@ setTimeout(() => {
     await x.key('Escape');
     const left = await until(async () => !(await atmosWindowDo(win => win.isFullScreen())), { timeout: 5000 });
     check('Escape leaves it', left);
+    // Atmos takes a page out of fullscreen in a world of its own: a page
+    // that replaced document.exitFullscreen in its own can't stay.
+    await wait(600);
+    await x.click(fsBox.x + 300, fsBox.y + 300);
+    await inPage(`${A}/fullscreen`, 'document.exitFullscreen = () => Promise.resolve(); Document.prototype.exitFullscreen = () => Promise.resolve(); document.getElementById("box").requestFullscreen()');
+    await until(() => atmosWindowDo(win => win.isFullScreen()), { timeout: 5000 });
+    const fsGuest = (await guests()).find(g => g.url.includes('/fullscreen'));
+    await page.evaluate(id => window.atmosCore.web.command(id, 'exitFullscreen'), fsGuest?.id);
+    const leftAgain = await until(async () => !(await atmosWindowDo(win => win.isFullScreen())), { timeout: 5000 });
+    check('…and Atmos takes it out even when the page replaced exitFullscreen', leftAgain, fsGuest);
     await atmosWindowDo(win => { if (win.isFullScreen()) win.setFullScreen(false); });
     await wait(900);
     await atmosWindowDo(win => win.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));

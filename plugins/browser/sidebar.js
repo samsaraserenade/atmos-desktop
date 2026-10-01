@@ -5,6 +5,7 @@
 import atmos from 'atmos-sdk';
 import { engine, follow } from './src/ui/engine-client.js';
 import { h, icon, siteIcon, tabLabel, soon } from './src/ui/dom.js';
+import { displayUrl } from './src/address.js';
 
 document.head.append(h('link', { rel: 'stylesheet', href: new URL('./assets/browser.css', import.meta.url).href }));
 const list = h('div', { class: 'br-list', role: 'list' });
@@ -15,7 +16,7 @@ function row(tab) {
   const audio = tab.audible || tab.muted
     ? h('button', { class: 'br-icon-button br-row-audio', title: tab.muted ? 'Unmute tab' : 'Mute tab', 'aria-label': tab.muted ? 'Unmute tab' : 'Mute tab' }, icon(tab.muted ? 'muted' : 'speaker'))
     : null;
-  const element = h('div', { class: `br-row${tab.selected ? ' selected' : ''}`, role: 'listitem', title: tab.url || tabLabel(tab), dataset: { tab: tab.id } },
+  const element = h('div', { class: `br-row${tab.selected ? ' selected' : ''}`, role: 'listitem', title: displayUrl(tab.url) || tabLabel(tab), dataset: { tab: tab.id } },
     h('span', { class: 'br-row-icon' }, tab.kind === 'history' ? icon('history') : tab.kind === 'new' ? icon(tab.private ? 'private' : 'plus') : siteIcon(tab.favicon)),
     h('span', { class: 'br-row-title', text: tabLabel(tab) }),
     tab.private && tab.kind !== 'new' ? h('span', { class: 'br-row-icon', title: 'Private' }, icon('private')) : null,

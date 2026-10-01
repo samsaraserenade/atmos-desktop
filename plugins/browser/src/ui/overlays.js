@@ -1,14 +1,18 @@
 /**
  * What the panel draws over the page: a site's permission question,
- * another program's link, a refusal notice, find in page, and downloads.
- * Each is marked data-over, so the panel tells Core to keep the frame there
- * (the page shows through everywhere else).
+ * another program's link, a notice (something refused, a pop-up or a
+ * download blocked), find in page, and downloads. Each is marked
+ * data-over, so the panel tells Core to keep the frame there (the page
+ * shows through everywhere else). What asks for an answer takes none the
+ * moment it appears (guard.js).
  */
 import { h, icon, bytes, takeFocus } from './dom.js';
 import { siteName } from '../address.js';
 import { PERMISSION_ICONS, PERMISSION_WORDS } from './icons.js';
+import { createGuard, guardedClick } from './guard.js';
 
 const NOTICE_MS = 7000;
+const ACTION_NOTICE_MS = 12000; // one with a button stays a little longer
 
 export function createOverlays({ engine, root, pageEl, onLayout, focusPage }) {
   // ── A site asks for a permission ──────────────────────────────────────────
@@ -29,6 +33,17 @@ export function createOverlays({ engine, root, pageEl, onLayout, focusPage }) {
   const downloads = h('div', { class: 'br-over br-downloads-panel', hidden: true, role: 'dialog', 'aria-label': 'Downloads', dataset: { over: '', test: 'downloads' } },
     h('div', { class: 'br-downloads-head', text: 'Downloads' }), downloadsList);
   root.append(permission, external, notice, find, downloads);
+
+  // Each answer's guard, armed as its question appears; the pointer moving
+  // over one counts for its buttons.
+  const permissionGuard = createGuard();
+  const externalGuard = createGuard();
+  const noticeGuard = createGuard();
+  const openGuards = new Map(); // download id -> the guard on its Open, armed as it finished
+  permission.addEventListener('pointermove', event => permissionGuard.pointer(event));
+  external.addEventListener('pointermove', event => externalGuard.pointer(event));
+  notice.addEventListener('pointermove', event => noticeGuard.pointer(event));
+  downloads.addEventListener('pointermove', event => { for (const guard of openGuards.values()) guard.pointer(event); });
 
   let noticeTimer = null;
   let noticeFor = null;
@@ -64,9 +79,10 @@ export function createOverlays({ engine, root, pageEl, onLayout, focusPage }) {
       tab.private ? h('div', { class: 'br-prompt-note', text: 'Your answer lasts until the last private tab closes.' })
         : h('div', { class: 'br-prompt-note', text: 'Remembered for this site. Change it in Settings → Appearance → Atmos Browser.' }),
       h('div', { class: 'br-prompt-buttons' }, block, allow));
-    block.addEventListener('click', () => { void engine.answerPermission(tab.id, request.requestId, false); });
-    allow.addEventListener('click', () => { void engine.answerPermission(tab.id, request.requestId, true); });
-    close.addEventListener('click', () => { void engine.dismissPermission(tab.id, request.requestId); });
+    guardedClick(permissionGuard, block, () => { void engine.answerPermission(tab.id, request.requestId, false); });
+    guardedClick(permissionGuard, allow, () => { void engine.answerPermission(tab.id, request.requestId, true); });
+    guardedClick(permissionGuard, close, () => { void engine.dismissPermission(tab.id, request.requestId); });
+    permissionGuard.arm();
     permission.hidden = false;
   }
 
@@ -78,27 +94,39 @@ export function createOverlays({ engine, root, pageEl, onLayout, focusPage }) {
     const cancel = h('button', { class: 'br-button small', text: 'Cancel' });
     const open = h('button', { class: 'br-button small primary', text: 'Open' });
     const shown = request.url.length > 120 ? `${request.url.slice(0, 120)}…` : request.url;
+    // The page that asks (a pop-up's link is asked here, in the tab you're on).
+    const asking = request.site ? siteName(request.site) : siteName(tab.url);
     external.replaceChildren(
       h('div', { class: 'br-prompt-title' }, 'Open this link with another program?'),
-      h('div', { class: 'br-prompt-note' }, `${siteName(tab.url) || 'This page'} wants to open a ${request.scheme}: link:`, h('br'), shown),
+      h('div', { class: 'br-prompt-note' }, `${asking || 'This page'} wants to open a ${request.scheme}: link:`, h('br'), shown),
       h('div', { class: 'br-prompt-buttons' }, cancel, open));
-    cancel.addEventListener('click', () => { void engine.answerExternal(tab.id, false); });
-    open.addEventListener('click', () => { void engine.answerExternal(tab.id, true); });
+    // Each answers the request drawn here, never one that took its place before the next frame.
+    guardedClick(externalGuard, cancel, () => { void engine.answerExternal(tab.id, false, request.requestId); });
+    guardedClick(externalGuard, open, () => { void engine.answerExternal(tab.id, true, request.requestId); });
+    externalGuard.arm();
     external.hidden = false;
   }
 
   function renderNotice(tab) {
     const text = tab?.notice?.text;
     if (!text) { notice.hidden = true; noticeFor = null; clearTimeout(noticeTimer); return; }
-    if (noticeFor === `${tab.id} ${text}` && !notice.hidden) return;
-    noticeFor = `${tab.id} ${text}`;
+    const key = `${tab.id} ${tab.notice.id || ''} ${text}`;
+    if (noticeFor === key && !notice.hidden) return;
+    noticeFor = key;
     const close = h('button', { class: 'br-icon-button', title: 'Close', 'aria-label': 'Close' }, icon('close'));
-    notice.replaceChildren(icon('warning'), h('span', { text }), close);
+    // A blocked pop-up or download offers to go ahead, which the page could time: guarded.
+    const actions = (tab.notice.actions || []).slice(0, 2).map((action, index) => {
+      const button = h('button', { class: `br-button small${index === 0 ? ' primary' : ''}`, text: action.label });
+      guardedClick(noticeGuard, button, () => { void engine.noticeAction(tab.id, index, tab.notice.id); });
+      return button;
+    });
+    notice.replaceChildren(icon('warning'), h('span', { text }), ...actions, close);
     close.addEventListener('click', () => engine.dismissNotice(tab.id));
+    if (actions.length) noticeGuard.arm();
     notice.hidden = false;
     clearTimeout(noticeTimer);
     const id = tab.id;
-    noticeTimer = setTimeout(() => engine.dismissNotice(id), NOTICE_MS);
+    noticeTimer = setTimeout(() => engine.dismissNotice(id), actions.length ? ACTION_NOTICE_MS : NOTICE_MS);
   }
 
   // Find in page
@@ -167,14 +195,22 @@ export function createOverlays({ engine, root, pageEl, onLayout, focusPage }) {
         const actions = h('div', { class: 'br-download-actions' });
         const action = (label, name, primary = false) => {
           const button = h('button', { class: `br-button small${primary ? ' primary' : ''}`, text: label });
-          button.addEventListener('click', () => {
+          const run = () => {
             engine.downloadAction(item.id, name).catch(error => {
               button.textContent = error.message.length > 40 ? 'Can’t' : error.message;
               button.disabled = true;
             });
-          });
+          };
+          // Open appears when a download finishes, which a page can time: guarded from then.
+          if (name === 'open') guardedClick(openGuards.get(item.id), button, run);
+          else button.addEventListener('click', run);
           actions.append(button);
         };
+        if (item.state === 'completed' && item.openable && !openGuards.has(item.id)) {
+          const guard = createGuard();
+          guard.arm();
+          openGuards.set(item.id, guard);
+        }
         if (item.state === 'completed') {
           if (item.openable) action('Open', 'open', true);
           action('Show in folder', 'show', !item.openable);
@@ -191,10 +227,11 @@ export function createOverlays({ engine, root, pageEl, onLayout, focusPage }) {
             h('div', { class: 'br-download-name', text: item.name, title: item.path || item.name }),
             h('div', { class: `br-download-status${item.state === 'interrupted' ? ' failed' : ''}`, text: `${statusOf(item)}${item.private ? ' · private tab' : ''}` }),
             item.state === 'progressing' ? h('div', { class: 'br-download-bar' }, h('div', { style: { width: `${Math.round(fraction * 100)}%` } })) : null,
-            item.state === 'completed' && !item.openable ? h('div', { class: 'br-prompt-note', style: { margin: '5px 0 0' }, text: 'Programs and scripts aren’t opened from here: use Show in folder.' }) : null,
+            item.state === 'completed' && !item.openable ? h('div', { class: 'br-prompt-note', style: { margin: '5px 0 0' }, text: 'Only documents, pictures, music, videos and archives open from here: use Show in folder.' }) : null,
             actions));
       }));
     }
+    for (const id of [...openGuards.keys()]) if (!list.some(item => item.id === id)) openGuards.delete(id);
     placeDownloads();
   }
   function placeDownloads() {

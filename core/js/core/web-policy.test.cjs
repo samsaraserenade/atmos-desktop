@@ -188,6 +188,126 @@ test('permissions: denied unless the user allowed the site; fullscreen and clipb
   assert.equal(policy.permissionCheck('fullscreen', {}, none, { origin }), true);
 });
 
+test('fullscreen is a tab\'s only: a pop-up window, with no notice naming its site, never goes fullscreen', () => {
+  const none = () => undefined;
+  const origin = 'https://example.com';
+  assert.equal(policy.permissionDecision('fullscreen', {}, none, { origin, tab: true }), 'allow');
+  assert.equal(policy.permissionDecision('fullscreen', {}, none, { origin, tab: false }), 'deny');
+  assert.equal(policy.permissionCheck('fullscreen', {}, none, { origin, tab: false }), false);
+  // Nothing else changes for a pop-up (it's never asked about, having no browser around it).
+  assert.equal(policy.permissionDecision('clipboard-sanitized-write', {}, none, { origin, tab: false }), 'allow');
+  assert.equal(policy.permissionDecision('geolocation', {}, () => 'allow', { origin, tab: false }), 'allow');
+});
+
+test('a permission is the page\'s: a frame\'s request names and is kept for the site you\'re on', () => {
+  const page = 'https://news.example/article';
+  const site = (permission, requestingUrl, topUrl = page) => policy.permissionSite(permission, { requestingUrl, topUrl });
+  assert.equal(site('geolocation', page), 'https://news.example');
+  // A frame from another site (which the page let ask: Chromium checks its allow=): the page's site.
+  assert.equal(site('geolocation', 'https://maps.example/embed'), 'https://news.example');
+  assert.equal(site('media', 'https://call.example/room'), 'https://news.example');
+  // Notifications from a frame of another origin: refused, as Chrome does (same-site too).
+  assert.equal(site('notifications', 'https://ads.example/frame'), null);
+  assert.equal(site('notifications', 'https://cdn.news.example/frame'), null);
+  assert.equal(site('notifications', `${page}#frame`), 'https://news.example');
+  // A frame without a site of its own (about:blank, srcdoc) is the page's.
+  assert.equal(site('notifications', 'about:blank'), 'https://news.example');
+  // No page site (a pop-up still blank, a data: page): nothing to keep it under.
+  assert.equal(site('geolocation', 'https://maps.example/', 'about:blank'), null);
+  assert.equal(site('geolocation', '', ''), null);
+});
+
+test('user activation: a click, a tap or a key the page gets; not a repeat, Escape, a modifier or a browser shortcut', () => {
+  const yes = [
+    { type: 'mouseDown', button: 'left' }, { type: 'mouseDown', button: 'middle' }, { type: 'touchEnd' }, { type: 'gestureTap' },
+    { type: 'keyDown', key: 'a' }, { type: 'keyDown', key: 'Enter' }, { type: 'rawKeyDown', key: ' ' }, { type: 'keyDown', key: 'A', shift: true },
+    { type: 'keyDown', key: 'c', control: true },
+  ];
+  for (const input of yes) assert.equal(policy.activatesUser(input), true, JSON.stringify(input));
+  const no = [
+    null, {}, { type: 'mouseUp' }, { type: 'mouseMove' }, { type: 'mouseWheel' }, { type: 'touchStart' }, { type: 'keyUp', key: 'a' }, { type: 'char', key: 'a' },
+    { type: 'keyDown', key: 'a', isAutoRepeat: true }, { type: 'keyDown', key: 'Escape' }, { type: 'keyDown', key: 'Shift', shift: true },
+    { type: 'keyDown', key: 'Control', control: true }, { type: 'keyDown', key: 'Alt', alt: true }, { type: 'keyDown', key: 'Meta', meta: true },
+    { type: 'keyDown', key: 't', control: true }, { type: 'keyDown', key: 'F5' }, { type: 'keyDown', key: '' },
+  ];
+  for (const input of no) assert.equal(policy.activatesUser(input), false, JSON.stringify(input));
+});
+
+test('activations: within 5 s of a click, and one pop-up per click', () => {
+  let clock = 1000;
+  const activations = policy.createActivations({ now: () => clock });
+  assert.equal(activations.take(1, 'popup'), false, 'never used');
+  activations.activate(1);
+  assert.equal(activations.lastAt(1), 1000);
+  assert.equal(activations.take(2, 'popup'), false, 'another page\'s click is its own');
+  clock += 4999;
+  assert.equal(activations.take(1, 'popup'), true);
+  assert.equal(activations.take(1, 'popup'), false, 'that click paid for one');
+  assert.equal(activations.take(1, 'link'), true, 'each kind once');
+  activations.activate(1);
+  clock += policy.USER_ACTIVATION_MS;
+  assert.equal(activations.take(1, 'popup'), false, 'too long ago');
+  activations.activate(1);
+  activations.forget(1);
+  assert.equal(activations.take(1, 'popup'), false);
+  assert.equal(activations.lastAt(1), 0);
+});
+
+test('"Leave site?": not again for half a minute after a Cancel, unless you just did something yourself', () => {
+  const now = 100_000;
+  assert.equal(policy.askBeforeLeaving({ now }), true, 'first time');
+  assert.equal(policy.askBeforeLeaving({ refusedAt: now - 1000, now }), false, 'the page asking again right away');
+  assert.equal(policy.askBeforeLeaving({ refusedAt: now - policy.LEAVE_QUIET_MS + 1, now }), false);
+  assert.equal(policy.askBeforeLeaving({ refusedAt: now - policy.LEAVE_QUIET_MS, now }), true, 'half a minute on');
+  assert.equal(policy.askBeforeLeaving({ refusedAt: now - 5000, actedAt: now - 500, now }), true, 'you clicked Back, or a link');
+  assert.equal(policy.askBeforeLeaving({ refusedAt: now - 5000, actedAt: now - policy.LEAVE_ACTED_MS, now }), false, 'not that recently');
+  assert.equal(policy.askBeforeLeaving({ refusedAt: now - 5000, actedAt: now - 6000, now }), false, 'before the Cancel');
+});
+
+test('a site\'s icon is fetched only from a public address, unless the page is on that host', () => {
+  const page = 'https://example.com/';
+  for (const icon of ['https://example.com/favicon.ico', 'https://cdn.example.net/i.png', 'http://8.8.8.8/x.png', 'https://[2606:4700::1111]/i.png', 'https://172.32.0.1/i.png']) {
+    assert.equal(policy.iconFetchAllowed(icon, page), true, icon);
+  }
+  for (const icon of [
+    'http://localhost/x.png', 'http://app.localhost/x.png', 'http://127.0.0.1/x.png', 'http://127.1/x.png', 'http://2130706433/x.png',
+    'http://0x7f000001/x.png', 'http://10.0.0.1/x.png', 'http://192.168.1.1/admin.png', 'http://172.16.5.4/x.png', 'http://169.254.169.254/latest',
+    'http://100.64.0.1/x.png', 'http://0.0.0.0/x.png', 'http://[::1]/x.png', 'http://[fd00::1]/x.png', 'http://[fe80::1]/x.png',
+    'http://[::ffff:127.0.0.1]/x.png', 'http://[::ffff:c0a8:101]/x.png', 'http://router/x.png', 'http://printer.local/x.png', 'http://nas.lan/x.png',
+    'http://box.internal/x.png', 'http://me@example.com/x.png', 'ftp://example.com/x.png', 'file:///C:/x.png', 'data:image/png;base64,AA==', 'not a url',
+  ]) {
+    assert.equal(policy.iconFetchAllowed(icon, page), false, icon);
+  }
+  // A page on a local server gets its own icon (another port of that host too).
+  assert.equal(policy.iconFetchAllowed('http://localhost:3000/favicon.ico', 'http://localhost:3000/app'), true);
+  assert.equal(policy.iconFetchAllowed('http://localhost:8080/favicon.ico', 'http://localhost:3000/app'), true);
+  assert.equal(policy.iconFetchAllowed('http://192.168.1.1/favicon.ico', 'http://192.168.1.1/'), true);
+  assert.equal(policy.iconFetchAllowed('http://192.168.1.2/favicon.ico', 'http://192.168.1.1/'), false);
+  // Every way of writing a local IPv4 address in IPv6, and the other local IPv6 ranges.
+  for (const icon of ['http://[::127.0.0.1]/x.png', 'http://[::ffff:0:127.0.0.1]/x.png', 'http://[64:ff9b::10.0.0.1]/x.png', 'http://[fec0::1]/x.png',
+    'http://[2002:c0a8:101::1]/x.png', 'http://[ff02::1]/x.png', 'http://[::]/x.png']) {
+    assert.equal(policy.iconFetchAllowed(icon, page), false, icon);
+  }
+  assert.equal(policy.iconFetchAllowed('http://[64:ff9b::8.8.8.8]/x.png', page), true);
+});
+
+test('a name an icon is fetched from is resolved first, and every address it has must be public', () => {
+  const page = 'https://example.com/';
+  // A name that isn't the page's own host is looked up (fritz.box and the like pass the name check).
+  assert.equal(policy.iconLookup('http://fritz.box/x.png', page), 'fritz.box');
+  assert.equal(policy.iconLookup('https://CDN.example.net./i.png', page), 'cdn.example.net');
+  assert.equal(policy.iconLookup('https://example.com/favicon.ico', page), null, 'the page\'s own host');
+  assert.equal(policy.iconLookup('http://8.8.8.8/x.png', page), null, 'an address, already judged');
+  assert.equal(policy.iconLookup('http://[2606:4700::1111]/x.png', page), null);
+  // What a resolver says: local or not.
+  for (const address of ['127.0.0.1', '10.1.2.3', '192.168.0.10', '169.254.169.254', '::1', '::', 'fe80::1%eth0', 'fd12:3456::1', '::ffff:127.0.0.1', '::ffff:7f00:1', 'garbage']) {
+    assert.equal(policy.isLocalAddress(address), true, address);
+  }
+  for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700::1111', '2a00:1450:4009:81f::200e', '::ffff:8.8.8.8']) {
+    assert.equal(policy.isLocalAddress(address), false, address);
+  }
+});
+
 test('download names: no folders, no forbidden characters or device names, bounded, with a fallback', () => {
   assert.equal(policy.downloadName('report.pdf'), 'report.pdf');
   assert.equal(policy.downloadName('../../../Windows/System32/evil.exe'), 'evil.exe');
@@ -213,11 +333,15 @@ test('download names are made unique in their folder', () => {
   assert.equal(policy.uniqueName('c.txt', name => taken.has(name)), 'c.txt');
 });
 
-test('programs and scripts are never opened from the downloads list', () => {
-  for (const name of ['setup.exe', 'SETUP.EXE', 'x.msi', 'run.bat', 'a.ps1', 'b.vbs', 'c.js', 'd.lnk', 'e.hta', 'f.jar', 'g.reg', 'h.scr', 'disk.iso', 'noextension']) {
+test('only documents, media and archives are opened from the downloads list', () => {
+  for (const name of ['setup.exe', 'SETUP.EXE', 'x.msi', 'run.bat', 'a.ps1', 'b.vbs', 'c.js', 'd.lnk', 'e.hta', 'f.jar', 'g.reg', 'h.scr', 'disk.iso', 'noextension',
+    // Windows types that run or fetch something, which a list of programs missed.
+    'remote.rdp', 'notes.one', 'notes.onepkg', 'update.msu', 'kit.ppkg', 'box.wsb', 'look.theme', 'look.themepack', 'app.jnlp', 'app.xbap', 'sheet.slk', 'query.iqy',
+    // Pages and pictures with script, macro-enabled Office files, an extension too long to be one.
+    'page.html', 'page.htm', 'page.xhtml', 'image.svg', 'data.xml', 'letter.docm', 'book.xlsm', 'deck.pptm', 'addin.xlam', `x.${'a'.repeat(20)}`]) {
     assert.equal(policy.openableDownload(name), false, name);
   }
-  for (const name of ['report.pdf', 'photo.JPG', 'song.mp3', 'notes.txt', 'data.csv', 'archive.zip']) {
+  for (const name of ['report.pdf', 'photo.JPG', 'song.mp3', 'notes.txt', 'data.csv', 'archive.zip', 'letter.docx', 'sheet.xlsx', 'film.mkv', 'backup.tar.gz', 'book.epub']) {
     assert.equal(policy.openableDownload(name), true, name);
   }
 });

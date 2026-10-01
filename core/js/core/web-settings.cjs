@@ -7,7 +7,8 @@
  *                 ('allow' or 'block'; Chromium checks some synchronously,
  *                 so the answer has to be here), the sites where ads and
  *                 trackers are allowed (their shield is down: "ads":
- *                 "allow"), and each site's zoom
+ *                 "allow"), those whose pop-ups are always allowed, click
+ *                 or no click ("popups": "allow"), and each site's zoom
  *   options.json  open links in Atmos Browser; ask where to save downloads;
  *                 block ads and trackers
  *
@@ -21,10 +22,12 @@ const { PROMPTED, siteOf } = require('./web-policy.cjs');
 
 const DEFAULT_OPTIONS = Object.freeze({ openLinks: false, askWhereToSave: true, blockAds: true });
 const VALUES = new Set(['allow', 'block']);
-// Remembered per site: the prompted permissions, and "ads" (only ever
-// 'allow': blocking is the default, so its shield down is the one choice).
-const SITE_SETTINGS = Object.freeze([...PROMPTED, 'ads']);
-const allowedValue = (name, value) => VALUES.has(value) && (name !== 'ads' || value === 'allow');
+// Remembered per site: the prompted permissions, and two only ever 'allow',
+// blocking being their default: "ads" (the site's shield down) and
+// "popups" (its pop-ups allowed without a click).
+const ALLOW_ONLY = new Set(['ads', 'popups']);
+const SITE_SETTINGS = Object.freeze([...PROMPTED, 'ads', 'popups']);
+const allowedValue = (name, value) => VALUES.has(value) && (!ALLOW_ONLY.has(name) || value === 'allow');
 
 /** { origin: { name: 'allow'|'block' } } with only known names and http(s) origins. */
 function cleanPermissions(value) {
@@ -77,7 +80,7 @@ function createWebSettings({ dir }) {
     setPermission(origin, name, value, { private: isPrivate = false } = {}) {
       if (siteOf(origin) !== origin) throw new TypeError(`not a site: ${origin}`);
       if (!SITE_SETTINGS.includes(name)) throw new TypeError(`not a site permission: ${name}`);
-      if (name === 'ads' && value === 'block') value = null; // blocking is the default
+      if (ALLOW_ONLY.has(name) && value === 'block') value = null; // blocking is the default
       if (value !== null && !allowedValue(name, value)) throw new TypeError(`a choice is 'allow', 'block' or null (${value})`);
       const permissions = store(isPrivate).permissions;
       if (value === null) {
@@ -107,6 +110,11 @@ function createWebSettings({ dir }) {
     adsAllowed(origin, { private: isPrivate = false } = {}) {
       const own = store(isPrivate).permissions[origin]?.ads;
       return (own ?? (isPrivate ? kept.permissions[origin]?.ads : undefined)) === 'allow';
+    },
+    /** Whether the user lets a site open pop-ups without a click. Private tabs follow the ordinary choice. */
+    popupsAllowed(origin, { private: isPrivate = false } = {}) {
+      const own = store(isPrivate).permissions[origin]?.popups;
+      return (own ?? (isPrivate ? kept.permissions[origin]?.popups : undefined)) === 'allow';
     },
     zoom(host, { private: isPrivate = false } = {}) {
       return store(isPrivate).zoom[host] ?? (isPrivate ? kept.zoom[host] : undefined) ?? 1;

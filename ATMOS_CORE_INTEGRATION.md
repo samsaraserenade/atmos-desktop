@@ -761,8 +761,8 @@ it may load and do. The extension names its tabs (1–64 letters, digits,
 | `atmos.web.navigate(tabId, url)`, `back`, `forward`, `reload(tabId, { hard })`, `stop`, `zoom(tabId, 'in' \| 'out' \| 'reset')`, `find(tabId, text, { forward, findNext })`, `stopFind`, `print`, `mute(tabId, muted)`, `edit(tabId, 'copy' …)`, `download(tabId, url)`, `copyImage(tabId, x, y)`, `focus`, `state` | What a browser does to a page. `navigate` is checked in the main process like any navigation; zoom is kept per site. A page's state has `blocked` (ads and trackers blocked on it) and `shield` (`'on'`, `'off'`, `'disabled'` or `'none'`) |
 | `atmos.web.shield(tabId, on)` / `blocked(tabId)` | The site's shield: `false` lets its ads and trackers through, `true` blocks them again (kept per site; a private tab's choice stays with the private session); what was blocked on the page, `{ count, hosts }` |
 | `atmos.web.adblock.status()` / `update()` | The ad and tracker blocker: `{ enabled, state, error, updatedAt, rules, total, lists }`; checking every list now |
-| `atmos.web.onEvent(fn)` | What pages do, `{ type, tabId, … }`: `opened`, `closed`, `state`, `navigated`, `progress`, `favicon`, `load-failed` (with `certificate`), `refused`, `crashed`, `find`, `fullscreen`, `context-menu`, `command` (the browser's shortcuts, taken before the page sees them), `open-tab`, `open-link` (a link from the rest of Atmos, when the user turned that on), `download`, `download-removed`, `permission-request`, `permission-settled`, `external-request`, `private-ended`, `adblock` (the blocker's status changed) |
-| `atmos.web.permissions.respond(requestId, { allow, remember })` / `list()` / `set(origin, name, 'allow' \| 'block' \| null)` | Answer a site's request (the extension draws the prompt; Atmos keeps the answer per site); the remembered answers, to show or take back |
+| `atmos.web.onEvent(fn)` | What pages do, `{ type, tabId, … }`: `opened`, `closed`, `state`, `navigated`, `progress`, `favicon`, `load-failed` (with `certificate`), `refused`, `crashed`, `find`, `fullscreen`, `context-menu`, `command` (the browser's shortcuts, taken before the page sees them), `open-tab`, `open-link` (a link from the rest of Atmos, when the user turned that on; `background` when there was no click in Atmos just before), `popup-blocked` and `download-blocked` (a page tried one without a click; `url` to open or fetch it, as Core's own), `download`, `download-removed`, `permission-request` (`origin` is the page's site, whichever frame asks), `permission-settled`, `external-request` (`site`, the asking page's), `private-ended`, `adblock` (the blocker's status changed) |
+| `atmos.web.permissions.respond(requestId, { allow, remember })` / `list()` / `set(origin, name, 'allow' \| 'block' \| null)` | Answer a site's request (the extension draws the prompt; Atmos keeps the answer per site); the remembered answers, to show or take back. Besides the prompted permissions, `ads` (the site's shield down) and `popups` (its pop-ups allowed without a click), each only ever `'allow'` |
 | `atmos.web.external.respond(requestId, allow)` | Answer a link to another program (`mailto:`…) |
 | `atmos.web.downloads.list()` / `open(id)` / `show(id)` / `cancel(id)` / `pause(id)` / `resume(id)` / `remove(id)` | This session's downloads. `open` refuses a program or script |
 | `atmos.web.options()` / `setOptions({ openLinks, askWhereToSave, blockAds })` / `clearData({ cookies, cache, siteSettings })` | "Open links in Atmos Browser" (off by default), asking where to save, blocking ads and trackers (on by default); clearing the ordinary session's data (`siteSettings` includes the shields) |
@@ -1328,7 +1328,8 @@ safe for any of them, and say what it gives. Settings shows the user:
   `atmos-app://local/`. Links and `window.open()` to `http(s)` and `mailto`,
   from it and from frames, open in the default browser (an `http(s)` link
   in Atmos Browser instead, when the user turned on "Open links in Atmos
-  Browser"); other schemes are refused. A frame's pop-ups go the same way
+  Browser": in front just after a click in Atmos, otherwise in a tab
+  behind); other schemes are refused. A frame's pop-ups go the same way
   (its sandbox allows them only so they reach this handler, which never
   opens a window). A frame navigates only within its origin and can't make
   a `<webview>`: the only ones in the window are Core's, for web pages (next
@@ -1345,11 +1346,14 @@ safe for any of them, and say what it gives. Settings shows the user:
   the browser's policy (`core/js/core/web-policy.cjs`, unit-tested) to every
   page: `http(s)` and `about:blank` only, never Atmos's schemes, `file:`,
   `chrome:` or `devtools:`; other schemes (`mailto:`…) only after the user
-  says yes; a pop-up with an opener (a sign-in window) in a small window of
-  its own; camera, microphone, location, notifications and reading the
-  clipboard only for sites the user allowed, everything else refused; no
-  way past a certificate error; safe download names, and no program opened
-  from Atmos. A site's icon is decoded in a sandboxed page of its own and
+  says yes; a new tab or window only just after a click in the page, one
+  each, and a pop-up with an opener (a sign-in window) in a small window of
+  its own, never fullscreen; camera, microphone, location, notifications and
+  reading the clipboard only for sites the user allowed (a frame asks as
+  the page it's in), everything else refused; no way past a certificate
+  error, and no client certificate sent; safe download names, one download
+  on its own per page and one per click, and only documents and media
+  opened from Atmos. A site's icon is decoded in a sandboxed page of its own and
   drawn again by Core, so nothing a site sends is decoded in the
   extension's frames; a page in fullscreen is named over it ("Press Esc to
   exit"). Ads and trackers are blocked in the main process

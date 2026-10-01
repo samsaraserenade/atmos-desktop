@@ -360,9 +360,9 @@ api?.onEvent((guestId, type, payload) => {
   }
   const tab = _byGuest.get(guestId);
   if (!tab) {
-    // Not a tab: a pop-up window's download or link belongs to whoever listens.
+    // Not a tab: a pop-up window's download, link or blocked pop-up belongs to whoever listens.
     const owner = listeningOwner();
-    if (owner && ['download', 'open-tab', 'external-request'].includes(type)) emit(owner, { type, tabId: null, ...payload });
+    if (owner && ['download', 'download-blocked', 'open-tab', 'popup-blocked', 'external-request'].includes(type)) emit(owner, { type, tabId: null, ...payload });
     return;
   }
   const { owner, tabId } = tab;

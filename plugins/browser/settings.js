@@ -64,7 +64,7 @@ const render = soon(() => {
   const current = engine.searchEngine();
 
   const siteRow = item => {
-    const remove = h('button', { class: 'atmos-button', text: item.name === 'ads' ? 'Block again' : 'Remove' });
+    const remove = h('button', { class: 'atmos-button', text: item.name === 'ads' || item.name === 'popups' ? 'Block again' : 'Remove' });
     remove.addEventListener('click', async () => {
       sites = await engine.setSitePermission(item.origin, item.name, null).catch(() => sites);
       render();
@@ -95,10 +95,15 @@ const render = soon(() => {
     : !blocker || blocker.state === 'loading' || blocker.state === 'off' ? 'Getting the filter lists ready…'
       : blocker.state === 'error' && !blocker.updatedAt ? `The filter lists couldn’t be fetched (${blocker.error}). Atmos tries again every hour.`
         : `Lists updated ${ago(blocker.updatedAt)}, ${(blocker.rules || 0).toLocaleString()} rules. ${(blocker.total || 0).toLocaleString()} blocked so far.${blocker.error ? ` Last check: ${blocker.error}` : ''}`;
+  // uBlock Origin's own lists keep the page scripts that need their trust
+  // only as GitHub serves them (Core's rule): say when a copy came from elsewhere.
+  const fallback = blocking && Array.isArray(blocker?.untrusted) && blocker.untrusted.length
+    ? `${blocker.untrusted.join(', ')} came from a backup copy (not GitHub), so the page scripts that need uBlock Origin’s trust are off for now. Atmos asks GitHub again every hour.`
+    : '';
 
   const siteRows = permissionSites.length
     ? permissionSites.map(siteRow)
-    : [h('div', { class: 'br-settings-note', text: 'Sites ask before using your camera, microphone, location, notifications or clipboard. What you answer shows here, to take back.' })];
+    : [h('div', { class: 'br-settings-note', text: 'Sites ask before using your camera, microphone, location, notifications or clipboard. What you answer shows here, to take back, with the sites whose pop-ups you always allow.' })];
 
   const clearHistory = h('button', { class: 'atmos-button', text: 'Clear history' });
   const clearCookies = h('button', { class: 'atmos-button', text: 'Clear cookies and site data' });
@@ -127,9 +132,10 @@ const render = soon(() => {
       row('Block ads and trackers', 'On every site, unless you turn it off for one with the shield in the address bar',
         toggle(blocking, value => engine.setOptions({ blockAds: value }), 'Block ads and trackers')),
       h('div', { class: 'br-settings-note', text: listState }),
+      fallback ? h('div', { class: 'br-settings-note', text: fallback }) : null,
       h('div', { class: 'br-clear-row' }, update),
       ...(adSites.length ? adSites.map(siteRow) : [h('div', { class: 'br-settings-note', text: 'Sites where you turn blocking off show here.' })]),
-      h('div', { class: 'br-settings-note', text: 'Filter lists: uBlock Origin’s own (ads, privacy, badware risks, unbreak, quick fixes), EasyList and EasyPrivacy, checked for updates every few days. Blocking engine: Ghostery’s. The scripts it runs in pages to get past the harder ads come with Atmos, never from the lists.' })),
+      h('div', { class: 'br-settings-note', text: 'Filter lists: uBlock Origin’s own (ads, privacy, badware risks, unbreak, quick fixes), EasyList and EasyPrivacy, checked for updates every few days. Blocking engine: Ghostery’s. The scripts it runs in pages to get past the harder ads come with Atmos, never from the lists; the ones that can change what a site sends and shows run only for uBlock Origin’s own lists, as uBlock Origin’s GitHub serves them.' })),
     h('section', { class: 'atmos-section' },
       h('div', { class: 'atmos-heading', text: 'Tabs' }),
       row('Put away tabs left for', 'A put-away tab keeps its place and reloads when you go back to it', select([

@@ -23,7 +23,8 @@
  *              (web-adblock-parser.cjs: a parse takes a couple of seconds);
  *              the engine they make is kept in userData/browser/adblock/
  *              and loads in milliseconds. Lists that aren't uBlock Origin's
- *              own can't use the scriptlets that need trust.
+ *              own can't use the scriptlets that need trust, nor can a copy
+ *              of uBlock Origin's own that didn't come from GitHub (MIRRORS).
  *
  * Whether it applies to a page (the options' blockAds, a site's shield) is
  * web-host.cjs's to decide; this is the engine and its lists.
@@ -56,13 +57,35 @@ const LISTS = Object.freeze([
   { id: 'easyprivacy', title: 'EasyPrivacy', path: 'thirdparties/easyprivacy.txt', trusted: false },
 ].map(list => Object.freeze(list)));
 
-// uBlock Origin's CDN for those lists, tried in this order.
+// uBlock Origin's CDN for those lists, tried in this order. Its own lists
+// may use the scriptlets that need trust (which can edit what a site sends
+// and shows) only as GitHub serves them: GitHub Pages, then raw GitHub,
+// both uBlock Origin's repository itself, over TLS, no redirect followed
+// (web-host.cjs). jsDelivr and Cloudflare Pages are other companies'
+// copies of it: what they serve is used, but as an ordinary list, until
+// GitHub answers again. Lists are unsigned, so trust can only come from
+// where a list came from, and that is narrowed to one company.
 const MIRRORS = Object.freeze([
-  'https://ublockorigin.github.io/uAssetsCDN/',
-  'https://cdn.jsdelivr.net/gh/uBlockOrigin/uAssetsCDN@main/',
-  'https://ublockorigin.pages.dev/',
-  'https://raw.githubusercontent.com/uBlockOrigin/uAssetsCDN/main/',
-]);
+  { url: 'https://ublockorigin.github.io/uAssetsCDN/', trusted: true },
+  { url: 'https://raw.githubusercontent.com/uBlockOrigin/uAssetsCDN/main/', trusted: true },
+  { url: 'https://cdn.jsdelivr.net/gh/uBlockOrigin/uAssetsCDN@main/', trusted: false },
+  { url: 'https://ublockorigin.pages.dev/', trusted: false },
+].map(mirror => Object.freeze(mirror)));
+
+/** Whether a list's copy came from a mirror that keeps a list's trust. */
+const fromTrustedMirror = saved => MIRRORS.some(mirror => mirror.trusted && mirror.url === saved?.source);
+
+/**
+ * Whether a list's copy may use what its list may (trust): only uBlock
+ * Origin's own, as GitHub served it. A copy an Atmos before this rule kept
+ * (its record says nothing of a source) keeps the trust it had until it's
+ * fetched again, which is at once (update). A copy with no record at all
+ * is trusted with nothing: a record is written only once its file is.
+ */
+function copyTrusted(list, saved) {
+  if (!list.trusted || !saved) return false;
+  return saved.source === null || fromTrustedMirror(saved);
+}
 
 // "!#if" conditions the lists are written for: Chromium, and uBlock Origin's
 // syntax; styles go in as user style sheets.
@@ -119,6 +142,8 @@ function cleanMeta(value) {
       changedAt: Number.isFinite(saved.changedAt) ? saved.changedAt : 0,
       expires: Number.isFinite(saved.expires) ? saved.expires : 4 * DAY,
       bytes: Number.isFinite(saved.bytes) ? saved.bytes : 0,
+      // The mirror this copy came from (null: not recorded, an older Atmos's copy).
+      source: typeof saved.source === 'string' ? saved.source.slice(0, 300) : null,
     };
   }
   const engine = value?.engine && typeof value.engine === 'object' ? value.engine : {};
@@ -131,6 +156,8 @@ function cleanMeta(value) {
       resources: typeof engine.resources === 'string' ? engine.resources : '',
       parser: typeof engine.parser === 'string' ? engine.parser : '',
       lists: Array.isArray(engine.lists) ? engine.lists.filter(id => typeof id === 'string') : [],
+      // The lists built with their trust (null: not recorded, an older Atmos's engine).
+      trusted: Array.isArray(engine.trusted) ? engine.trusted.filter(id => typeof id === 'string') : null,
       rules: {
         network: Number.isFinite(engine.rules?.network) ? engine.rules.network : 0,
         cosmetic: Number.isFinite(engine.rules?.cosmetic) ? engine.rules.cosmetic : 0,
@@ -218,32 +245,62 @@ function createAdblock({
     }
   }
 
-  /** Fetch one list (conditionally, when there's a copy): { text, changed } or null when unreachable. */
+  /** Whether a list may use what its list may (trust), as its copy came: copyTrusted, or as declared for test lists. */
+  const trustedNow = list => (localLists ? list.trusted : copyTrusted(list, meta.lists[list.id]));
+
+  /**
+   * Fetch one list: { text, changed, record } (the record to keep for it once
+   * its text is on disk), or an error when no mirror served it. A copy of
+   * one of uBlock Origin's own lists that has its trust is replaced only
+   * from a mirror that keeps it: a copy a few days old beats one without its
+   * scriptlets, and someone who can block GitHub can't make Atmos take a
+   * copy from elsewhere. Only until the copy is twice its expiry old: then
+   * a backup mirror's is taken (without the trust), so a network that never
+   * reaches GitHub still gets fresh lists. A conditional request goes only
+   * to the mirror the kept copy came from (another's ETag or date means
+   * nothing to it).
+   */
   async function download(list, kept) {
-    const saved = meta.lists[list.id] || {};
+    const saved = meta.lists[list.id];
+    const stale = !saved?.fetchedAt || now() - saved.fetchedAt >= 2 * (saved.expires || 4 * DAY);
+    const mirrors = kept && copyTrusted(list, saved) && !stale ? MIRRORS.filter(mirror => mirror.trusted) : MIRRORS;
     let problem = null;
-    for (const mirror of MIRRORS) {
+    for (const mirror of mirrors) {
+      const conditional = !!kept && saved?.source === mirror.url;
       try {
-        const answer = await fetchText(`${mirror}${list.path}`, kept ? { etag: saved.etag, lastModified: saved.lastModified } : {});
-        if (answer?.status === 304 && kept) {
-          meta.lists[list.id] = { ...saved, fetchedAt: now() };
-          return { text: kept, changed: false };
-        }
+        const answer = await fetchText(`${mirror.url}${list.path}`, conditional ? { etag: saved.etag, lastModified: saved.lastModified } : {});
+        if (answer?.status === 304 && conditional) return { text: kept, changed: false, record: { ...saved, fetchedAt: now() } };
         if (answer?.status !== 200 || !looksLikeList(answer.text) || answer.text.length > MAX_LIST_BYTES) {
           problem = `${list.title}: ${answer?.status === 200 ? 'not a filter list' : `HTTP ${answer?.status}`}`;
           continue;
         }
         const changed = answer.text !== kept;
-        meta.lists[list.id] = {
-          etag: answer.etag || null, lastModified: answer.lastModified || null, fetchedAt: now(),
-          changedAt: changed ? now() : (saved.changedAt || now()), expires: expiresMs(answer.text), bytes: answer.text.length,
+        return {
+          text: answer.text, changed,
+          record: {
+            etag: answer.etag || null, lastModified: answer.lastModified || null, fetchedAt: now(),
+            changedAt: changed ? now() : (saved?.changedAt || now()), expires: expiresMs(answer.text), bytes: answer.text.length,
+            source: mirror.url,
+          },
         };
-        return { text: answer.text, changed };
       } catch (error) {
         problem = `${list.title}: ${error.message}`;
       }
     }
     throw new Error(problem || `${list.title} couldn't be downloaded`);
+  }
+
+  /**
+   * Whether the engine was built with other trust than the lists' copies
+   * have now (a copy from another mirror, or from GitHub again): built
+   * again. An older Atmos's engine didn't record it: it trusted uBlock
+   * Origin's own lists as declared.
+   */
+  function trustChanged() {
+    const built = meta.engine.lists;
+    const before = meta.engine.trusted ?? LISTS.filter(list => list.trusted && built.includes(list.id)).map(list => list.id);
+    const after = LISTS.filter(list => built.includes(list.id) && trustedNow(list)).map(list => list.id);
+    return before.length !== after.length || before.some(id => !after.includes(id));
   }
 
   /**
@@ -260,7 +317,11 @@ function createAdblock({
       let changed = false;
       for (const list of LISTS) {
         const saved = meta.lists[list.id];
-        const due = !localLists && (force || !saved || now() - saved.fetchedAt >= saved.expires);
+        // Due past its expiry; and one of uBlock Origin's own whose copy
+        // lacks its trust (from another mirror, or not recorded), hourly,
+        // until GitHub serves it.
+        const due = !localLists && (force || !saved || now() - saved.fetchedAt >= saved.expires
+          || (list.trusted && !fromTrustedMirror(saved) && now() - saved.fetchedAt >= HOUR));
         if (!due) continue;
         const kept = await readList(list.id);
         try {
@@ -270,14 +331,22 @@ function createAdblock({
             changed = true;
             await writeAtomic(listFile(list.id), got.text);
           }
+          // A list's record, which says where its copy came from (and so
+          // what it may use), is kept only once the copy is: never a record
+          // for a file that isn't there yet, nor a file without its record.
+          meta.lists[list.id] = got.record;
+          saveMeta();
         } catch (error) {
           problems.push(error.message);
           if (kept) texts.set(list.id, kept);
         }
       }
-      // Built again when a list changed, or when there's no engine for this
-      // library, resources and parser (the lists kept on disk will do).
-      const stale = !engine || !current();
+      // Built again when a list changed (now, or since the engine was built:
+      // Atmos stopped before building it), or when there's no engine for
+      // this library, resources and parser, or a list's trust changed (the
+      // lists kept on disk will do).
+      const newer = LISTS.some(list => (meta.lists[list.id]?.changedAt || 0) > (meta.engine.builtAt || 0));
+      const stale = !engine || !current() || trustChanged() || newer;
       if (changed || stale) {
         for (const list of LISTS) {
           if (texts.has(list.id)) continue;
@@ -286,15 +355,17 @@ function createAdblock({
         }
       }
       if (texts.size && (changed || stale)) {
-        const lists = LISTS.filter(list => texts.has(list.id)).map(list => ({ id: list.id, trusted: list.trusted, text: texts.get(list.id) }));
+        const lists = LISTS.filter(list => texts.has(list.id)).map(list => ({ id: list.id, trusted: trustedNow(list), text: texts.get(list.id) }));
         const built = await buildEngine({ lists, resources: resources() });
         const buffer = built.buffer instanceof Uint8Array ? built.buffer : new Uint8Array(built.buffer);
         install(FiltersEngine.deserialize(buffer));
+        // The engine's record, like a list's, only once its file is written.
+        if (!localLists) await writeAtomic(engineFile, buffer);
         meta.engine = {
           builtAt: now(), library: LIBRARY, resources: resourcesHash, parser: parserHash, lists: lists.map(list => list.id),
+          trusted: lists.filter(list => list.trusted).map(list => list.id),
           rules: { network: built.rules?.network || 0, cosmetic: built.rules?.cosmetic || 0 },
         };
-        if (!localLists) await writeAtomic(engineFile, buffer);
       }
       saveMeta();
       if (!engine) throw new Error(problems[0] || 'no filter lists');
@@ -513,6 +584,8 @@ function createAdblock({
   }
 
   function status() {
+    const hostOf = url => { try { return new URL(url).host; } catch { return null; } };
+    const inEngine = id => meta.engine.lists.includes(id);
     return {
       state: phase,
       error: lastError,
@@ -523,7 +596,12 @@ function createAdblock({
         id: list.id, title: list.title,
         changedAt: meta.lists[list.id]?.changedAt || null,
         checkedAt: meta.lists[list.id]?.fetchedAt || null,
+        // Where its copy came from, and whether it may use the scriptlets that need trust.
+        source: localLists ? 'local' : hostOf(meta.lists[list.id]?.source),
+        trusted: trustedNow(list),
       })),
+      // uBlock Origin's own lists in use without their trust (a copy from another mirror than GitHub).
+      untrusted: LISTS.filter(list => list.trusted && inEngine(list.id) && !(meta.engine.trusted ?? [list.id]).includes(list.id)).map(list => list.title),
     };
   }
 
