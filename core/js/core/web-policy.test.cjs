@@ -114,6 +114,47 @@ test('a site setting is kept per http(s) origin', () => {
   assert.equal(policy.siteOf('nonsense'), null);
 });
 
+test('a request\'s page and document: its initiator when the browser hasn\'t caught up with a navigation', () => {
+  const context = policy.requestContext;
+  const A = 'https://alpha.example', B = 'https://beta.example', G = 'https://gamma.example';
+  const top = url => ({ url, topUrl: url, parentUrl: '', isTop: true });
+  const inFrame = (url, topUrl) => ({ url, topUrl, parentUrl: topUrl, isTop: false });
+  const ad = 'https://ads.example/ad.js';
+  // A page's document: page and source are the page.
+  assert.deepEqual(context({ type: 'mainFrame', url: `${A}/news` }), { pageUrl: `${A}/news`, sourceUrl: `${A}/news` });
+  assert.deepEqual(context({ type: 'script', url: ad, frame: top(`${A}/news`), contentsUrl: `${A}/news`, initiator: A }),
+    { pageUrl: `${A}/news`, sourceUrl: `${A}/news` });
+  // The page's first requests, with its frame still at the page before
+  // (another site, its shield and context) or at nothing yet (a new tab).
+  assert.deepEqual(context({ type: 'script', url: ad, frame: top(`${B}/solid`), contentsUrl: `${B}/solid`, referrer: `${A}/`, initiator: A }),
+    { pageUrl: `${A}/`, sourceUrl: `${A}/` });
+  for (const blank of ['', 'about:blank']) {
+    assert.deepEqual(context({ type: 'image', url: ad, frame: top(blank), contentsUrl: blank, initiator: A }), { pageUrl: `${A}/`, sourceUrl: `${A}/` });
+  }
+  // A document a page opened and wrote (about:blank, blob:) is the opener's.
+  assert.equal(context({ type: 'script', url: ad, frame: top('about:blank'), initiator: A }).pageUrl, `${A}/`);
+  assert.equal(context({ type: 'script', url: ad, frame: top(`blob:${A}/0b5e`), initiator: A }).pageUrl, `${A}/`);
+  // Without an initiator (or an opaque one), what the browser knows.
+  assert.deepEqual(context({ type: 'script', url: ad, frame: top(`${A}/news`), initiator: 'null' }), { pageUrl: `${A}/news`, sourceUrl: `${A}/news` });
+  assert.deepEqual(context({ type: 'script', url: ad, frame: top('about:blank'), contentsUrl: 'about:blank' }), { pageUrl: '', sourceUrl: '' });
+  assert.equal(context({ type: 'script', url: ad, frame: top(''), referrer: `${A}/news` }).pageUrl, `${A}/news`);
+  // A frame's document: the page is the top frame's, the frame asks (even
+  // before the browser knows the frame's address).
+  assert.deepEqual(context({ type: 'script', url: ad, frame: inFrame(`${G}/widget`, `${A}/news`), contentsUrl: `${A}/news`, initiator: G }),
+    { pageUrl: `${A}/news`, sourceUrl: `${G}/` });
+  assert.deepEqual(context({ type: 'script', url: ad, frame: inFrame('', `${A}/news`), contentsUrl: `${A}/news`, initiator: G }),
+    { pageUrl: `${A}/news`, sourceUrl: `${G}/` });
+  assert.deepEqual(context({ type: 'script', url: ad, frame: inFrame('about:srcdoc', `${A}/news`), initiator: 'null' }),
+    { pageUrl: `${A}/news`, sourceUrl: `${A}/news` });
+  // A frame loading: in the context of the document around it.
+  assert.deepEqual(context({ type: 'subFrame', url: `${G}/widget`, frame: { url: '', topUrl: `${A}/news`, parentUrl: `${B}/inner`, isTop: false }, initiator: B }),
+    { pageUrl: `${A}/news`, sourceUrl: `${B}/inner` });
+  // A service worker's requests (no frame, no tab): its site.
+  assert.deepEqual(context({ type: 'xhr', url: ad, initiator: A, referrer: '' }), { pageUrl: `${A}/`, sourceUrl: `${A}/` });
+  assert.deepEqual(context({ type: 'xhr', url: ad, referrer: `${A}/sw.js` }), { pageUrl: `${A}/sw.js`, sourceUrl: `${A}/sw.js` });
+  assert.deepEqual(context({ type: 'other', url: ad }), { pageUrl: '', sourceUrl: '' });
+});
+
 test('permissions: denied unless the user allowed the site; fullscreen and clipboard writes need no prompt', () => {
   const none = () => undefined;
   const allowAll = () => 'allow';

@@ -567,6 +567,21 @@ setTimeout(() => {
     check('a private tab is blocked the same', !privateAds.ad && privateAds.start === 'true', privateAds);
     await engine(e => e.closeTab(e.selectedId()));
     await wait(300);
+    // A page's first requests can reach Core before the browser knows the
+    // page has come (its frame still at the page before): from a site whose
+    // shield is down, they mustn't go through on that site's shield.
+    await go(`${B}/solid?title=Beta&color=059669`);
+    await engine((e, id) => e.setShield(id, false), (await selected()).id);
+    await until(async () => { const t = await selected(); return t.shield === 'off' && !t.loading; }, { timeout: 8000 });
+    const leaks = [];
+    for (let round = 0; round < 6; round++) {
+      await go(`${A}/ads?round=${round}`);
+      if (await inPage(`${A}/ads`, 'window.__adLoaded === true')) leaks.push(round);
+      await go(`${B}/solid?title=Beta&color=059669&round=${round}`);
+    }
+    check('a page\'s first requests are its own: none go through on the shield of the site before it', leaks.length === 0, leaks);
+    await engine((e, id) => e.setShield(id, true), (await selected()).id);
+    await until(async () => { const t = await selected(); return t.shield === 'on' && !t.loading; }, { timeout: 8000 });
 
     // ── Atmos over a page ─────────────────────────────────────────────────
     step('atmos over a page');

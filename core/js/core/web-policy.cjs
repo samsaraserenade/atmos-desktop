@@ -181,6 +181,43 @@ function siteOf(url) {
   return parsed.origin;
 }
 
+/**
+ * The page a request is for (its site's shield) and the document making it
+ * (the ad blocker's $third-party and $domain): { pageUrl, sourceUrl }, each
+ * '' when unknown. From the request: its `type` (Electron's resourceType),
+ * `url`, `initiator` (initiatorOrigin: the origin of the document that made
+ * it), `referrer`; and from the browser: its `frame` ({ url, topUrl,
+ * parentUrl, isTop }, null without one: a service worker's requests) and
+ * the tab's `contentsUrl`.
+ *
+ * The browser takes in a navigation's commit after the new page may already
+ * be making requests: a page's first requests can find its frame still at
+ * the page before (another site, whose shield and context would apply) or
+ * at nothing yet (a new tab). The initiator is never behind, so for a
+ * request from the top of the page, it is the page when the two disagree.
+ */
+function requestContext({ type, url, frame = null, contentsUrl = '', referrer = '', initiator = '' }) {
+  if (type === 'mainFrame') return { pageUrl: url, sourceUrl: url };
+  const web = value => (siteOf(value) ? value : '');
+  const origin = siteOf(initiator);
+  const asking = origin ? `${origin}/` : '';
+  // A frame loading: in the context of the page around it.
+  if (type === 'subFrame') {
+    const pageUrl = web(frame?.topUrl) || web(contentsUrl) || asking || web(referrer);
+    return { pageUrl, sourceUrl: web(frame?.parentUrl) || pageUrl };
+  }
+  // The page's own document (or a worker of the site's, with no frame).
+  if (!frame || frame.isTop) {
+    const known = frame ? frame.url : contentsUrl;
+    if (asking && siteOf(known) !== origin) return { pageUrl: asking, sourceUrl: asking };
+    const pageUrl = web(known) || web(contentsUrl) || web(referrer);
+    return { pageUrl, sourceUrl: pageUrl };
+  }
+  // A frame's document: the page is the top frame's; the frame asks.
+  const pageUrl = web(frame.topUrl) || web(contentsUrl);
+  return { pageUrl, sourceUrl: asking || web(frame.url) || pageUrl };
+}
+
 // ── Permissions ──────────────────────────────────────────────────────────────
 
 /** What a site may ask the user for; everything else is refused. */
@@ -423,7 +460,7 @@ function webviewAttachment({ fromAtmosPage, params }) {
 module.exports = {
   PARTITION, PRIVATE_PARTITION, PARTITIONS, WEB_PREFERENCES, PROMPTED, ZOOM_FACTORS,
   ICON_PARTITION, ICON_SIZE, ICON_MAX_BYTES, imageDataUrlBytes, iconBitmap,
-  chromeUserAgent, uaBrands, CLIENT_HINTS_FILTER, withClientHints, navigationPolicy, isLoadable, siteOf,
+  chromeUserAgent, uaBrands, CLIENT_HINTS_FILTER, withClientHints, navigationPolicy, isLoadable, siteOf, requestContext,
   permissionNames, permissionDecision, permissionCheck,
   downloadName, uniqueName, openableDownload,
   shortcutFor, nextZoom, webviewAttachment,

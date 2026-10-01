@@ -363,18 +363,30 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     tokenBudget.delete(id);
   }
 
-  /** The page a request is for, and the document asking (for $third-party and $domain). */
+  /**
+   * The page a request is for, and the document asking (for $third-party
+   * and $domain): web-policy's requestContext, from the request and what
+   * the browser knows of its frame (which lags a navigation: see there).
+   */
   function requestContext(details) {
     const type = details.resourceType || 'other';
-    let frame = null;
-    try { frame = details.frame || null; } catch { frame = null; }
-    const contents = details.webContents || null;
-    // A service worker's requests have neither frame nor contents: its site is its referrer's.
-    const pageUrl = type === 'mainFrame' ? details.url : (frame?.top?.url || contents?.getURL?.() || details.referrer || '');
-    const sourceUrl = type === 'mainFrame' ? details.url
-      : type === 'subFrame' ? (frame?.parent?.url || pageUrl)
-        : (/^https?:/i.test(frame?.url || '') ? frame.url : pageUrl);
-    return { type, pageUrl, sourceUrl: sourceUrl || details.referrer || '' };
+    // A frame gone mid-request throws when read.
+    const read = get => { try { return get() ?? ''; } catch { return ''; } };
+    const frame = read(() => details.frame) || null;
+    const context = policy.requestContext({
+      type,
+      url: details.url,
+      frame: frame && {
+        url: read(() => frame.url),
+        topUrl: read(() => frame.top?.url),
+        parentUrl: type === 'subFrame' ? read(() => frame.parent?.url) : '',
+        isTop: !read(() => frame.parent),
+      },
+      contentsUrl: read(() => details.webContents?.getURL()),
+      referrer: details.referrer || '',
+      initiator: details.initiatorOrigin || '',
+    });
+    return { type, ...context };
   }
 
   /** onBeforeRequest: blocked, redirected to a stand-in, or without its tracking parameters. */
