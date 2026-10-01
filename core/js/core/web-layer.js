@@ -30,6 +30,7 @@ const api = window.atmosCore?.web ?? null;
 const PARTITION = 'persist:atmos-browser';
 const PRIVATE_PARTITION = 'atmos-browser-private';
 const ATTACH_TIMEOUT_MS = 15000;
+const CLOSE_TIMEOUT_MS = 5000;  // the page's own closing has 3 s (web-host.cjs); then the element goes regardless
 
 const _tabs = new Map();    // "owner tabId" -> tab
 const _byGuest = new Map(); // guest webContents id -> tab
@@ -118,7 +119,18 @@ function close(owner, tabId) {
   if (!tab) return false;
   _tabs.delete(tabKey(owner, tabId));
   if (tab.guestId !== null) _byGuest.delete(tab.guestId);
-  tab.element.remove();
+  // Gone from view at once; the page closes as Chrome closes a tab, its
+  // beforeunload, pagehide and unload first (web-host.cjs closePage: sites
+  // save what they keep there), and only then is the element removed.
+  // Removing it straight away would destroy the page without them.
+  tab.element.style.visibility = 'hidden';
+  const remove = () => tab.element.remove();
+  if (tab.guestId !== null && api) {
+    const fallback = setTimeout(remove, CLOSE_TIMEOUT_MS);
+    api.command(tab.guestId, 'close').catch(() => {}).finally(() => { clearTimeout(fallback); remove(); });
+  } else {
+    remove();
+  }
   const state = ownerState(owner);
   if (state.shown === tabId) state.shown = null;
   if (state.fullscreen === tabId) state.fullscreen = null;

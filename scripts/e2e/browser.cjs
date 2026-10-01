@@ -846,6 +846,26 @@ setTimeout(() => {
     const afterFullscreen = pixel(640, 500);
     check('after fullscreen the page is drawn as it was', near(afterFullscreen, hex('1d4ed8')), afterFullscreen);
 
+    // ── Closing pages ─────────────────────────────────────────────────────
+    // A tab closes as Chrome closes one: its page's last events run first,
+    // where sites save what they keep (Discord writes its sign-in back then).
+    step('closing pages');
+    const pageAlive = tag => app.evaluate(({ webContents }, t) => webContents.getAllWebContents().some(w => !w.isDestroyed() && w.getURL().includes(`tag=${t}`)), tag);
+    const savedAs = tag => inPage(A, `Object.keys(localStorage).filter(key => key.startsWith('${tag}:')).map(key => key.slice(${tag.length + 1})).sort()`);
+    const closing = await engine((e, url) => e.newTab({ url }), `${A}/unload?tag=close`);
+    await settled('Unload');
+    await engine((e, id) => e.closeTab(id), closing.id);
+    const closedGone = await until(async () => !(await pageAlive('close')), { timeout: 6000 });
+    const closedSaved = await savedAs('close');
+    check('closing a tab lets its page save first (its beforeunload, pagehide and unload run, as in Chrome)',
+      closedGone && ['beforeunload', 'pagehide', 'unload'].every(name => closedSaved.includes(name)), { closedGone, closedSaved });
+    // (A page that objects to being left can't be closed here: Playwright,
+    // attached to every page, takes its dialog and fails. Checked in a bare
+    // Electron: closed, its events run; see CHANGELOG, 1 October.)
+    // A page open as Atmos quits saves the same way (read after the restart).
+    await engine((e, url) => e.newTab({ url }), `${A}/unload?tag=quit`);
+    await settled('Unload');
+
     // A tab to find selected after the restart, bookmarked.
     const kept = await engine((e, url) => e.newTab({ url }), `${A}/solid?title=Kept&color=1d4ed8`);
     await settled('Kept');
@@ -887,6 +907,8 @@ setTimeout(() => {
     grab('19-restored');
     await go(`${A}/ads`);
     check('the blocker is back after a restart', (await inPage(`${A}/ads`, 'window.__adLoaded === true')) === false);
+    const quitSaved = await inPage(`${A}/ads`, 'Object.keys(localStorage).filter(key => key.startsWith("quit:")).map(key => key.slice(5)).sort()');
+    check('a page open as Atmos quit saved first, and it was kept', quitSaved.includes('pagehide'), quitSaved);
     await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsMenu());
     await wait(500);
     await page.evaluate(() => [...document.querySelectorAll('#settings-menu button, #settings-menu [role="tab"], #settings-menu .sm-nav-item')].find(el => /Appearance/.test(el.textContent))?.click());

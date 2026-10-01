@@ -37,6 +37,7 @@ const TOKEN_MESSAGES = 400;                      // per page load
 const LISTS_PARTITION = 'atmos-browser-lists';
 const MAX_LIST_BYTES = 16 * 1024 * 1024;
 const STORAGE_FLUSH_MS = 30_000;                 // pages' storage and cookies to disk
+const CLOSE_PAGE_MS = 3000;                      // a page's last events, before it's closed regardless
 const PERMISSION_WAIT_MS = 10 * 60 * 1000;
 const EXTERNAL_WAIT_MS = 2 * 60 * 1000;
 const ICON_DECODE_MS = 5000;
@@ -70,7 +71,7 @@ const DECODE_ICON = `(async (b64, type, size) => {
 })`;
 const EDIT_ACTIONS = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'delete', 'selectAll']);
 
-function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, isAppUrl, userData, isWebExtension = () => false, testOptions = {} }) {
+function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, dialog, isAppUrl, userData, isWebExtension = () => false, testOptions = {} }) {
   const settings = createWebSettings({ dir: path.join(userData, 'browser') });
   const openExternal = shell.openExternal.bind(shell); // the system's, before Core routes it (routeShell)
   const ownerFile = path.join(userData, 'browser', 'owner.json');
@@ -86,6 +87,9 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
   const faviconCache = new Map();    // "private|url" -> data URL
   const blockedByTab = new Map();    // webContents id -> { count, hosts: Map(host -> n), timer }
   const tokenBudget = new Map();     // webContents id -> page-token messages left for this page
+  const closing = new Set();         // webContents ids Atmos is closing (closePage)
+  let quitting = false;              // Atmos is quitting: its windows close next
+  app.on('before-quit', () => { quitting = true; });
   let adblock = null;                // web-adblock.cjs, made with the sessions
 
   // The browser's two sessions, made and set up the first time a page
@@ -545,6 +549,21 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
       if (verdict.action !== 'allow') details.preventDefault();
     });
     contents.on('will-attach-webview', event => event.preventDefault());
+    // A page that objects to being left (unsaved changes, after the user
+    // used it). Closing it (a tab, or Atmos) goes ahead once its last
+    // events have run (closePage). Leaving it for another address, Back or
+    // a reload asks first, as Chrome does: Electron's default cancels
+    // without a word, so a link or the address bar did nothing.
+    contents.on('will-prevent-unload', event => {
+      if (closing.has(contents.id)) { event.preventDefault(); return; }
+      const owner = (contents.getType() === 'window' && BrowserWindow.fromWebContents(contents)) || atmosWindow;
+      const question = {
+        type: 'question', buttons: ['Leave', 'Cancel'], defaultId: 0, cancelId: 1, noLink: true,
+        title: 'Leave site?', message: 'Leave site?', detail: 'Changes you made may not be saved.',
+      };
+      const answer = owner && !owner.isDestroyed() ? dialog.showMessageBoxSync(owner, question) : dialog.showMessageBoxSync(question);
+      if (answer === 0) event.preventDefault();
+    });
     // Web Bluetooth, and a device picker Electron would otherwise answer with the first device.
     contents.on('select-bluetooth-device', (event, _devices, callback) => { event.preventDefault(); callback(''); });
     let fullscreen = false;
@@ -636,10 +655,40 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
   function forgetGuest(guestId) {
     const gone = live.get(guestId);
     live.delete(guestId);
+    closing.delete(guestId);
     dropRequestsOf(guestId);
     resetBlocked(guestId);
     if (gone?.private && ![...live.values()].some(other => other.private)) void endPrivateSession();
   }
+
+  /**
+   * Close a page as Chrome closes a tab: its beforeunload, pagehide and
+   * unload run first, then it goes. Sites save what they keep there
+   * (Discord writes its sign-in back as its page closes); removing a
+   * <webview>, or the window around it, skips them. A page that objects
+   * (unsaved changes) is closed all the same: the user asked. Resolves
+   * when it's gone, or after CLOSE_PAGE_MS (a page that hangs), closed
+   * regardless.
+   */
+  function closePage(contents) {
+    if (!contents || contents.isDestroyed()) return Promise.resolve();
+    const id = contents.id;
+    closing.add(id);
+    return new Promise(resolve => {
+      let timer = null;
+      const done = () => { clearTimeout(timer); resolve(); };
+      timer = setTimeout(() => {
+        try { if (!contents.isDestroyed()) contents.close(); } catch { /* gone */ }
+        done();
+      }, CLOSE_PAGE_MS);
+      contents.once('destroyed', done);
+      try { contents.close({ waitForBeforeUnload: true }); } catch { done(); }
+    });
+  }
+  const openTabs = () => [...live.entries()].filter(([, entry]) => entry.tab)
+    .map(([id]) => webContents.fromId(id)).filter(contents => contents && !contents.isDestroyed());
+  /** Every tab's page, closed that way: before the Atmos window, or its page, goes. */
+  const closePages = () => Promise.all(openTabs().map(closePage));
 
   /** The last private tab closed: everything it kept goes. */
   async function endPrivateSession() {
@@ -858,6 +907,8 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     },
     // After the page attached it: settle its zoom, and tell the layer where it stands.
     attached(contents) { applyZoom(contents); return { ...state(contents), private: isPrivateSession(contents.session) }; },
+    // The tab closing (or put away): its page's last events first (closePage).
+    close: contents => closePage(contents),
     // Out of a page's HTML fullscreen (Escape, wherever the keyboard is).
     exitFullscreen(contents) {
       void contents.executeJavaScript('document.fullscreenElement ? document.exitFullscreen().then(() => true, () => false) : false', true).catch(() => false);
@@ -995,7 +1046,23 @@ function createWebHost({ app, session, BrowserWindow, WebContentsView, nativeIma
     openExternal,
     routeShell,
     forgetExtensionData,
-    setWindow(win) { atmosWindow = win; },
+    closePages,
+    setWindow(win) {
+      atmosWindow = win;
+      // Before the window goes (closed, or Atmos quitting), its tabs' pages
+      // close as Chrome closes them: destroying the window would destroy
+      // its <webview>s without their last events. Once per window.
+      let pagesClosed = false;
+      win.on('close', event => {
+        if (pagesClosed || !openTabs().length) return;
+        event.preventDefault();
+        pagesClosed = true;
+        void closePages().finally(() => {
+          if (quitting) app.quit();
+          else if (!win.isDestroyed()) win.close();
+        });
+      });
+    },
     settings,
   };
 }

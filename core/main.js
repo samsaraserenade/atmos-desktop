@@ -357,9 +357,10 @@ function createWindow() {
         : win.webContents.openDevTools({ mode: 'detach' });
     }
     // Ctrl+R reloads Atmos, except in Atmos Browser's panel, where it reloads the tab.
+    // The browser's pages close first, as Chrome closes a tab (web-host.cjs closePages).
     if (input.key === 'r' && input.control && input.type === 'keyDown' && !_isWebExtensionFrame(win.webContents.focusedFrame)) {
       event.preventDefault();
-      win.webContents.reload();
+      void _web.closePages().finally(() => { if (!win.isDestroyed()) win.webContents.reload(); });
     }
   });
 
@@ -1601,7 +1602,7 @@ function _isWebExtensionFrame(frame) {
 }
 
 const _web = createWebHost({
-  app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess,
+  app, session, BrowserWindow, WebContentsView, nativeImage, webContents, shell, ipcMain, utilityProcess, dialog,
   isAppUrl: _isAppUrl,
   userData: app.getPath('userData'),
   isWebExtension: _isWebExtension,

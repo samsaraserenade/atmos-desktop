@@ -201,6 +201,22 @@ function handler(requests, info) {
           })();</script>
           <script>window.__rewritten = 'no'; window.__tt = { rewritten: window.__rewritten, pct: window.__pct ?? null };</script>`));
         return;
+      // A page that saves as it closes, as Discord saves its sign-in: each of
+      // its last events noted in its storage under ?tag=, and with ?object=1
+      // it objects to being left (as a page with unsaved changes does).
+      case '/unload': {
+        const tag = (url.searchParams.get('tag') || 'page').replace(/[^a-z0-9-]/gi, '');
+        const objects = url.searchParams.get('object') === '1';
+        html(doc('Unload', `<p>Saves as it closes.</p>
+          <script>(() => {
+            const note = name => { try { localStorage.setItem('${tag}:' + name, String(Date.now())); } catch (error) { /* full */ } };
+            addEventListener('beforeunload', event => { note('beforeunload'); if (${objects}) { event.preventDefault(); event.returnValue = 'unsaved'; } });
+            addEventListener('pagehide', () => note('pagehide'));
+            addEventListener('unload', () => note('unload'));
+            note('loaded');
+          })();</script>`));
+        return;
+      }
       case '/ad.js':
         res.writeHead(200, { 'Content-Type': 'text/javascript' });
         res.end('window.__adLoaded = true;');
