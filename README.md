@@ -7,66 +7,85 @@
 </p>
 
 <p align="center">
-  <img alt="Atmos: the settings window over a blurred workspace" src="docs/images/atmos.jpg" width="100%">
+  <img alt="Atmos Browser on its new-tab page, with tabs, bookmarks, the music playing and a portfolio balance in the sidebar beside it" src="docs/images/atmos-browser.webp" width="100%">
 </p>
 
 # Atmos
 
-**A modular desktop workspace where your tools live together.**
+**A browser built around you.**
 
-Atmos is a personal desktop environment for Windows, built around extensions.
-Instead of opening dozens of separate applications, Atmos provides a unified
-workspace where your tools, services and workflows can exist together.
-
-Built with Electron, Atmos combines the flexibility of web technologies with
-the feeling of a native desktop environment.
+Atmos is a browser and a workspace for Windows: browse, listen, chat and
+follow your markets side by side, in one window you can extend. Its browser
+blocks ads and trackers from the start and keeps every site in a sandbox of
+its own. Its extensions don't reach into your pages. They build the place
+around them instead: panels beside your pages, widgets in the sidebar, and
+services other extensions can use, all written in plain web technologies.
 
 ## Why Atmos?
 
-Modern computing is fragmented.
+Most of what we do happens in a browser, yet a browser is a box of tabs,
+and its extensions mostly reach into the pages inside it.
 
 Your music is in one app. Your messages are somewhere else. Your portfolio
-is in a third. Your tools and services rarely understand one another.
+is in a third. None of them sits beside the page you're reading.
 
-Atmos explores a different approach:
+Atmos turns that around:
 
-**What if your applications were parts of one environment instead of isolated
-windows?**
+**The browser is the centre, and everything else you use lives beside it,
+as extensions anyone can build.**
 
-Atmos provides the foundation:
-
-- A shared workspace
-- A consistent design system
-- Extensions instead of standalone apps
+- A browser that's private by default
+- A workspace around it: panels side by side, a sidebar of widgets, one look
+- Extensions instead of standalone apps, on an SDK anyone can use
 - Services that extensions can build upon
-- A secure model for third-party additions
+- A secure model for pages and extensions you didn't write
 
 ---
 
-## Features
+## Atmos Browser
 
-### Extensions
+Built in: Atmos opens on it.
 
-Atmos is built around extensions. They can add panels, sidebar widgets,
-background tasks, shared services and custom workflows.
+- **Ads and trackers blocked,** like Brave's shields: uBlock Origin's
+  lists, EasyList and EasyPrivacy, on from the start. A shield in the
+  address bar counts what was blocked and turns blocking off for a site
+  that needs it.
+- **Tabs, bookmarks and history**, in the panel and in Tabs and Bookmarks
+  widgets in the sidebar. An address bar that searches or goes to an
+  address, with your search engine of choice.
+- **Beside everything else.** Tile a page next to another panel or float
+  it in a window, and links from Atmos and its extensions open in a new
+  tab.
+- **Private tabs** that keep nothing once the last one closes.
+- **Downloads, find in page, zoom per site, print**, and the shortcuts you
+  know from other browsers.
+- **Light on memory:** tabs you haven't used for a while are put away and
+  load again when you go back to them; restored tabs load only when opened.
+- **Careful by default:** sites ask before using the camera, microphone,
+  location or notifications, and the answer is remembered per site; pop-ups
+  and repeated downloads need a click; no way past a certificate warning,
+  and no certificate from your computer sent to a site; only documents and
+  media are opened from the downloads list. It has no saved passwords or
+  Safe Browsing yet.
 
-Every extension, official or not, runs in sandboxed frames and uses the
-same permission-based SDK. Official extensions can also run code in
-Atmos's main process, limited to what they declare.
+## Extend it
 
-### A desktop built for extensions
+This is what sets Atmos apart from other browsers: its extensions don't
+reach into your pages, they add to the workspace around them.
 
-Unlike traditional applications where every feature ships as one large
-codebase, Atmos separates the environment from the experiences inside it:
-
-```text
-core/       Desktop runtime, panels, layouts, appearance, permissions and SDK
-plugins/    User-facing extensions
-services/   Shared capabilities
-scripts/    Development, testing and release tooling
-```
-
-Core provides the environment. Extensions provide the experiences.
+- **Panels** beside your pages: full screen, side by side, in a grid of
+  four, or floating in windows you move, resize and layer.
+- **Sidebar widgets** that show beside any panel, the browser included.
+- **Background work** that lasts the whole session: a player, a socket, a
+  poller.
+- **Services and libraries** for other extensions to build on: charts,
+  currency, market data, media tags.
+- **One SDK for everyone.** Official or not, every extension runs in
+  sandboxed frames and reaches Atmos only through the same
+  permission-based SDK, in plain HTML, CSS and JavaScript. `npm run
+  new:extension` starts one from a template, with tests and typings; the
+  SDK is MIT, so yours can use any licence (see
+  [Build an extension](#build-an-extension)).
 
 ### The workspace
 
@@ -98,12 +117,17 @@ Atmos Core owns the shell, and extensions fill it.
 
 ## Security model
 
-Extensions should be powerful without requiring unlimited access. Atmos is
-designed so that you can safely install things you did not write.
+A browser shows you pages you didn't write, and Atmos runs extensions you
+didn't write. Neither gets more than it needs.
 
-- **Sandboxed.** Extensions run in sandboxed frames and reach Atmos only
-  through the Atmos SDK. A community extension can't see Atmos, other
-  extensions or your files, and can't run code outside its frames.
+- **Web pages kept apart.** Atmos Browser's pages are sandboxed, in a
+  browsing session of their own, where Atmos, its extensions and your
+  files are out of reach, and Atmos itself, not the browser's interface,
+  decides what a page may load and do. Camera, microphone, location,
+  notifications and reading the clipboard stay off unless you allow a site.
+- **Sandboxed extensions.** Extensions run in sandboxed frames and reach
+  Atmos only through the Atmos SDK. A community extension can't see Atmos,
+  other extensions or your files, and can't run code outside its frames.
   Official extensions can also run main-process code, but only get the
   APIs they declare.
 - **Storage of its own.** Each extension's data (its settings and whatever
@@ -128,19 +152,43 @@ designed so that you can safely install things you did not write.
   Content-Security-Policy refuses injected scripts, it is sandboxed, and
   developer tools are off in installed copies (unless started with
   `--devtools`).
-- **Web pages kept apart.** The web shows inside Atmos only in Atmos
-  Browser, an official extension. Its pages are sandboxed, in a browsing
-  session of their own, where Atmos, its extensions and your files are out
-  of reach, and Atmos itself, not the extension, decides what a page may
-  load and do. Camera, microphone, location, notifications and reading the
-  clipboard stay off unless you allow a site.
 
 ---
 
 ## Official extensions
 
-Atmos offers these on its first start. Each is downloaded and installed on
-its own, and can be removed or updated on Settings → Extensions.
+Atmos Browser is built in. These are offered on Atmos's first start; each
+is downloaded and installed on its own, and can be removed or updated on
+Settings → Extensions.
+
+### Finance
+
+Your portfolio and live markets inside the workspace, read from a portfolio
+server you run yourself.
+
+- **One balance across wallets and exchanges:** Solana (with Jupiter staking
+  and locks), Hyperliquid (Spot, Perps and Earn), Arbitrum, BSC, Aptos,
+  Cardano, Injective, Binance Spot, and Monero entered by hand.
+- **Portfolio chart** with full history, scope filters to leave out a source,
+  a holding or a group such as Perps, and a cash/invested breakdown.
+- **Balance, Performance, Spot, Futures, Allocation and Connections widgets**
+  in the sidebar, and a private mode that hides your balances.
+- **Markets chart and watchlist** with live trades and candles from Binance,
+  Bybit, Kraken and Coinbase. If an exchange is blocked where you are, the
+  chart carries on with the others.
+- **Your own server.** The portfolio server
+  ([`plugins/finance/backend`](plugins/finance/backend)) collects every
+  minute on a small VPS or a home server, with systemd or Docker, reachable
+  over Tailscale or HTTPS. It uses only Python's standard library. Setting
+  one up takes about 20 minutes:
+  [SELF_HOSTING.md](plugins/finance/backend/SELF_HOSTING.md). Paid hosting
+  is coming.
+- **Pair with a code.** The server prints a pairing code; paste it into
+  Portfolio Connections. The token is sealed in Windows' secure storage and
+  never reaches the interface.
+- **Read-only by design.** Finance never moves funds or places orders.
+  Balances are estimates from third-party prices, nothing shown is financial
+  advice, and the server should only ever get read-only API keys.
 
 ### Audio Player
 
@@ -179,58 +227,6 @@ A secure chat experience built directly into the workspace using
   `rev/create-room`, `rev/create-space`, `rev/invite`, `rev/leave` and
   `rev/notifications`.
 
-### Atmos Browser
-
-A web browser in a panel, in Atmos's own look.
-
-- **Tabs, bookmarks and history**, in the panel and in Tabs and Bookmarks
-  sidebar widgets. An address bar that searches or goes to an address,
-  with your search engine of choice.
-- **Private tabs** that keep nothing once the last one closes.
-- **Downloads, find in page, zoom per site, print**, and the shortcuts you
-  know from other browsers.
-- **Light on memory:** tabs you haven't used for a while are put away and
-  load again when you go back to them; restored tabs load only when opened.
-- **Ads and trackers blocked,** like Brave's shields: uBlock Origin's
-  lists, EasyList and EasyPrivacy, on from the start. A shield in the
-  address bar counts what was blocked and turns blocking off for a site
-  that needs it.
-- **Careful by default:** sites ask before using the camera, microphone,
-  location or notifications, and the answer is remembered per site; pop-ups
-  and repeated downloads need a click; no way past a certificate warning,
-  and no certificate from your computer sent to a site; only documents and
-  media are opened from the downloads list. It has no saved passwords or
-  Safe Browsing yet.
-
-### Finance
-
-Your portfolio and live markets inside the workspace, read from a portfolio
-server you run yourself.
-
-- **One balance across wallets and exchanges:** Solana (with Jupiter staking
-  and locks), Hyperliquid (Spot, Perps and Earn), Arbitrum, BSC, Aptos,
-  Cardano, Injective, Binance Spot, and Monero entered by hand.
-- **Portfolio chart** with full history, scope filters to leave out a source,
-  a holding or a group such as Perps, and a cash/invested breakdown.
-- **Balance, Performance, Spot, Futures, Allocation and Connections widgets**
-  in the sidebar, and a private mode that hides your balances.
-- **Markets chart and watchlist** with live trades and candles from Binance,
-  Bybit, Kraken and Coinbase. If an exchange is blocked where you are, the
-  chart carries on with the others.
-- **Your own server.** The portfolio server
-  ([`plugins/finance/backend`](plugins/finance/backend)) collects every
-  minute on a small VPS or a home server, with systemd or Docker, reachable
-  over Tailscale or HTTPS. It uses only Python's standard library. Setting
-  one up takes about 20 minutes:
-  [SELF_HOSTING.md](plugins/finance/backend/SELF_HOSTING.md). Paid hosting
-  is coming.
-- **Pair with a code.** The server prints a pairing code; paste it into
-  Portfolio Connections. The token is sealed in Windows' secure storage and
-  never reaches the interface.
-- **Read-only by design.** Finance never moves funds or places orders.
-  Balances are estimates from third-party prices, nothing shown is financial
-  advice, and the server should only ever get read-only API keys.
-
 ---
 
 ## Architecture
@@ -241,12 +237,14 @@ Atmos is built around three layers.
 
 The runtime that powers Atmos. It manages windows, panels, layouts,
 appearance, the sidebar, notifications, permissions and the extension
-lifecycle.
+lifecycle, and it hosts Atmos Browser's pages and decides what they may do.
 
 ### Plugins
 
 User experiences built on top of Atmos. Plugins can provide interfaces,
-widgets, background processes and custom functionality.
+widgets, background processes and custom functionality. Atmos Browser is a
+plugin too, the one Atmos comes with: Core holds its pages and their rules,
+and the plugin is its interface and memory.
 
 ### Services
 
@@ -264,8 +262,9 @@ that use it; some also have main-process code.
 ## Installation
 
 Download `Atmos Setup <version>.exe` from the
-[Releases](../../releases) page and run it. Atmos keeps your settings in
-`%APPDATA%\atmos`; uninstalling leaves them.
+[Releases](../../releases) page and run it. It comes with Atmos Browser;
+the other extensions are offered on the first start. Atmos keeps your
+settings in `%APPDATA%\atmos`; uninstalling leaves them.
 
 When a newer Atmos is out, Atmos says so on the Extensions button at the
 bottom of the sidebar and in Settings → Extensions, with a link to this
@@ -295,15 +294,17 @@ npm run build
 ```
 
 An installer carries Core, which includes the system services (Audio,
-Location, Wallpaper), and nothing else. Every other extension is downloaded
-from the official source, the latest release of
+Location, Wallpaper), and Atmos Browser, the one extension built in
+(`core/built-in-extensions.json`): it can be switched off, not removed,
+and a newer signed package still updates it. Every other extension is
+downloaded from the official source, the latest release of
 [atmos-desktop](https://github.com/samsaraserenade/atmos-desktop)
 (`core/extension-sources.json`): Atmos offers them on its first start
 ("Choose your extensions"; offline it says so and offers to try again) and
 installs them like any other, so each can be removed or updated on
 Settings → Extensions. An Atmos that bundled them before downloads what it
 had in the background after the upgrade and asks for a restart. A personal
-build (`npm run build:personal`) also carries its extensions as signed
+build (`npm run build:personal`) also carries its other extensions as signed
 packages ("Comes with Atmos"), so its first run and upgrades work offline;
 building it signs them, so it needs the package key: set `ATMOS_SIGNING_KEY`
 to the key file (the passphrase is asked for, or `ATMOS_SIGNING_PASSPHRASE`).
@@ -341,8 +342,9 @@ soon as it's approved. The guide is
 ```text
 Atmos/
 ├── core/        # The runtime: window, panels, sidebar, settings, the extension host and SDK,
-│                #   and the system services (core/system: audio, location, wallpaper)
-├── plugins/     # User-facing extensions (audio-player, browser, finance, matrix-chat)
+│                #   web pages for Atmos Browser, and the system services (core/system:
+│                #   audio, location, wallpaper)
+├── plugins/     # User-facing extensions (browser, built in; audio-player, finance, matrix-chat)
 ├── services/    # Capabilities extensions call into (charting, currency, fullscreen-viewer,
 │                #   market-data, media-metadata)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
@@ -376,13 +378,13 @@ Atmos/
 
 Atmos is actively evolving. The current focus is:
 
-- Strengthening the extension architecture
-- Expanding the SDK
-- Improving security boundaries
-- Building more first-party extensions
+- Making Atmos Browser one you can live in: updates that keep up with
+  Chromium's security fixes, phishing and malware warnings, saved
+  passwords, and bringing your bookmarks over from other browsers
+- Letting extensions work with the pages you browse, safely
+- Expanding the SDK, and the foundation for a wider extension ecosystem
 - Hosted portfolio servers for Finance, and a way for anyone to add a
   Finance connector in one file
-- Preparing the foundation for a wider extension ecosystem
 
 ---
 
@@ -392,8 +394,8 @@ Atmos is not trying to replace every application.
 
 It is exploring a different question:
 
-**What happens when applications stop being isolated tools and become parts of
-a shared environment?**
+**What happens when your browser stops being a box of tabs and becomes the
+centre of a workspace you can extend?**
 
 ---
 

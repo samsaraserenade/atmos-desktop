@@ -11,6 +11,7 @@ import { createFittedContent as _createFittedContent, mountSplitters } from './p
 import { mountFreeformWindows } from './panel-windows.js';
 import { bindPanelHistory, liveHistory as _liveHistory, pushHistory as _pushHistory } from './panel-history.js';
 import { getPanelAppearance, onAppearanceChange } from './appearance.js';
+import { nextDefault } from './panel-default.js';
 
 export { PANEL_LAYOUTS };
 
@@ -19,11 +20,11 @@ const $ = id => document.getElementById(id);
 /** id -> panel descriptor. Every panel mounts into one content surface. */
 const _plugins = new Map();
 
-let _defaultId  = null; // first plugin registered — see ensureDefaultPanelPlugin()
+let _defaultId  = null; // the panel Atmos opens on: see panel-default.js and ensureDefaultPanelPlugin()
+let _default = null;    // { id, rank }
 let _activeId   = null;
 let _activeLifecycle = null;
 let _activeMountContentEl = null;
-let _explicitDefaultId = null;
 const _sectionMounts = new Map();
 
 function _applyPanelAppearance(element, pluginId) {
@@ -106,16 +107,11 @@ export function registerPanelPlugin(id, config) {
   for (const legacyId of config.legacyIds || []) {
     if (panelState.activePlugin === legacyId) panelState.activePlugin = id;
   }
-  if (normalized.default) {
-    if (_explicitDefaultId && _explicitDefaultId !== id) {
-      _plugins.delete(id);
-      throw new Error(`panel-registry: default panel already declared by '${_explicitDefaultId}'`);
-    }
-    _explicitDefaultId = id;
-    _defaultId = id;
-  } else if (_defaultId === null) {
-    _defaultId = id;
-  }
+  // Atmos Browser (built in) over a manifest's "default": true over the first registered.
+  const next = nextDefault(_default, { id, builtIn: config.builtIn === true, declared: normalized.default === true });
+  if (next.ignored) console.warn(`[panel-registry] '${next.ignored}' asks to be the default panel, but '${next.id}' already is`);
+  _default = { id: next.id, rank: next.rank };
+  _defaultId = next.id;
 }
 
 /**

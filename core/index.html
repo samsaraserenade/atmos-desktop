@@ -618,6 +618,7 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-as-grid .sm-extension-card > .sm-card-main { height:auto; flex-wrap:wrap; align-items:flex-start; padding:12px 12px 6px; gap:10px; }
 .sm-as-grid .sm-extension-card > .sm-card-main .sm-card-text { flex:1 1 0; }
 .sm-as-grid .sm-extension-card .sm-card-detail { white-space:normal; }
+.sm-as-grid .sm-extension-card .sm-card-name { white-space:normal; line-height:1.35; } /* the badge goes under a long name, not off the card */
 .sm-as-grid .sm-extension-card .sm-extension-trust { padding:0 12px 10px; }
 .sm-as-grid .sm-extension-card .sm-permissions { margin-left:0 !important; }
 .sm-as-grid .sm-card-group:has(.sm-extension-card) { align-items:start; }
@@ -633,6 +634,7 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-as-grid .sm-trust-note.sm-manager-optional, .sm-as-grid .sm-trust-note.sm-manager-confirm, .sm-as-grid .sm-manager-row .sm-trust-error { margin:0 10px 10px; }
 .sm-picker-list { display:grid !important; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:8px !important; }
 .sm-picker-item { border:1px solid rgba(var(--ink-rgb),.08); border-radius:10px; align-items:flex-start !important; }
+.sm-picker-item:last-child { border-bottom:1px solid rgba(var(--ink-rgb),.08); } /* .sm-card:last-child takes it off, for lists */
 .sm-picker-item input { margin-top:3px; }
 .sm-trust-note.sm-manager-optional { margin: -4px 8px 10px 50px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sm-manager-optional > span { flex: 1; min-width: 0; }

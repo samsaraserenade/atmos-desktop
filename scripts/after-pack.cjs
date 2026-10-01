@@ -8,6 +8,11 @@
  * This makes changes to an installed copy of Atmos visible; it does not
  * stop someone who can also rewrite integrity.json. That needs a signed
  * installer and app, which is planned separately.
+ *
+ * Which extensions a build bundles: the built-in ones
+ * (core/built-in-extensions.json: Atmos Browser) always; every other
+ * released one is dropped from a release installer (downloaded instead) or
+ * packed as a signed package in a personal build.
  */
 const fs = require('fs');
 const path = require('path');
@@ -40,6 +45,21 @@ function readRelease() {
 }
 
 /**
+ * The extensions Atmos itself ships with (core/built-in-extensions.json):
+ * Atmos Browser. An installer carries them as they are, verified by
+ * integrity.json like Core's own files, rather than as packages to choose
+ * and download; they can be switched off, not removed, and a newer signed
+ * package still updates them. Returns { plugins: Set, services: Set }.
+ */
+function readBuiltIn(file = path.join(__dirname, '..', 'core', 'built-in-extensions.json')) {
+  const list = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return {
+    plugins: new Set(Array.isArray(list.plugins) ? list.plugins : []),
+    services: new Set(Array.isArray(list.services) ? list.services : []),
+  };
+}
+
+/**
  * Every bundled extension leaves the built-in folders (the system services
  * are part of Core, in core/system, not extensions a build bundles): each
  * is signed with the package key and packed into
@@ -49,7 +69,7 @@ function readRelease() {
  * ATMOS_SIGNING_KEY (file) and its passphrase (asked, or
  * ATMOS_SIGNING_PASSPHRASE). Resolves [{ kind, id, version }].
  */
-async function packOptionalExtensions(extensionsRoot, { privateKey = null, trustedKeys = null } = {}) {
+async function packOptionalExtensions(extensionsRoot, { privateKey = null, trustedKeys = null, builtIn = readBuiltIn() } = {}) {
   const { loadSigningKey, repo } = require('./signing-key.cjs');
   const { createHasher, listFiles } = require('../core/js/core/extension-integrity.cjs');
   const { signExtension, verifyExtension, loadTrustedKeys } = require('../core/js/core/extension-signing.cjs');
@@ -63,6 +83,8 @@ async function packOptionalExtensions(extensionsRoot, { privateKey = null, trust
       if (!fs.existsSync(file)) continue;
       const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (manifest.tier === 'system') throw new Error(`after-pack: ${kind}/${id} says "tier": "system", but system services live in core/system`);
+      // Built in (Atmos Browser): stays where it is, part of the build.
+      if (builtIn[kind]?.has(id)) continue;
       chosen.push({ kind, id, manifest });
     }
   }
@@ -92,14 +114,24 @@ async function packOptionalExtensions(extensionsRoot, { privateKey = null, trust
   return packed;
 }
 
-/** Remove every bundled extension from a build (a release installer downloads them). Returns their ids. */
-function dropOptionalExtensions(extensionsRoot) {
+/**
+ * Remove every bundled extension from a build but the built-in ones (a
+ * release installer downloads the rest). Returns the ids removed. A built-in
+ * extension missing from the build stops it: release.json must release it.
+ */
+function dropOptionalExtensions(extensionsRoot, builtIn = readBuiltIn()) {
   const dropped = [];
   for (const kind of ['plugins', 'services']) {
     const dir = path.join(extensionsRoot, kind);
     for (const id of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+      if (builtIn[kind]?.has(id)) continue;
       fs.rmSync(path.join(dir, id), { recursive: true, force: true });
       dropped.push(id);
+    }
+    for (const id of builtIn[kind] || []) {
+      if (!fs.existsSync(path.join(dir, id, 'extension.json'))) {
+        throw new Error(`after-pack: ${kind}/${id} is built in (core/built-in-extensions.json) but not in the build; release.json must release it`);
+      }
     }
   }
   return dropped;
@@ -119,17 +151,20 @@ module.exports = async function afterPack(context) {
     const removed = pruneUnreleased(extensionsRoot);
     if (removed.length) console.log(`  • not released (release.json), left out: ${removed.join(', ')}`);
   }
+  const builtIn = readBuiltIn();
   if (process.env.ATMOS_BUILD_ALL === '1') {
-    // A personal build carries its extensions (released or not) as signed
-    // packages, for the first-run picker and upgrades, offline.
-    const packed = await packOptionalExtensions(extensionsRoot);
+    // A personal build carries its other extensions (released or not) as
+    // signed packages, for the first-run picker and upgrades, offline.
+    const packed = await packOptionalExtensions(extensionsRoot, { builtIn });
     console.log(`  • packages (first-run picker, offline): ${packed.map(item => `${item.id} ${item.version}`).join(', ') || 'none'}`);
   } else {
-    // A release installer carries none: Atmos downloads them from the
-    // official source (core/extension-sources.json, the GitHub release).
-    const dropped = dropOptionalExtensions(extensionsRoot);
+    // A release installer carries the built-in ones only: Atmos downloads
+    // the rest from the official source (core/extension-sources.json, the
+    // GitHub release).
+    const dropped = dropOptionalExtensions(extensionsRoot, builtIn);
     console.log(`  • extensions downloaded, not bundled: ${dropped.join(', ') || 'none'}`);
   }
+  console.log(`  • built in: ${[...builtIn.plugins, ...builtIn.services].join(', ') || 'none'}`);
   const list = writeIntegrityList(extensionsRoot);
   const files = Object.values(list.extensions).reduce((sum, entries) => sum + Object.keys(entries).length, 0);
   console.log(`  • integrity.json: ${Object.keys(list.extensions).length} extensions, ${files} files`);
@@ -138,6 +173,7 @@ module.exports = async function afterPack(context) {
 module.exports.pruneUnreleased = pruneUnreleased;
 module.exports.packOptionalExtensions = packOptionalExtensions;
 module.exports.dropOptionalExtensions = dropOptionalExtensions;
+module.exports.readBuiltIn = readBuiltIn;
 
 // `node scripts/after-pack.cjs <resources/extensions>` rewrites the list by hand.
 if (require.main === module) {

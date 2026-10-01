@@ -400,7 +400,7 @@ export function openSidebar() {
   window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
-function closeSidebar() {
+export function closeSidebar() {
   document.getElementById('settings-drawer')?.classList.remove('open');
   document.body.classList.remove('drawer-open');
   sidebarState.open = false;

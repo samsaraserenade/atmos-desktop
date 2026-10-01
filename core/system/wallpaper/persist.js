@@ -7,7 +7,8 @@ export const wallpaperState = registerStateNamespace('wallpaper', {
   defaults: {
     mode: 'wallpaper',
     opacity: 100,
-    parallaxStrength: 50,
+    // Off until chosen (Atmos 0.18): the wallpaper stays still.
+    parallaxStrength: 0,
     glassBlur: 0,
     glassSaturation: 60,
     vignette: 25,

@@ -51,11 +51,11 @@ function world(t) {
   }
 
   /** One "start of Atmos": apply pending changes, then catalog + trust + manager. */
-  function start({ seed = false, appVersion = null } = {}) {
+  function start({ seed = false, appVersion = null, builtIn = undefined } = {}) {
     let entries = [];
     const installedRoot = kind => root('installed', kind);
     const manager = createExtensionManager({
-      userData, installedRoot, trustedKeys, installed: () => entries, warn() {}, appVersion,
+      userData, installedRoot, trustedKeys, installed: () => entries, warn() {}, appVersion, ...(builtIn ? { builtIn } : {}),
       ...(seed ? { seedSources: [{ location: source }] } : { extraSources: [source] }),
     });
     const applied = manager.applyPending();
@@ -369,6 +369,36 @@ test('the packages that come with Atmos: first-run choice, upgrade install, neve
   n = newer.start({ seed: true });
   assert.deepEqual(await n.manager.installFromSeed(), []);
   assert.equal(newer.start({ seed: true }).find('plugin', 'sounds').version, '0.9.1');
+});
+
+test('what Atmos ships with (Atmos Browser) is never offered in the picker, nor installed over by the setup', async t => {
+  const builtIn = (kind, id) => kind === 'plugin' && id === 'browser';
+  const w = world(t);
+  w.bundle('plugin', 'browser', '1.0.3');
+  w.publish('plugin', 'browser', '1.0.3');
+  w.publish('plugin', 'finance', '1.0.0');
+  let s = w.start({ seed: true, builtIn });
+  assert.deepEqual((await s.manager.seedPackages()).map(p => p.id), ['finance'], 'the picker lists what else there is');
+  // The upgrade install (everything) and a list naming it anyway: nothing goes over the copy Atmos brought.
+  assert.deepEqual((await s.manager.installFromSeed()).map(change => change.id), ['finance']);
+  assert.deepEqual(await s.manager.installFromSeed([{ kind: 'plugin', id: 'browser' }]), []);
+  s = w.start({ seed: true, builtIn });
+  assert.equal(s.find('plugin', 'browser').source, 'bundled');
+  assert.equal(s.find('plugin', 'finance').source, 'installed');
+  assert.throws(() => s.manager.remove('plugin', 'browser'), /comes with Atmos; switch it off instead/);
+  // A newer version still comes as an update, into the installed folder, and wins.
+  w.publish('plugin', 'browser', '1.0.4');
+  s = w.start({ builtIn });
+  const status = await s.manager.checkForUpdates();
+  assert.equal(status.packages.find(item => item.id === 'browser').action, 'update');
+  await s.manager.install('plugin', 'browser');
+  s = w.start({ builtIn });
+  assert.equal(s.find('plugin', 'browser').version, '1.0.4');
+  assert.equal(s.find('plugin', 'browser').source, 'installed');
+  // An Atmos without the bundled copy (a build from before 0.18) is offered it like any other.
+  const older = world(t);
+  older.publish('plugin', 'browser', '1.0.3');
+  assert.deepEqual((await older.start({ seed: true, builtIn }).manager.seedPackages()).map(p => p.id), ['browser']);
 });
 
 test('first run from a web source: offline it says so and stays pending; online it installs', async t => {

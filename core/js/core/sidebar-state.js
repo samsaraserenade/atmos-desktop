@@ -1,5 +1,9 @@
 import { registerCoreStateNamespace } from '../persist.js';
 
+// Open in the sidebar on Atmos's first start: Atmos Browser's tabs (its
+// first sidebar widget, plugins/browser), beside the browser Atmos opens on.
+const FIRST_START_OPEN_SECTIONS = ['fin-section-browser'];
+
 export const sidebarState = registerCoreStateNamespace('sidebar', {
   version: 3,
   defaults: {
@@ -12,13 +16,20 @@ export const sidebarState = registerCoreStateNamespace('sidebar', {
     panelScopes: {},
     sectionHeights: {},
   },
+  // Nothing saved for the sidebar: an Atmos from before it had a namespace
+  // (its fields at the top level), or Atmos's first start (nothing saved at
+  // all). A first start opens the sidebar with the browser's tabs open, since
+  // nothing else shows they're there; after that the sidebar is whatever the
+  // person leaves it as, saved as usual. An Atmos used before keeps its own.
   migrateLegacy(defaults, blob) {
     const legacy = blob?.sidebarWidgets;
+    const firstStart = !blob || Object.keys(blob).length === 0;
     return {
-      open: typeof blob?.sidebarOpen === 'boolean' ? blob.sidebarOpen : defaults.open,
+      open: typeof blob?.sidebarOpen === 'boolean' ? blob.sidebarOpen : firstStart || defaults.open,
       order: Array.isArray(legacy?.order) ? legacy.order : defaults.order,
       enabled: legacy?.enabled && typeof legacy.enabled === 'object' ? legacy.enabled : defaults.enabled,
-      openSections: Array.isArray(legacy?.openSections) ? legacy.openSections : defaults.openSections,
+      openSections: Array.isArray(legacy?.openSections) ? legacy.openSections
+        : firstStart ? [...FIRST_START_OPEN_SECTIONS] : defaults.openSections,
       dockedSections: defaults.dockedSections,
       topDockedSections: defaults.topDockedSections,
       panelScopes: defaults.panelScopes,

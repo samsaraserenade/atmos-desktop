@@ -23,7 +23,8 @@ test('runs in frames: drawer panel, three widgets, a boot frame with Space', () 
   assert.equal(m.runtime, 'frame');
   assert.equal(m.requires['extensions.frames'], 3);
   assert.deepEqual(m.contributes.panel.drawer, { bar: 54, keys: true });
-  assert.equal(m.contributes.panel.default, true);
+  // Not the panel Atmos opens on any more: Atmos Browser, built in, is (Atmos 0.18).
+  assert.equal(m.contributes.panel.default, undefined);
   // Same widget ids as before frames (audio-player, -queue, -library), so
   // saved sidebar layouts still apply.
   assert.deepEqual(m.contributes.sidebar.map(item => item.id ?? null), [null, 'queue', 'library']);

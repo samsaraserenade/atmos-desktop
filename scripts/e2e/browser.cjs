@@ -151,6 +151,23 @@ setTimeout(() => {
   const B = pages.http('beta.test');
   const LOCAL = pages.http('localhost');
   const input = xinput();
+  // A first start opens the sidebar with the browser's tabs open
+  // (sidebar-state.js), checked in a launch of its own: the rest was written
+  // for the panel at the window's width, and with the sidebar open as Atmos
+  // started, a page's HTML fullscreen came out the sidebar's width short,
+  // centred between black bars, for that whole session (under Xvfb; see
+  // HANDOFF). Closed here, it stays closed for the launches below.
+  {
+    const first = await launch();
+    const shown = await until(() => first.page.evaluate(() => document.body.classList.contains('drawer-open')
+      && document.getElementById('fin-section-browser')?.classList.contains('open') === true), { timeout: 15000 });
+    check('a first start opens the sidebar on the browser\'s tabs', !!shown);
+    await first.page.evaluate(async () => {
+      (await import('atmos-core/core/sidebar-shell.js')).closeSidebar();
+      (await import('atmos-core/persist.js')).flushPendingSave();
+    });
+    await first.app.close();
+  }
   let session = await launch();
   let { app, page } = session;
   // How Chromium draws here (a page's look over Atmos depends on it).
@@ -268,9 +285,11 @@ setTimeout(() => {
     step('the panel');
     await wait(1500); // the browser's engine (its boot frame) is running
     check('before its first page, the browser has no session (nothing on disk)', !fs.existsSync(partitionDir));
-    await page.keyboard.press('[');
+    // Built in since 0.18 (core/built-in-extensions.json): Atmos opens on the
+    // browser. Its key is tried from another panel, below.
+    check('Atmos opens on the browser (built in)', await registry(r => r.getActivePanelPluginId()) === 'browser');
     const frame = await panel();
-    check('panel opens with its key', !!frame);
+    check('the browser\'s panel is up', !!frame);
     const first = await selected();
     check('a first start has one new-tab page', first?.kind === 'new', first);
     check('the address bar has the keyboard on a new tab', await (await panel()).evaluate(() => document.activeElement?.classList.contains('br-address-input')));
@@ -380,13 +399,15 @@ setTimeout(() => {
     const layer = await layerBox();
     await x.click(layer.x + field.x + 20, layer.y + field.y + 10);
     await wait(200);
+    // The sidebar is open on a first start (the browser's tabs); Tab in a page mustn't toggle it.
+    const sidebarBefore = await page.evaluate(() => document.body.classList.contains('drawer-open'));
     await x.type('a[b]c`d');
     await x.key('Tab');
     await wait(400);
     const typed = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify({ keys: __keys, value: document.getElementById("field").value })'));
     const stillBrowser = await registry(r => r.getActivePanelPluginId());
     const sidebarOpen = await page.evaluate(() => document.body.classList.contains('drawer-open'));
-    check('keys typed in a page reach the page, Atmos\'s single-key shortcuts never fire', typed.value === 'a[b]c`d' && typed.keys.includes('Tab') && stillBrowser === 'browser' && !sidebarOpen, { typed, stillBrowser, sidebarOpen });
+    check('keys typed in a page reach the page, Atmos\'s single-key shortcuts never fire', typed.value === 'a[b]c`d' && typed.keys.includes('Tab') && stillBrowser === 'browser' && sidebarOpen === sidebarBefore, { typed, stillBrowser, sidebarBefore, sidebarOpen });
     // Zoom, per site.
     await x.key('ctrl+equal');
     await wait(400);
@@ -831,7 +852,11 @@ setTimeout(() => {
     await registry(r => r.activatePanelPlugin('portfolio-tracker'));
     await wait(900);
     check('another panel: the page is hidden', (await layerBox()) === null && !near(pixel(640, 500), hex('1d4ed8')));
-    await registry(r => r.activatePanelPlugin('browser'));
+    // The panel's key brings the browser back (the keyboard on Atmos, not in a page).
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.keyboard.press('[');
+    await wait(400);
+    check('panel opens with its key', await registry(r => r.getActivePanelPluginId()) === 'browser');
     await panel();
     await wait(900);
     const backPixel = pixel(640, 500);

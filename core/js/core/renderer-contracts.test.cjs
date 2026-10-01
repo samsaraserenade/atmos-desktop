@@ -202,6 +202,34 @@ test('sidebar docks, panel scopes, and section heights persist while older state
   assert.deepEqual(sidebarState.panelScopes, { one: ['notes', 'audio-player'], empty: [] });
 });
 
+test("a first start opens the sidebar with the browser's tabs; anything saved keeps its own sidebar", async () => {
+  const start = async saved => {
+    const modules = tempModules(['persist.js', 'core/sidebar-state.js']);
+    global.localStorage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) };
+    global.window = new EventTarget();
+    const persist = await import(pathToFileURL(path.join(modules.dir, 'persist.js')).href);
+    const { sidebarState } = await import(pathToFileURL(path.join(modules.dir, 'core/sidebar-state.js')).href);
+    persist.load();
+    return { persist, sidebarState };
+  };
+  // Nothing saved at all: Atmos's first start.
+  const saved = new Map();
+  const first = await start(saved);
+  assert.equal(first.sidebarState.open, true);
+  assert.deepEqual(first.sidebarState.openSections, ['fin-section-browser']);
+  // Saved as it was left: closed stays closed, the next start isn't a first one.
+  first.sidebarState.open = false;
+  first.sidebarState.openSections = [];
+  first.persist.save();
+  const next = await start(saved);
+  assert.equal(next.sidebarState.open, false);
+  assert.deepEqual(next.sidebarState.openSections, []);
+  // Something saved but no sidebar of its own yet (an Atmos used before): closed, as it was.
+  const used = await start(new Map([['samsara_v4', JSON.stringify({ coreState: { other: { version: 1, data: {} } } })]]));
+  assert.equal(used.sidebarState.open, false);
+  assert.deepEqual(used.sidebarState.openSections, []);
+});
+
 test('Core owns sidebar resize handles and extensions only declare constraints', () => {
   const readSource = relativePath => fs.readFileSync(path.resolve(appDir, relativePath), 'utf8');
   const shell = readSource('core/sidebar-shell.js');

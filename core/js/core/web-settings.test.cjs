@@ -92,13 +92,13 @@ test('zoom per site, with private tabs starting from the ordinary zoom and keepi
   assert.equal(settings.zoom('a.example', { private: true }), 1);
 });
 
-test('options: links off, ask where to save, block ads; only known booleans kept', t => {
+test('options: links on (since 0.18), ask where to save, block ads; a choice is kept; only known booleans kept', t => {
   const dir = folder(t);
   const settings = createWebSettings({ dir });
   assert.deepEqual(settings.options(), { ...DEFAULT_OPTIONS });
-  assert.deepEqual(DEFAULT_OPTIONS, { openLinks: false, askWhereToSave: true, blockAds: true });
-  settings.setOptions({ openLinks: true, askWhereToSave: 'no', blockAds: false, extra: true });
-  assert.deepEqual(createWebSettings({ dir }).options(), { openLinks: true, askWhereToSave: true, blockAds: false });
+  assert.deepEqual(DEFAULT_OPTIONS, { openLinks: true, askWhereToSave: true, blockAds: true });
+  settings.setOptions({ openLinks: false, askWhereToSave: 'no', blockAds: false, extra: true });
+  assert.deepEqual(createWebSettings({ dir }).options(), { openLinks: false, askWhereToSave: true, blockAds: false });
 });
 
 test('a site\'s shield: ads allowed per site, kept; private tabs follow unless they choose', t => {

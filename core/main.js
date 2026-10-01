@@ -637,6 +637,29 @@ function _seedSources() {
 
 const _BUILT_IN_SOURCES_FILE = path.join(__dirname, 'extension-sources.json');
 
+// The extensions Atmos itself ships with (core/built-in-extensions.json):
+// Atmos Browser. An installer carries them (scripts/after-pack.cjs), so they
+// are there from the first start, never offered in the picker, switched off
+// rather than removed, and the built-in panel is the one Atmos opens on. Only
+// an official copy counts: a community extension can't take the id.
+function _loadBuiltIn() {
+  const out = { plugin: new Set(), service: new Set() };
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(__dirname, 'built-in-extensions.json'), 'utf8'));
+    for (const id of Array.isArray(list.plugins) ? list.plugins : []) if (typeof id === 'string') out.plugin.add(id);
+    for (const id of Array.isArray(list.services) ? list.services : []) if (typeof id === 'string') out.service.add(id);
+  } catch (error) {
+    console.warn('[extensions] could not read built-in-extensions.json:', error.message);
+  }
+  return out;
+}
+const _BUILT_IN = _loadBuiltIn();
+
+/** Whether this catalog entry is one of the extensions Atmos ships with (an official copy of it). */
+function _isBuiltIn(entry) {
+  return !!entry && entry.tier === 'first-party' && _BUILT_IN[entry.kind]?.has(entry.id) === true;
+}
+
 /**
  * Where the first-run picker and the upgrade install take packages from:
  * the packages that come with Atmos if there are any, otherwise (installed
@@ -693,6 +716,8 @@ const _manager = createExtensionManager({
   installed: () => [..._catalog.list('plugins'), ..._catalog.list('services')].map(entry => ({
     ...entry, loadable: _trust?.get(entry)?.loadable !== false, active: _isActive(entry),
   })),
+  // Built in (Atmos Browser): never offered in the picker or installed over.
+  builtIn: (kind, id) => _BUILT_IN[kind]?.has(id) === true,
   appVersion: app.getVersion(),
 });
 
@@ -914,9 +939,13 @@ _managerHandler('open-atmos-download', async () => {
 _managerHandler('setup', async () => {
   // upgradeDownloaded: the page may start after the download finished.
   if (_manager.setupDone()) return { needed: false, packages: [], upgradeDownloaded: _upgradeDownloaded };
+  // What comes with Atmos already (Atmos Browser), for the picker to say so.
+  const builtIn = _catalog.list('plugins').filter(entry => _isBuiltIn(entry))
+    .map(entry => ({ id: entry.id, displayName: entry.manifest?.displayName || entry.id }));
   try {
     return {
       needed: true,
+      builtIn,
       packages: (await _manager.seedPackages()).map(item => ({
         kind: item.kind, id: item.id, version: item.version, displayName: item.displayName, description: item.description,
         dependencies: item.named,
@@ -924,7 +953,7 @@ _managerHandler('setup', async () => {
     };
   } catch (error) {
     // Offline, or the source can't be reached: the picker says so and offers to try again.
-    return { needed: true, packages: [], error: error.message };
+    return { needed: true, builtIn, packages: [], error: error.message };
   }
 });
 _managerHandler('finish-setup', async chosen => {
@@ -1147,6 +1176,8 @@ function _describeExtension(entry, files, disabled) {
     manifest: entry.manifest,
     tier: entry.tier,
     source: entry.source,
+    // One of the extensions Atmos ships with: its panel is the default.
+    builtIn: _isBuiltIn(entry),
     developerRestart: _developerRestart.has(refOf(entry)),
     developerIgnored: entry.developerIgnored || null,
     enabled: entry.tier === 'system' || !disabled.has(entry.id),

@@ -963,6 +963,8 @@ function _registerContribution(extension, surface) {
       label: surface.label,
       icon,
       default: surface.default,
+      // Atmos Browser, which Atmos ships with: the panel Atmos opens on.
+      builtIn: extension.builtIn === true,
       // A drawer covers only part of the workspace; clicks and scrolls
       // elsewhere reach the wallpaper underneath. Its glass follows the
       // panel's own blur and opacity (Glass in Settings → Appearance).

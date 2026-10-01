@@ -1,8 +1,10 @@
 // An installed Atmos's first start, with every extension but the system
-// services optional (packed by scripts/after-pack.cjs into "the packages
-// that come with Atmos"; here a signed folder passed as --seed-packages):
+// services and the built-in ones (Atmos Browser, core/built-in-extensions.json)
+// optional (packed by scripts/after-pack.cjs into "the packages that come
+// with Atmos"; here a signed folder passed as --seed-packages):
 //
-//  1. A first start shows the picker with the released plugins. Ticking
+//  1. A first start shows the picker with the released plugins but Atmos
+//     Browser, which is already there and opens first. Ticking
 //     Finance and Audio Player and pressing Install and restart installs
 //     them and the services they need, nothing else.
 //  2. After the restart they run as installed official extensions (the
@@ -14,7 +16,7 @@
 //     Matrix Chat switched off): everything is installed at once, Matrix
 //     Chat stays switched off, and there is no picker.
 //  (1–4 are a personal build, which carries its packages.)
-//  5. A release build, which carries none (--setup-source stands in for the
+//  5. A release build, which carries only Atmos Browser (--setup-source stands in for the
 //     GitHub release): unreachable, the picker offers Try again / Start with
 //     none and nothing is marked done; reachable, it lists and installs.
 //  6. Upgrading to a release build: Atmos starts, downloads in the
@@ -90,6 +92,8 @@ const picker = page => page.evaluate(() => {
   const root = document.querySelector('#settings-menu.open .sm-picker, .sm-picker');
   return root && root.offsetParent !== null ? [...root.querySelectorAll('.sm-picker-item')].map(item => item.innerText.replace(/\s+/g, ' ').trim()) : null;
 });
+// The panel Atmos shows: Atmos Browser, built in, on a first start (0.18).
+const activePanel = page => page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).getActivePanelPluginId());
 const readSetup = cfg => { try { return JSON.parse(fs.readFileSync(path.join(cfg, 'extension-setup.json'), 'utf8')).how; } catch { return null; } };
 
 const r = {};
@@ -104,6 +108,10 @@ const r = {};
   await s.page.waitForSelector('.sm-picker', { timeout: 10000 });
   await s.page.screenshot({ path: path.join(out, '10-picker.png') });
   r['1-picker'] = await picker(s.page);
+  r['1-pickerText'] = await s.page.evaluate(() => ({
+    intro: document.querySelector('.sm-picker p')?.innerText,
+    skip: document.querySelector('[data-picker="skip"]')?.textContent,
+  }));
   r['1-installBeforeTicking'] = await s.page.evaluate(() => document.querySelector('[data-picker="install"]').disabled);
   for (const id of ['finance', 'audio-player']) await s.page.check(`.sm-picker-item input[value="plugin:${id}"]`);
   await Promise.all([s.app.waitForEvent('close', { timeout: 30000 }), s.page.click('[data-picker="install"]')]);
@@ -116,6 +124,7 @@ const r = {};
   s = await launch(fresh.env);
   r['2-list'] = await list(s.page);
   r['2-picker'] = await picker(s.page);
+  r['2-panel'] = await activePanel(s.page);
   await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openExtensionManager());
   await s.page.waitForSelector('.sm-manager-heading', { timeout: 10000 });
   await s.page.click('[data-manager-action="check"]');
@@ -140,6 +149,7 @@ const r = {};
   s = await launch(none.env);
   r['3-list'] = await list(s.page);
   r['3-picker'] = await picker(s.page);
+  r['3-panel'] = await activePanel(s.page);
   r['3-errors'] = s.errors;
   await s.app.close();
 
@@ -156,9 +166,10 @@ const r = {};
   r['4-errors'] = s.errors;
   await s.app.close();
 
-  // 5. A release build: nothing bundled, the extensions come from the source.
+  // 5. A release build: only the built-in extensions bundled (Atmos
+  //    Browser), the rest come from the source.
   step('5');
-  fs.mkdirSync(path.join(released, 'plugins'), { recursive: true });
+  fs.cpSync(path.join(build, 'plugins'), path.join(released, 'plugins'), { recursive: true });
   fs.cpSync(path.join(build, 'services'), path.join(released, 'services'), { recursive: true });
   const source = path.join(build, 'packages');
   const offline = isolatedEnv('atmos-first-run-offline-');

@@ -4,8 +4,10 @@ A web browser in an Atmos panel: tabs, an address bar that searches or goes
 to an address, bookmarks, history, private tabs, downloads, find in page and
 zoom, ads and trackers blocked (like Brave's shields), with a new-tab page
 (bookmarks, most visited, what's been blocked) and its settings in Atmos's
-own look. Official (first-party); the panel's
-key is `[`.
+own look. Official (first-party), and since Atmos 0.18 built in: an
+installer carries it (`core/built-in-extensions.json`), Atmos opens on its
+panel, and it can be switched off but not removed (a newer signed package
+still updates it). The panel's key is `[`.
 
 ## How it works
 
@@ -181,8 +183,9 @@ searches.
 ## Settings
 
 Settings → Appearance → Atmos Browser: the search engine; **Open links in
-Atmos Browser** (off by default: links that Atmos and its extensions would
-send to your default browser open in a new tab here instead); whether to ask
+Atmos Browser** (on by default since Atmos 0.18: links that Atmos and its
+extensions would send to your default browser open in a new tab here
+instead); whether to ask
 where to save each file; **blocking ads and trackers** (on by default), when
 its lists were updated, and the sites where it's off; when tabs are put
 away; site permissions to take back; clearing history, cookies and site

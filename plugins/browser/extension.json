@@ -4,7 +4,7 @@
     "atmos": ">=0.17.0"
   },
   "tier": "first-party",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",

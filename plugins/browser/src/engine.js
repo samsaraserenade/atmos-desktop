@@ -77,7 +77,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
   const downloads = new Map();       // id -> record (Core's, this session)
   const listeners = new Set();
   let settings = cleanSettings(null, engines);
-  let options = { openLinks: false, askWhereToSave: true, blockAds: true };
+  let options = { openLinks: true, askWhereToSave: true, blockAds: true };
   let adblock = null;                // Core's blocker status, as last heard
   let panels = 0;
   let shown = undefined;             // what Core was last told to show

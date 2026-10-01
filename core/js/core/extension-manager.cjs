@@ -94,10 +94,15 @@ function readIndexEntry(item) {
  * @param {() => Array} [options.installed]        catalog entries of both kinds, with trust
  * @param {string} [options.appVersion]  this Atmos's version: a signed index's
  *        "core" entry newer than it is offered as "Atmos X is available"
+ * @param {(kind: 'plugin'|'service', id: string) => boolean} [options.builtIn]
+ *        the extensions Atmos ships with (core/built-in-extensions.json): an
+ *        official copy already there is never offered in the first-run
+ *        picker, nor installed over by the setup's install
  */
 function createExtensionManager({
   userData, installedRoot, trustedKeys, builtInSourceFiles = [], extraSources = [], seedSources = [], setupSources = seedSources,
   fetchUrl = null, installed = () => [], warn = message => console.warn(message), appVersion = null,
+  builtIn = () => false,
 }) {
   const files = {
     seen: path.join(userData, 'extension-index-seen.json'),
@@ -638,7 +643,16 @@ function createExtensionManager({
     }
     if (!packages.length && errors.length) throw new Error(errors[0]);
     const best = bestPackages(packages);
-    return [...best.values()].map(item => ({ ...item, named: namedDependencies(item.dependencies, best, installedByRef()) }));
+    const present = installedByRef();
+    // What Atmos ships with is already here: not one to choose.
+    return [...best.values()].filter(item => !builtInPresent(present, item))
+      .map(item => ({ ...item, named: namedDependencies(item.dependencies, best, present) }));
+  }
+
+  /** An official copy of a built-in extension (Atmos Browser) is already here. */
+  function builtInPresent(present, item) {
+    const have = present.get(ref(item.kind, item.id));
+    return builtIn(item.kind, item.id) && !!have && have.tier !== 'third-party';
   }
 
   /**
@@ -654,6 +668,9 @@ function createExtensionManager({
     try {
       const present = installedByRef();
       for (const item of wanted || packages) {
+        // What Atmos ships with (Atmos Browser) is already here; updates to
+        // it come like any other's.
+        if (builtInPresent(present, item)) continue;
         // Never over an installed official copy that is as new or newer.
         const have = present.get(ref(item.kind, item.id));
         const offered = packages.find(p => p.kind === item.kind && p.id === item.id);

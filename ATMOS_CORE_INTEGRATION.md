@@ -2,6 +2,12 @@
 
 How to build extensions for Atmos, and how Atmos runs them.
 
+Atmos is a web browser with a workspace around it. The browser (Atmos
+Browser) is built in; everything beside it comes from extensions: panels
+that sit next to pages, widgets in the sidebar, background work and shared
+services. Other browsers' extensions reach into the pages; Atmos's add to
+the place you work, around them.
+
 An extension is a folder with an `extension.json` and some JavaScript. Each
 panel, sidebar widget or background task it has runs in a sandboxed frame,
 and talks to Atmos only through the **Atmos SDK** (`import atmos from
@@ -210,7 +216,7 @@ file other than the conventional one). A second sidebar widget needs an
 | Option | On | What it does |
 |---|---|---|
 | `"order": 10` | panel, widget | Where it goes among the others (lower first) |
-| `"default": true` | panel | Makes it the panel Atmos opens by default (one extension at most) |
+| `"default": true` | panel | Asks to be the panel Atmos opens on. Atmos Browser, which Atmos ships with, comes first (from Atmos 0.18); otherwise the first extension to ask gets it, and any other is passed over with a line in the log |
 | `"shortcut": "#"` | panel | One printable key that opens the panel from anywhere in Atmos, except while typing in a field. Atmos listens for it, so it works without a frame open. One panel per key: official extensions' panels first, then the first in start order. Settings → Panels lists every key, and names a panel that asked for one it didn't get |
 | `"shortcutToggles": true` | panel | The same key closes it again, back to the previous panel |
 | `"glass": true` | panel | Atmos draws its frosted glass under the frame where the frame asks (`atmos.surface.trackGlass`, section 4), following the panel's blur and opacity. A frame's own `backdrop-filter` can't blur the wallpaper behind it |
@@ -281,7 +287,8 @@ frame.
 | Source | Where |
 |---|---|
 | Part of Atmos | `core/system/<id>`: the system services (Wallpaper, Audio, Location) only |
-| Bundled | the repository's `plugins/` and `services/` when running from source (`npm start`). An installer bundles none: it offers them as packages on the first start |
+| Built in | Atmos Browser, which an installer carries (`core/built-in-extensions.json`, Atmos 0.18): official, never offered in the first-start picker, switched off rather than removed, and updated by a newer signed package like any other |
+| Bundled | the repository's `plugins/` and `services/` when running from source (`npm start`). An installer bundles only the built-in ones: it offers the rest as packages on the first start |
 | Installed | `%APPDATA%\atmos\{plugins,services}\<id>\` on Windows (`~/Library/Application Support/atmos` on macOS, `~/.config/atmos` on Linux), by Settings → Extensions or by hand |
 | Developer | a folder named with `--dev-extension` or `--dev-service` |
 
@@ -695,8 +702,8 @@ script them. `atmos.state` is kept in a file of its own
   own). Its Content-Security-Policy refuses them.
 - Navigate itself away from its origin, navigate Atmos, open windows or
   dialogs (`alert`, `confirm`, `prompt`: use your own interface), or embed
-  frames. Links and `window.open()` to the web open in the user's browser
-  (or in Atmos Browser, when the user asked for that).
+  frames. Links and `window.open()` to the web open in Atmos Browser (or
+  in the user's default browser, when they turned that off).
 - Listen for keys pressed outside it. A panel's global key is declared
   (`"shortcut"`), not listened for.
 - Use browser permissions it didn't declare (and the user didn't approve).
@@ -765,7 +772,7 @@ it may load and do. The extension names its tabs (1–64 letters, digits,
 | `atmos.web.permissions.respond(requestId, { allow, remember })` / `list()` / `set(origin, name, 'allow' \| 'block' \| null)` | Answer a site's request (the extension draws the prompt; Atmos keeps the answer per site); the remembered answers, to show or take back. Besides the prompted permissions, `ads` (the site's shield down) and `popups` (its pop-ups allowed without a click), each only ever `'allow'` |
 | `atmos.web.external.respond(requestId, allow)` | Answer a link to another program (`mailto:`…) |
 | `atmos.web.downloads.list()` / `open(id)` / `show(id)` / `cancel(id)` / `pause(id)` / `resume(id)` / `remove(id)` | This session's downloads. `open` refuses a program or script |
-| `atmos.web.options()` / `setOptions({ openLinks, askWhereToSave, blockAds })` / `clearData({ cookies, cache, siteSettings })` | "Open links in Atmos Browser" (off by default), asking where to save, blocking ads and trackers (on by default); clearing the ordinary session's data (`siteSettings` includes the shields) |
+| `atmos.web.options()` / `setOptions({ openLinks, askWhereToSave, blockAds })` / `clearData({ cookies, cache, siteSettings })` | "Open links in Atmos Browser" (on by default from Atmos 0.18; off before), asking where to save, blocking ads and trackers (on by default); clearing the ordinary session's data (`siteSettings` includes the shields) |
 
 **Its own origin.** An official extension with `"isolation": "origin"` has
 `atmos-ext://first-party-<kind>-<id>` to itself. Without it, official
@@ -1326,10 +1333,10 @@ safe for any of them, and say what it gives. Settings shows the user:
   official origin, what all of them declare). Everything else is denied.
 - **Navigation.** The Atmos window's own page never leaves
   `atmos-app://local/`. Links and `window.open()` to `http(s)` and `mailto`,
-  from it and from frames, open in the default browser (an `http(s)` link
-  in Atmos Browser instead, when the user turned on "Open links in Atmos
-  Browser": in front just after a click in Atmos, otherwise in a tab
-  behind); other schemes are refused. A frame's pop-ups go the same way
+  from it and from frames, open in the default browser, or an `http(s)`
+  link in Atmos Browser instead while "Open links in Atmos Browser" is on
+  (by default from Atmos 0.18): in front just after a click in Atmos,
+  otherwise in a tab behind; other schemes are refused. A frame's pop-ups go the same way
   (its sandbox allows them only so they reach this handler, which never
   opens a window). A frame navigates only within its origin and can't make
   a `<webview>`: the only ones in the window are Core's, for web pages (next
@@ -1614,6 +1621,17 @@ Before sharing an extension:
     that check their arguments, shared only when they must be.
 
 ## 10. Compatibility
+
+**Atmos 0.18 (SDK 1.2, unchanged).** Atmos Browser is built in, and
+Atmos opens on it.
+
+- A panel's `"default": true` is a request now: the built-in browser comes
+  first, and of two extensions asking, the first keeps it and the other is
+  logged (before, the second threw and its panel was lost).
+- Links Atmos and its extensions send out open in Atmos Browser by default
+  ("Open links in Atmos Browser"), in the system browser when it's off or
+  the browser is switched off. Nothing changes for an extension: a link or
+  `window.open()` is handed to Atmos as before.
 
 **SDK 1.2 (Atmos 0.17).** Only additions; an SDK 1.1 extension runs
 unchanged.

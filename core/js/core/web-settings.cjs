@@ -20,7 +20,9 @@ const path = require('path');
 const { readJson, writeJson } = require('./json-files.cjs');
 const { PROMPTED, siteOf } = require('./web-policy.cjs');
 
-const DEFAULT_OPTIONS = Object.freeze({ openLinks: false, askWhereToSave: true, blockAds: true });
+// "Open links in Atmos Browser" is on by default since Atmos 0.18, the browser
+// being what Atmos is built around; options.json keeps a choice once made.
+const DEFAULT_OPTIONS = Object.freeze({ openLinks: true, askWhereToSave: true, blockAds: true });
 const VALUES = new Set(['allow', 'block']);
 // Remembered per site: the prompted permissions, and two only ever 'allow',
 // blocking being their default: "ads" (the site's shield down) and

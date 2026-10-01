@@ -433,16 +433,36 @@ function _renderOnboarding() {
   });
 }
 
+/** What Atmos ships with (Atmos Browser), already there before anything is chosen: names. */
+function _pickerBuiltIn() {
+  return (_setup?.builtIn || []).map(item => String(item?.displayName || item?.id || '')).filter(Boolean);
+}
+
+/** "Atmos Browser", "A and B", "A, B and C". */
+function _namesText(names) {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** The picker's way out: nothing more than what Atmos comes with. */
+function _pickerSkipLabel() {
+  const builtIn = _pickerBuiltIn();
+  return builtIn.length ? `Just ${builtIn.length === 1 ? builtIn[0] : 'these'}` : 'Start with none';
+}
+
 /** The first run without a connection: the extensions are downloaded, so offer to try again. */
 function _renderPickerOffline(reason) {
+  const builtIn = _pickerBuiltIn();
+  const later = builtIn.length
+    ? `or start with just ${escapeHtml(_namesText(builtIn))} and add the rest later in Settings → Extensions`
+    : 'or start with none and add them later in Settings → Extensions';
   _listEl.innerHTML = `
     <div class="sm-onboarding sm-picker">
       <div class="sm-onboarding-kicker">Welcome to Atmos</div>
       <h1>Choose your extensions.</h1>
-      <p>Atmos downloads its extensions, and the list couldn't be reached (${escapeHtml(reason)}). Check your connection and try again, or start with none and add them later in Settings → Extensions.</p>
+      <p>Atmos downloads its extensions, and the list couldn't be reached (${escapeHtml(reason)}). Check your connection and try again, ${later}.</p>
       <div class="sm-onboarding-actions">
         <button type="button" data-picker="retry">Try again</button>
-        <button type="button" class="secondary" data-picker="skip">Start with none</button>
+        <button type="button" class="secondary" data-picker="skip">${escapeHtml(_pickerSkipLabel())}</button>
       </div>
     </div>`;
   _listEl.querySelector('[data-picker="retry"]').addEventListener('click', () => { _setup = null; _renderList(); });
@@ -457,11 +477,15 @@ function _renderPickerOffline(reason) {
 
 /** The first-run picker: tick the plugins to install; what they need comes with them. */
 function _renderPicker(plugins) {
+  const builtIn = _pickerBuiltIn();
+  const intro = builtIn.length
+    ? `${escapeHtml(_namesText(builtIn))} ${builtIn.length === 1 ? 'is' : 'are'} built in. Tick what else you want beside ${builtIn.length === 1 ? 'it' : 'them'}; the services each one needs are installed with it. You can add or remove any of them later in Settings → Extensions.`
+    : 'Atmos starts with nothing but its core. Tick what you want; the services each one needs are installed with it. You can add or remove any of them later in Settings → Extensions.';
   _listEl.innerHTML = `
     <div class="sm-onboarding sm-picker">
       <div class="sm-onboarding-kicker">Welcome to Atmos</div>
       <h1>Choose your extensions.</h1>
-      <p>Atmos starts with nothing but its core. Tick what you want; the services each one needs are installed with it. You can add or remove any of them later in Settings → Extensions.</p>
+      <p>${intro}</p>
       <div class="sm-picker-list">
         ${plugins.map(item => `
           <label class="sm-card sm-picker-item">
@@ -475,7 +499,7 @@ function _renderPicker(plugins) {
       </div>
       <div class="sm-onboarding-actions">
         <button type="button" data-picker="install" disabled>Install and restart</button>
-        <button type="button" class="secondary" data-picker="skip">Start with none</button>
+        <button type="button" class="secondary" data-picker="skip">${escapeHtml(_pickerSkipLabel())}</button>
       </div>
       <div class="sm-picker-error"></div>
     </div>`;
@@ -498,7 +522,7 @@ function _renderPicker(plugins) {
     } catch (error) {
       _listEl.querySelector('.sm-picker-error').textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
       _listEl.querySelectorAll('[data-picker]').forEach(item => { item.disabled = false; });
-      button.textContent = list.length ? 'Install and restart' : 'Start with none';
+      button.textContent = list.length ? 'Install and restart' : _pickerSkipLabel();
     }
     return undefined;
   };
