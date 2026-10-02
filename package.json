@@ -1,12 +1,12 @@
 {
   "name": "atmos",
-  "version": "0.19.1",
+  "version": "0.19.2",
   "description": "A modular personal desktop environment.",
   "license": "GPL-3.0-only",
   "author": "hashy",
   "main": "core/main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/start.cjs",
     "test:core": "node --test core/js/core/*.test.cjs",
     "test:services": "node --experimental-vm-modules --test scripts/service-core-v2-contract.test.cjs",
     "test:permissions": "node --test scripts/extension-permissions.test.cjs",
@@ -74,9 +74,13 @@
           "!**/*.log"
         ]
       }
-    ]
+    ],
+    "electronFuses": {
+      "enableCookieEncryption": true
+    }
   },
   "devDependencies": {
+    "@electron/fuses": "1.8.0",
     "electron": "44.5.1",
     "electron-builder": "^26.15.3"
   },

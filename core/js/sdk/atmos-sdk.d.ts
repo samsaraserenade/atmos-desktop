@@ -409,10 +409,14 @@ export interface WebDownload {
  * 'state', 'navigated', 'progress', 'favicon', 'open-tab', 'open-link'
  * (`background`: no click in Atmos just before, so not to the front),
  * 'context-menu', 'command', 'find', 'load-failed', 'refused', 'fullscreen',
- * 'crashed', 'permission-request' (`origin`: the page's site, whichever
+ * 'crashed', 'memory' (`bytes`: the page's process is past 2 GB, and
+ * again at each 2 GB more), 'permission-request' (`origin`: the page's site, whichever
  * frame asked), 'permission-settled', 'external-request' (`site`: the
  * asking page's), 'popup-blocked' and 'download-blocked' (a page tried
- * without a click; `url` to open or fetch it, when there is one),
+ * without a click, or, with `insecure`, a secure page's download over plain
+ * http; `url` to open or fetch it, when there is one), 'https-fallback'
+ * (`url`, `site`: tried over https first, the page loads over http;
+ * `redirected` when the site itself sent it back; Atmos 0.19.2),
  * 'download', 'download-removed', 'private-ended', 'adblock' (the blocker's
  * status changed; `untrusted` names uBlock Origin's lists in use from a
  * copy without their trust).

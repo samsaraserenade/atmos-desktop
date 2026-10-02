@@ -8,13 +8,13 @@ const go = text => interpret(text, { searchTemplate });
 const url = text => { const result = go(text); assert.equal(result?.kind, 'url', `${text} → ${JSON.stringify(result)}`); return result.url; };
 const searched = text => { const result = go(text); assert.equal(result?.kind, 'search', `${text} → ${JSON.stringify(result)}`); return result; };
 
-test('addresses go there; a bare site name gets https, local ones http', () => {
+test('addresses go there; a bare site name gets http, which Atmos tries over https first', () => {
   assert.equal(url('https://example.com/a?b#c'), 'https://example.com/a?b#c');
   assert.equal(url('http://example.com'), 'http://example.com/');
   assert.equal(url('HTTPS://Example.COM/Path'), 'https://example.com/Path');
-  assert.equal(url('example.com'), 'https://example.com/');
-  assert.equal(url('www.example.co.uk/news?x=1'), 'https://www.example.co.uk/news?x=1');
-  assert.equal(url('  example.com  '), 'https://example.com/');
+  assert.equal(url('example.com'), 'http://example.com/');
+  assert.equal(url('www.example.co.uk/news?x=1'), 'http://www.example.co.uk/news?x=1');
+  assert.equal(url('  example.com  '), 'http://example.com/');
   assert.equal(url('localhost'), 'http://localhost/');
   assert.equal(url('localhost:3000/app'), 'http://localhost:3000/app');
   assert.equal(url('192.168.1.10'), 'http://192.168.1.10/');
@@ -22,8 +22,8 @@ test('addresses go there; a bare site name gets https, local ones http', () => {
   assert.equal(url('[::1]:5173'), 'http://[::1]:5173/');
   assert.equal(url('example.com:8443'), 'http://example.com:8443/');
   assert.equal(url('example.com:443'), 'https://example.com/');
-  assert.equal(url('xn--bcher-kva.example'), 'https://xn--bcher-kva.example/');
-  assert.equal(url('bücher.de'), 'https://xn--bcher-kva.de/', 'a Unicode name reads as punycode');
+  assert.equal(url('xn--bcher-kva.example'), 'http://xn--bcher-kva.example/');
+  assert.equal(url('bücher.de'), 'http://xn--bcher-kva.de/', 'a Unicode name reads as punycode');
   assert.equal(url('about:blank'), 'about:blank');
 });
 

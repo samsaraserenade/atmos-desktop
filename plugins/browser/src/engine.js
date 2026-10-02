@@ -66,6 +66,12 @@ function freshRuntime() {
   };
 }
 
+/** 14341 MB as "14.0 GB", 1.5 GB as "1.5 GB". */
+export function formatMemory(bytes) {
+  const gb = bytes / 1024 ** 3;
+  return `${gb >= 10 ? gb.toFixed(0) : gb.toFixed(1)} GB`;
+}
+
 export function createEngine({ atmos, store, engines, now = () => Date.now(), timers = globalThis }) {
   const web = atmos.web;
   const list = createTabList({ now });
@@ -415,7 +421,9 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         if (event.value <= 0.2) {
           // A new page starts: what the last one asked, failed or refused goes.
           state.error = null;
-          state.notice = null;
+          // A notice about why the tab slept outlasts the load it wakes with.
+          if (state.notice?.keepThroughLoad) state.notice.keepThroughLoad = false;
+          else state.notice = null;
           state.permissions = [];
           state.external = null;
           syncShown();
@@ -451,6 +459,44 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
       case 'refused': {
         if (!tab) return;
         rt(id).notice = { text: String(event.reason || 'That address isn’t opened in Atmos Browser'), url: event.url };
+        emit({ type: 'tab', id });
+        return;
+      }
+      case 'https-fallback': {
+        // Core tried the page over https first (automatic https) and the
+        // site has none: it's loading over http, and says so.
+        if (!tab) return;
+        const site = siteName(`http://${String(event.site || '')}`) || 'This site';
+        // (Sent back to http by the site itself, it's the same load: nothing to outlast.)
+        rt(id).notice = {
+          id: ++noticeSerial, keepThroughLoad: event.redirected !== true,
+          text: `${site} has no working secure connection, so it opened without one. Don’t enter passwords or card details here.`,
+        };
+        emit({ type: 'tab', id });
+        return;
+      }
+      case 'memory': {
+        // Core measured the page's process past 2 GB (then each 2 GB more).
+        // In the background, it sleeps, as Chrome's Memory Saver would, and
+        // says why when you come back; the one you're on says so, with Reload.
+        if (!tab || !(event.bytes > 0)) return;
+        const size = formatMemory(event.bytes);
+        const state = rt(id);
+        const asleep = id !== list.selected && !tab.private && !state.audible && !state.fullscreen
+          && !state.opening && state.permissions.length === 0 && !state.external;
+        if (asleep) {
+          putAway(id);
+          rt(id).notice = {
+            id: ++noticeSerial, keepThroughLoad: true,
+            text: `Put to sleep in the background: it was using ${size} of memory.`,
+          };
+        } else {
+          state.notice = {
+            id: ++noticeSerial,
+            text: `This page is using ${size} of memory.`,
+            actions: [{ label: 'Reload', kind: 'reload' }],
+          };
+        }
         emit({ type: 'tab', id });
         return;
       }
@@ -532,7 +578,13 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         const site = siteName(String(event.site || '')) || 'This page';
         const name = String(event.name || 'a file').slice(0, 120);
         const url = /^(https?:|data:|blob:)/i.test(String(event.url || '')) ? String(event.url) : null;
-        rt(target).notice = {
+        // A secure page's download over plain http (Chrome's insecure
+        // download blocking), or one started without a click.
+        rt(target).notice = event.insecure === true ? {
+          id: ++noticeSerial,
+          text: `Insecure download blocked: “${name}” comes over a connection that isn’t secure, so it could have been changed on the way.`,
+          actions: url && tab ? [{ label: 'Download anyway', kind: 'download', url }] : [],
+        } : {
           id: ++noticeSerial,
           text: `Download blocked: ${site} tried to save “${name}” without a click.`,
           actions: url && tab ? [{ label: 'Download', kind: 'download', url }] : [],
@@ -724,6 +776,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     if (action.kind === 'popup') return newTab({ url: action.url, private: action.private === true, after: id, opener: id });
     if (action.kind === 'allow-popups') return web.permissions.set(action.origin, 'popups', 'allow');
     if (action.kind === 'download') return onLive(id, () => web.download(id, action.url));
+    if (action.kind === 'reload') return reload(id);
     return null;
   }
 

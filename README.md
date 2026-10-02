@@ -129,6 +129,9 @@ didn't write. Neither gets more than it needs.
   files are out of reach, and Atmos itself, not the browser's interface,
   decides what a page may load and do. Camera, microphone, location,
   notifications and reading the clipboard stay off unless you allow a site.
+  Pages try a secure connection first and say so when a site has none, a
+  secure page's download over an insecure connection is stopped, and
+  cookies are encrypted on disk, as in Chrome (0.19.2).
 - **Sandboxed extensions.** Extensions run in sandboxed frames and reach
   Atmos only through the Atmos SDK. A community extension can't see Atmos,
   other extensions or your files, and can't run code outside its frames.
@@ -394,13 +397,9 @@ Atmos/
 Atmos is actively evolving. Atmos now updates itself (0.19), so each
 improvement reaches everyone on its own. The current focus is bringing
 Atmos Browser up to Chrome's security level, closing the protections Chrome
-adds on top of Chromium that Atmos doesn't have yet:
+adds on top of Chromium that Atmos doesn't have yet. Encrypted cookies,
+automatic https and blocking insecure downloads came in 0.19.2. Next:
 
-- **Encrypted cookies** on disk, so your sign-ins aren't stored in plain
-  text
-- **Automatic https:** pages try a secure connection first, and say so if
-  a site only has an insecure one
-- **Blocking insecure downloads** started from secure pages, as Chrome does
 - **Secure DNS**, so the sites you visit aren't sent in the clear
 - **Phishing and malware warnings**
 - **A code-signed app**, so Windows can vouch for Atmos and its updates

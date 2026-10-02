@@ -578,6 +578,61 @@ function iconFetchAllowed(iconUrl, pageUrl) {
     && !host.endsWith('.internal') && !host.endsWith('.home.arpa') && !host.endsWith('.lan');
 }
 
+/** A public name, as iconFetchAllowed reads one: not an IP address, localhost, a .local name or one without a dot. */
+function publicName(host) {
+  if (!host || host.startsWith('[') || /^\d+(?:\.\d+){3}$/.test(host)) return false;
+  return host.includes('.') && host !== 'localhost' && !host.endsWith('.localhost') && !host.endsWith('.local')
+    && !host.endsWith('.internal') && !host.endsWith('.home.arpa') && !host.endsWith('.lan') && !host.endsWith('.test');
+}
+
+/**
+ * Automatic https (Chrome's HTTPS-Upgrades): the https address to try first
+ * for a page at `url`, or null. Only plain http on its usual port to a
+ * public name (not an address on your network, which rarely has https, nor
+ * a port of its own), without a user name, and not a site already found to
+ * have no https (`httpOnly`, its host: web-host.cjs keeps them). The page
+ * falls back to http, saying so, when https fails.
+ */
+function httpsUpgrade(url, httpOnly = new Set()) {
+  const parsed = parseUrl(url);
+  if (!parsed || parsed.protocol !== 'http:' || parsed.port || parsed.username || parsed.password) return null;
+  const host = plainHost(parsed);
+  if (!publicName(host) || httpOnly.has(host)) return null;
+  parsed.protocol = 'https:';
+  return parsed.href;
+}
+
+/**
+ * Whether a failed page tried over https (automatic https) falls back to
+ * http: the connection or its security failed (refused, reset, closed, a
+ * TLS or certificate error, timed out). Not when the network itself is out
+ * (offline, a name that doesn't resolve, the network changed): http would
+ * fail as well, and the site would be remembered as having no https.
+ */
+function httpsFallbackError(code) {
+  if (![-105, -106, -109, -137].includes(code) && code <= -100 && code > -300) return true;
+  return false;
+}
+
+/**
+ * Chrome's insecure download blocking: a download a secure page started
+ * that comes, or passes on its way, over plain http (not from your own
+ * machine). `chain` is the download's addresses, redirects included.
+ */
+function insecureDownload(chain, pageUrl) {
+  const page = parseUrl(pageUrl);
+  if (!page || page.protocol !== 'https:') return false;
+  const links = chain || [];
+  return links.some((link, index) => {
+    // An http address Atmos itself upgraded (the next hop is the same over https) wasn't fetched over http.
+    if (/^http:/i.test(link) && typeof links[index + 1] === 'string' && links[index + 1] === link.replace(/^http:/i, 'https:')) return false;
+    const hop = parseUrl(link);
+    if (!hop || hop.protocol !== 'http:') return false;
+    const host = plainHost(hop);
+    return !(host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '[::1]');
+  });
+}
+
 /**
  * The name to resolve before fetching an icon iconFetchAllowed allowed,
  * whose addresses must all be public (isLocalAddress), or null: the page's
@@ -669,6 +724,6 @@ module.exports = {
   chromeUserAgent, uaBrands, CLIENT_HINTS_FILTER, withClientHints, navigationPolicy, isLoadable, siteOf, requestContext,
   permissionNames, permissionSite, permissionDecision, permissionCheck,
   USER_ACTIVATION_MS, activatesUser, createActivations, LEAVE_QUIET_MS, LEAVE_ACTED_MS, askBeforeLeaving,
-  downloadName, uniqueName, openableDownload,
+  downloadName, uniqueName, openableDownload, httpsUpgrade, httpsFallbackError, insecureDownload,
   shortcutFor, nextZoom, webviewAttachment,
 };

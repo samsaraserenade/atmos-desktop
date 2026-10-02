@@ -51,6 +51,8 @@ the plugin's own origin, `"isolation": "origin"`).
   origin (`atmos-browser`). History keeps 90 days, 20,000 addresses at most.
 - **Cookies, site data, cache**: Core's, in the browser's own session
   (`persist:atmos-browser`), apart from Atmos and from every extension.
+  Cookies are encrypted on disk with Windows' own keys, as Chrome's are
+  (Atmos 0.19.2).
 - **Site permissions, shields and per-site zoom**: Core's, in
   `browser/sites.json` in Atmos's user data.
 - **The ad blocker's lists and engine**: Core's, in `browser/adblock/`
@@ -65,6 +67,11 @@ kept loaded (10) are **put away**: the page closes, the tab keeps its place,
 address, title and icon, and loads again when you go back to it. A put-away
 tab starts a new back/forward list. Tabs playing sound, asking something, in
 fullscreen or private aren't put away.
+
+A page using more than 2 GB of memory (X in a long session reached 14 GB)
+is put away at once if it's in the background, and says why when you go
+back to it; the tab you're on says how much it's using, with **Reload** to
+give it back. (Atmos 0.19.2 measures it; on an older Atmos nothing is said.)
 
 ## Security, in short
 
@@ -88,7 +95,18 @@ fullscreen or private aren't put away.
   opener, its site in its title, and can't go fullscreen; other new windows
   become tabs.
 - Certificate errors show a warning with no way to continue. Mixed content
-  stays blocked. A site that asks for a certificate from your computer (a
+  stays blocked.
+- **Automatic https** (Atmos 0.19.2, as Chrome's): a page asked for over
+  plain http on a public site (a link, or a name typed without `https://`)
+  is tried over https first. When that fails (no https, a bad certificate,
+  no answer in 3 s) or the site sends it back to http, it loads over http
+  and says so; the site is then left on http until Atmos restarts. Not for
+  your own network (localhost, `.local`, addresses, names without a dot),
+  ports of their own, or a form's POST.
+- **Insecure downloads are stopped**: a secure page's download that comes
+  over plain http (anyone on the way could swap the file), with **Download
+  anyway**, as in Chrome. A new tab a secure page opened counts as that
+  page's. A site that asks for a certificate from your computer (a
   work or ID card's) gets none.
 - Camera, microphone, location, notifications and reading the clipboard are
   denied unless you allow the site when it asks, in the browser's own prompt.

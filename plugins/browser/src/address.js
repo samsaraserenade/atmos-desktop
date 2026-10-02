@@ -90,7 +90,9 @@ export function interpret(input, { searchTemplate }) {
   if (/\s/.test(text)) return search(text);
   const site = hostLike(text);
   if (site) {
-    try { return { kind: 'url', url: new URL(`${site.local ? 'http' : 'https'}://${text}`).href }; } catch { return search(text); }
+    // Plain http: Atmos tries https first (automatic https, Atmos 0.19.2)
+    // and falls back to http, saying so, for a site that has none.
+    try { return { kind: 'url', url: new URL(`http://${text}`).href }; } catch { return search(text); }
   }
   return search(text);
 }

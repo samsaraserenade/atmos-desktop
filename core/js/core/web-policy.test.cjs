@@ -441,3 +441,32 @@ test('what the icon decoder returns is only ever 32×32 pixels, premultiplied BG
   assert.deepEqual([...bgra.subarray(4, 8)], [25, 50, 100, 128]);
   assert.deepEqual([...bgra.subarray(8, 12)], [0, 0, 0, 0]);
 });
+
+test('automatic https: plain http to a public name on its usual port, unless found to have none', () => {
+  assert.equal(policy.httpsUpgrade('http://example.com/a?b=1#c'), 'https://example.com/a?b=1#c');
+  assert.equal(policy.httpsUpgrade('http://Example.COM./'), 'https://example.com./');
+  for (const url of ['https://example.com/', 'http://example.com:8080/', 'http://user:pw@example.com/', 'http://localhost/', 'http://printer.local/',
+    'http://router/', 'http://192.168.1.1/', 'http://[::1]/', 'http://alpha.test/', 'ftp://example.com/', 'not a url']) {
+    assert.equal(policy.httpsUpgrade(url), null, url);
+  }
+  assert.equal(policy.httpsUpgrade('http://old.example/', new Set(['old.example'])), null, 'a site without https stays http');
+});
+
+test('insecure downloads: a secure page\'s download over plain http, redirects included', () => {
+  assert.equal(policy.insecureDownload(['http://files.example/a.zip'], 'https://site.example/'), true);
+  assert.equal(policy.insecureDownload(['https://cdn.example/a', 'http://files.example/a.zip'], 'https://site.example/'), true, 'a hop over http');
+  assert.equal(policy.insecureDownload(['https://files.example/a.zip'], 'https://site.example/'), false);
+  assert.equal(policy.insecureDownload(['http://files.example/a.zip'], 'http://site.example/'), false, 'an http page: Chrome only warns there');
+  assert.equal(policy.insecureDownload(['http://localhost:3000/a.zip'], 'https://site.example/'), false, 'your own machine');
+  assert.equal(policy.insecureDownload(['blob:https://site.example/1', 'data:text/plain,hi'], 'https://site.example/'), false);
+});
+
+test('automatic https falls back on connection and certificate errors, not when the network is out', () => {
+  for (const code of [-100, -101, -102, -107, -113, -118, -200, -201, -202]) assert.equal(policy.httpsFallbackError(code), true, String(code));
+  for (const code of [-3, -20, -21, -105, -106, -109, -137, -300, -310]) assert.equal(policy.httpsFallbackError(code), false, String(code));
+});
+
+test('insecure downloads: an address Atmos upgraded to https wasn\'t fetched over http', () => {
+  assert.equal(policy.insecureDownload(['http://cdn.example/f.zip', 'https://cdn.example/f.zip'], 'https://site.example/'), false);
+  assert.equal(policy.insecureDownload(['http://cdn.example/f.zip', 'https://cdn.example/f.zip', 'http://other.example/f.zip'], 'https://site.example/'), true);
+});

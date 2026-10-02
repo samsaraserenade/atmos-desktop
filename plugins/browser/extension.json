@@ -1,10 +1,10 @@
 {
   "apiVersion": 4,
   "engines": {
-    "atmos": ">=0.17.0"
+    "atmos": ">=0.19.2"
   },
   "tier": "first-party",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",

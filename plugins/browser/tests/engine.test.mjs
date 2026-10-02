@@ -58,7 +58,7 @@ test('the address bar navigates or searches; a new tab page shows nothing of Cor
   assert.equal(atmos.fake.web.shown, null);
   assert.deepEqual(await engine.navigate(first.id, 'example.com'), { ok: true });
   await settle();
-  assert.equal(engine.tab(first.id).url, 'https://example.com/');
+  assert.equal(engine.tab(first.id).url, 'http://example.com/', 'Core tries it over https first');
   assert.equal(engine.tab(first.id).kind, 'page');
   assert.equal(atmos.fake.web.shown, first.id);
   await engine.navigate(first.id, 'atmos browser');
@@ -69,7 +69,7 @@ test('the address bar navigates or searches; a new tab page shows nothing of Cor
   await settle();
   assert.equal(engine.tab(first.id).url, 'https://www.google.com/search?q=more%20words');
   const visited = await engine.history.search('');
-  assert.deepEqual(visited.map(entry => entry.url).sort(), ['https://duckduckgo.com/?q=atmos%20browser', 'https://example.com/', 'https://www.google.com/search?q=more%20words']);
+  assert.deepEqual(visited.map(entry => entry.url).sort(), ['http://example.com/', 'https://duckduckgo.com/?q=atmos%20browser', 'https://www.google.com/search?q=more%20words']);
 });
 
 test('script and files typed into the address bar never reach Core', async () => {
@@ -358,4 +358,59 @@ test('the blocker\'s status arrives with Core\'s events', async () => {
   assert.equal(engine.adblock().rules, 1234);
   assert.equal(engine.adblock().total, 5);
   assert.ok(heard.length >= 1);
+});
+
+test('a page using too much memory: asleep in the background, with why; a notice with Reload where you are', async () => {
+  const { engine, atmos, calls } = await start();
+  engine.attachPanel();
+  const heavy = engine.newTab({ url: 'https://x.example/' });
+  await settle();
+  const here = engine.newTab({ url: 'https://docs.example/' });
+  await settle();
+  assert.equal(engine.tab(heavy.id).live, true);
+  // In the background: put to sleep, and it says why.
+  atmos.fake.webEvent({ type: 'memory', tabId: heavy.id, bytes: 14341 * 1024 ** 2 });
+  assert.equal(engine.tab(heavy.id).live, false, 'put to sleep');
+  assert.ok(calls('close').some(call => call.args[0] === heavy.id));
+  assert.match(engine.tab(heavy.id).notice.text, /^Put to sleep in the background: it was using 14 GB of memory/);
+  // Coming back loads it again, and the notice stays through that load.
+  engine.selectTab(heavy.id);
+  await settle();
+  assert.equal(engine.tab(heavy.id).live, true);
+  atmos.fake.webEvent({ type: 'progress', tabId: heavy.id, value: 0.1 });
+  assert.match(engine.tab(heavy.id).notice?.text || '', /Put to sleep/, 'still there once it has loaded');
+  atmos.fake.webEvent({ type: 'progress', tabId: heavy.id, value: 0.1 });
+  assert.equal(engine.tab(heavy.id).notice, null, 'gone at the next page');
+  // The tab you're on isn't put away: told, with Reload.
+  atmos.fake.webEvent({ type: 'memory', tabId: heavy.id, bytes: 4.2 * 1024 ** 3 });
+  assert.equal(engine.tab(heavy.id).live, true);
+  const notice = engine.tab(heavy.id).notice;
+  assert.match(notice.text, /^This page is using 4\.2 GB of memory/);
+  assert.deepEqual(notice.actions.map(action => action.label), ['Reload']);
+  await engine.noticeAction(heavy.id, 0, notice.id);
+  await settle();
+  assert.ok(calls('reload').some(call => call.args[0] === heavy.id), 'Reload reloads it');
+  // A background tab playing sound keeps going (told instead).
+  engine.selectTab(here.id);
+  await settle();
+  atmos.fake.webEvent({ type: 'state', tabId: heavy.id, audible: true });
+  atmos.fake.webEvent({ type: 'memory', tabId: heavy.id, bytes: 6.5 * 1024 ** 3 });
+  assert.equal(engine.tab(heavy.id).live, true, 'sound playing: not put away');
+});
+
+test('automatic https fell back to http: the tab says so through the load; an insecure download, with Download anyway', async () => {
+  const { engine, atmos, calls } = await start();
+  engine.attachPanel();
+  const tab = engine.newTab({ url: 'http://old.example/' });
+  await settle();
+  atmos.fake.webEvent({ type: 'https-fallback', tabId: tab.id, url: 'http://old.example/', site: 'old.example' });
+  atmos.fake.webEvent({ type: 'progress', tabId: tab.id, value: 0.1 });
+  assert.match(engine.tab(tab.id).notice?.text || '', /^old\.example has no working secure connection, so it opened without one/);
+  atmos.fake.webEvent({ type: 'download-blocked', tabId: tab.id, url: 'http://files.example/a.zip', name: 'a.zip', site: 'https://site.example', insecure: true });
+  const notice = engine.tab(tab.id).notice;
+  assert.match(notice.text, /^Insecure download blocked: “a\.zip” comes over a connection that isn’t secure/);
+  assert.deepEqual(notice.actions.map(action => action.label), ['Download anyway']);
+  await engine.noticeAction(tab.id, 0, notice.id);
+  await settle();
+  assert.deepEqual(calls('download').at(-1).args, [tab.id, 'http://files.example/a.zip']);
 });

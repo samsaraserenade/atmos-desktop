@@ -1830,6 +1830,8 @@ const _web = createWebHost({
     const options = {};
     if (flag('browser-downloads')) options.downloadsDir = path.resolve(flag('browser-downloads'));
     if (flag('browser-filter-lists')) options.filterLists = path.resolve(flag('browser-filter-lists'));
+    // --browser-memory-step-mb=<n>: 'memory' events every n MB instead of 2 GB.
+    if (Number(flag('browser-memory-step-mb')) > 0) options.memoryStepBytes = Number(flag('browser-memory-step-mb')) * 1024 * 1024;
     return options;
   })(),
 });
@@ -2051,7 +2053,29 @@ app.on('second-instance', () => {
 // shortcut carries the same id (package.json "build.appId").
 if (process.platform === 'win32') app.setAppUserModelId('com.hashy.atmosphere');
 
+// Cookies are encrypted on disk (package.json "build" "electronFuses";
+// `npm start` flips the same fuse on its Electron). One-way: an Electron
+// without it can't read them (every sign-in gone) and writes plain ones.
+// The profile records that it's encrypted; running from source with an
+// Electron that isn't (`npx electron .`, an IDE's launcher) stops instead.
+const COOKIES_ENCRYPTED_MARK = 'cookies-encrypted';
+async function _cookiesReadable() {
+  const mark = path.join(app.getPath('userData'), COOKIES_ENCRYPTED_MARK);
+  const remember = () => { try { if (!fs.existsSync(mark)) fs.writeFileSync(mark, 'Cookies here are encrypted (Atmos 0.19.2).\n'); } catch { /* next start */ } };
+  if (app.isPackaged) { remember(); return true; }
+  let fuses;
+  try { fuses = require('@electron/fuses'); } catch { return true; }
+  let on = false;
+  try { on = (await fuses.getCurrentFuseWire(process.execPath))[fuses.FuseV1Options.EnableCookieEncryption] === 49; } catch { return true; }
+  if (on) { remember(); return true; }
+  if (!fs.existsSync(mark)) return true;
+  dialog.showErrorBox('Atmos', 'This profile’s cookies are encrypted, and the Electron running Atmos here doesn’t encrypt them: your sign-ins would be lost. Start Atmos with `npm start`, which turns encryption on in this Electron.');
+  app.exit(1);
+  return false;
+}
+
 if (hasInstanceLock) app.whenReady().then(async () => {
+  if (!(await _cookiesReadable())) return;
   console.log('[main] userData:', app.getPath('userData'));
   // How the last Atmos update went (atmos-update.cjs).
   const lastUpdate = _updater.startup();
@@ -2158,6 +2182,25 @@ if (hasInstanceLock) app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+// Stopped from outside rather than quit: Ctrl+C in the terminal running
+// `npm start`, its window closed (SIGHUP on Windows, which then gives about
+// 5 s), or a polite kill. Quit as if the window were closed, so browser
+// pages get their last events first: Discord writes its sign-in back as
+// its page closes, and a process killed without that comes back signed
+// out. A second signal, or no quit within 4 s, stops at once.
+let _signalled = false;
+for (const signal of ['SIGINT', 'SIGHUP', 'SIGTERM', 'SIGBREAK']) {
+  try {
+    process.on(signal, () => {
+      if (_signalled) return app.exit(0);
+      _signalled = true;
+      console.log(`[main] ${signal}: quitting`);
+      setTimeout(() => app.exit(0), 4000).unref?.();
+      app.quit();
+    });
+  } catch { /* a signal this platform doesn't have */ }
+}
 
 // Like Chrome: a downloaded Atmos update installs as Atmos quits (when
 // updating automatically, on a per-user install), or for "Restart to

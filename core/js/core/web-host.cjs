@@ -38,6 +38,9 @@ const LISTS_PARTITION = 'atmos-browser-lists';
 const MAX_LIST_BYTES = 16 * 1024 * 1024;
 const STORAGE_FLUSH_MS = 30_000;                 // pages' storage and cookies to disk
 const CLOSE_PAGE_MS = 3000;                      // a page's last events, before it's closed regardless
+const HTTPS_FALLBACK_MS = 3000;                  // an upgraded page with no answer by then loads over http (Chrome's)
+const MEMORY_CHECK_MS = 30_000;                  // how often each tab's process is measured
+const MEMORY_STEP_BYTES = 2 * 1024 ** 3;         // a 'memory' event at 2 GB, 4 GB, 6 GB…
 const PERMISSION_WAIT_MS = 10 * 60 * 1000;
 const EXTERNAL_WAIT_MS = 2 * 60 * 1000;
 const ICON_DECODE_MS = 5000;
@@ -89,6 +92,15 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   const permissionRequests = new Map(); // request id -> { guestId, origin, names, private, callback, timer }
   const externalRequests = new Map();   // request id -> { guestId, url, timer }
   const downloads = new Map();       // download id -> { item, record }
+  // Automatic https: hosts found to have none (each session its own, this
+  // run only), and each tab's page being tried over https.
+  const httpOnly = { ordinary: new Set(), private: new Set() };
+  const upgrades = new Map();        // webContents id -> { host, httpUrl, redirects, timer, downgrade }
+  // Addresses a secure page opened in a new tab (open-tab), until when: a
+  // download that tab starts before it has a page of its own was the
+  // secure page's (insecure download blocking judges by who started it).
+  const secureOpeners = new Map();    // address -> until when
+  const memoryLevels = new Map();    // tab's webContents id -> the last 'memory' step it was told about
   const faviconCache = new Map();    // "private|url" -> data URL
   const blockedByTab = new Map();    // webContents id -> { count, hosts: Map(host -> n), timer }
   const tokenBudget = new Map();     // webContents id -> page-token messages left for this page
@@ -621,6 +633,11 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
    * can't pile files into Downloads without a click by moving on; the
    * browser says what it stopped.
    */
+  /**
+   * Whether a page's download may start: 'expected' (Core asked for it: a
+   * menu's Save, a notice's Download), true (the page's own, the one it may
+   * start or just after a click), false.
+   */
   function downloadMayStart(contents, item) {
     const id = contents.id;
     if (!live.has(id)) return true;
@@ -630,7 +647,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     if (expectedDownloads.has(key)) {
       const fresh = expectedDownloads.get(key) >= Date.now();
       expectedDownloads.delete(key);
-      if (fresh) return true;
+      if (fresh) return 'expected';
     }
     return downloadReady.delete(id);
   }
@@ -679,6 +696,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
         };
       }
       // A private page's links stay private.
+      if (/^https:/i.test(contents.getURL()) && secureOpeners.size < 200) secureOpeners.set(sameUrl(details.url), Date.now() + EXPECTED_DOWNLOAD_MS);
       send(guestId, 'open-tab', { url: details.url, background: details.disposition === 'background-tab', private: isPrivateSession(contents.session) });
       return { action: 'deny' };
     });
@@ -696,7 +714,11 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     });
     contents.on('will-redirect', details => {
       const verdict = policy.navigationPolicy(details.url, { frame: details.isMainFrame ? 'top' : 'sub' });
-      if (verdict.action !== 'allow') details.preventDefault();
+      if (verdict.action !== 'allow') { details.preventDefault(); return; }
+      // The site itself sending the upgraded page back to http, the same
+      // host: it has no https really (upgradeRequest lets that through).
+      const entry = details.isMainFrame ? upgrades.get(contents.id) : null;
+      if (entry && sameHost(details.url, 'http:') === entry.host) entry.downgrade = true;
     });
     contents.on('will-attach-webview', event => event.preventDefault());
     // A page that objects to being left (unsaved changes, after the user
@@ -766,6 +788,9 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     }
     contents.on('did-start-navigation', details => {
       if (details.isMainFrame && !details.isSameDocument) {
+        // A new navigation (not a redirect of one): whatever was being
+        // tried over https before is over. Comes before its request.
+        endUpgrade(guestId);
         navigations.set(guestId, (navigations.get(guestId) || 0) + 1);
         dropRequestsOf(guestId);
         resetBlocked(guestId);
@@ -785,6 +810,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       // was a "Leave site?" answered there.
       activations.forget(guestId);
       leaveRefusedAt.delete(guestId);
+      endUpgrade(guestId);
       applyZoom(contents);
       send(guestId, 'navigated', { url, title: contents.getTitle(), inPage: false });
       sendState(contents);
@@ -797,6 +823,10 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     contents.on('did-frame-finish-load', (_event, isMainFrame) => { if (isMainFrame) send(guestId, 'progress', { value: 0.7 }); });
     contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
       if (!isMainFrame || code === -3) return; // -3: aborted (a new navigation, or stopped)
+      // A page tried over https that failed there (no https, a bad
+      // certificate, no answer): over http instead, saying so.
+      if (policy.httpsFallbackError(code) && fallBackToHttp(contents, url)) return;
+      endUpgrade(guestId);
       send(guestId, 'load-failed', { url, code, description, certificate: code <= -200 && code > -300 });
     });
     contents.on('page-favicon-updated', (_event, favicons) => { void sendFavicon(contents, favicons); });
@@ -836,6 +866,8 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   function forgetGuest(guestId) {
     const gone = live.get(guestId);
     live.delete(guestId);
+    memoryLevels.delete(guestId);
+    endUpgrade(guestId);
     closing.delete(guestId);
     dropRequestsOf(guestId);
     resetBlocked(guestId);
@@ -879,6 +911,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   async function endPrivateSession() {
     const privateSession = configureSessions().private;
     settings.clearPrivate();
+    httpOnly.private.clear();
     for (const key of [...faviconCache.keys()]) if (key.startsWith('p|')) faviconCache.delete(key);
     for (const [id, entry] of [...downloads]) {
       if (entry.record.private && entry.record.state !== 'progressing') { downloads.delete(id); send(null, 'download-removed', { id }); }
@@ -906,11 +939,18 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       ses.setUserAgent(userAgent);
       // Ads and trackers: every request a page makes, and the $csp of documents.
       ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
+        if (details.resourceType === 'mainFrame') {
+          let upgraded = null;
+          try { upgraded = upgradeRequest(details, isPrivate); } catch (error) { console.warn('[web] https:', error.message); }
+          if (upgraded) return callback({ redirectURL: upgraded });
+        }
         let verdict = {};
         try { verdict = blockRequest(details, isPrivate); } catch (error) { console.warn('[web] blocking:', error.message); }
         callback(verdict);
       });
       ses.webRequest.onHeadersReceived({ urls: ['http://*/*', 'https://*/*'], types: ['mainFrame', 'subFrame'] }, (details, callback) => {
+        // An upgraded page answered over https: no falling back on a timer.
+        if (details.resourceType === 'mainFrame') clearTimeout(upgrades.get(details.webContentsId)?.timer);
         let verdict = {};
         try { verdict = addListCsp(details, isPrivate); } catch (error) { console.warn('[web] list CSP:', error.message); }
         callback(verdict);
@@ -963,7 +1003,104 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     };
     setInterval(flush, STORAGE_FLUSH_MS).unref?.();
     app.on('before-quit', flush);
+    setInterval(checkMemory, MEMORY_CHECK_MS).unref?.();
     return webSessions;
+  }
+
+  // ── Automatic https ───────────────────────────────────────────────────────
+  /**
+   * A page's address over https instead of http (policy.httpsUpgrade), as
+   * Chrome's HTTPS-Upgrades: tried first, and back to http if that fails
+   * (fallBackToHttp) or answers nothing in 3 s. The http address is
+   * remembered for the tab until the page commits. A site that sends the
+   * https address back to http (it has none, really) is let through and
+   * remembered as http only; so is one redirecting between upgrades more
+   * than a few times.
+   */
+  function upgradeRequest(details, isPrivate) {
+    const id = details.webContentsId;
+    if (!live.has(id) || details.method !== 'GET') return null; // a form's POST isn't retried as a GET
+    const pending = upgrades.get(id);
+    const host = sameHost(details.url, 'http:');
+    if (!host) return null;
+    const only = isPrivate ? httpOnly.private : httpOnly.ordinary;
+    if (pending?.downgrade && pending.host === host) {
+      // Sent back to http by the site (will-redirect): remembered, let through.
+      if (only.size < 1000) only.add(host);
+      endUpgrade(id);
+      send(id, 'https-fallback', { url: details.url, site: host, redirected: true });
+      return null;
+    }
+    // A chain of redirects between upgrades: this navigation goes as asked,
+    // and nothing is remembered.
+    if (pending && pending.redirects >= 4) return null;
+    const upgraded = policy.httpsUpgrade(details.url, only);
+    if (!upgraded) return null;
+    clearTimeout(pending?.timer);
+    const entry = { host, httpUrl: details.url, redirects: pending ? pending.redirects + 1 : 0, timer: null, isPrivate, downgrade: false };
+    entry.timer = setTimeout(() => {
+      const contents = webContents.fromId(id);
+      if (contents && !contents.isDestroyed() && contents.isLoading() && upgrades.get(id) === entry) fallBackToHttp(contents, null);
+    }, HTTPS_FALLBACK_MS);
+    upgrades.set(id, entry);
+    return upgraded;
+  }
+
+  /** The host of `url` when its scheme is `scheme` (lower case, no trailing dot), else ''. */
+  function sameHost(url, scheme) {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === scheme ? parsed.hostname.toLowerCase().replace(/\.$/, '') : '';
+    } catch { return ''; }
+  }
+
+  function endUpgrade(id) {
+    clearTimeout(upgrades.get(id)?.timer);
+    upgrades.delete(id);
+  }
+
+  /**
+   * The page being tried over https failed (`failedUrl`, its https address;
+   * null: no answer in time): remember the site as http only, load the http
+   * address and tell the tab. False when the page wasn't being upgraded.
+   */
+  function fallBackToHttp(contents, failedUrl) {
+    const entry = upgrades.get(contents.id);
+    if (!entry) return false;
+    if (failedUrl && sameHost(failedUrl, 'https:') !== entry.host) return false;
+    endUpgrade(contents.id);
+    const only = entry.isPrivate ? httpOnly.private : httpOnly.ordinary;
+    if (only.size < 1000) only.add(entry.host);
+    send(contents.id, 'https-fallback', { url: entry.httpUrl, site: entry.host });
+    contents.loadURL(entry.httpUrl).catch(() => { /* reported through did-fail-load */ });
+    return true;
+  }
+
+  // ── Memory ────────────────────────────────────────────────────────────────
+  /**
+   * Each tab's process, measured as Task Manager does (private bytes on
+   * Windows; the working set elsewhere). A page past 2 GB, then each 2 GB
+   * more, gets a 'memory' event with its size, so the browser can put a
+   * background tab to sleep or say so of the one you're on: a runaway page
+   * (X in a long session reached 14 GB) otherwise takes the whole machine.
+   * A page that comes back down can be told again later.
+   */
+  function checkMemory() {
+    const tabs = [...live].filter(([, entry]) => entry.tab).map(([id]) => webContents.fromId(id)).filter(contents => contents && !contents.isDestroyed());
+    if (!tabs.length) return;
+    let metrics;
+    try { metrics = app.getAppMetrics(); } catch { return; }
+    const bytesOf = new Map(metrics.map(metric => [metric.pid, 1024 * (metric.memory?.privateBytes || metric.memory?.workingSetSize || 0)]));
+    const step = testOptions.memoryStepBytes || MEMORY_STEP_BYTES;
+    for (const contents of tabs) {
+      let pid;
+      try { pid = contents.getOSProcessId(); } catch { continue; }
+      const bytes = bytesOf.get(pid) || 0;
+      const level = Math.floor(bytes / step);
+      const told = memoryLevels.get(contents.id) || 0;
+      if (level > told) send(contents.id, 'memory', { bytes });
+      if (level !== told) memoryLevels.set(contents.id, level);
+    }
   }
 
   // ── Downloads ─────────────────────────────────────────────────────────────
@@ -976,12 +1113,28 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   }
 
   function startDownload(event, item, contents, isPrivate) {
-    if (contents && !contents.isDestroyed() && !downloadMayStart(contents, item)) {
+    const page = contents && !contents.isDestroyed() ? contents : null;
+    const may = page ? downloadMayStart(page, item) : true;
+    // As Chrome: a secure page's download that comes over plain http is
+    // stopped (anyone on the way could have swapped the file), unless you
+    // then asked for it (the notice's Download anyway: 'expected').
+    let chain = [];
+    try { chain = item.getURLChain(); } catch { chain = []; }
+    if (!chain.length) chain = [item.getURL()];
+    // Who started it: the page, or (a tab it opened, with no page of its
+    // own yet) the secure page that opened it.
+    let starter = page ? page.getURL() : '';
+    if (page && !/^https?:/i.test(starter)) {
+      for (const [address, until] of secureOpeners) if (until < Date.now()) secureOpeners.delete(address);
+      if (secureOpeners.has(sameUrl(chain[0]))) starter = 'https://opener.invalid/';
+    }
+    const insecure = !!page && may !== 'expected' && policy.insecureDownload(chain, starter);
+    if (page && (!may || insecure)) {
       event.preventDefault();
       const url = item.getURL();
-      send(contents.id, 'download-blocked', {
+      send(page.id, 'download-blocked', {
         url: url.length <= 2048 ? url : null, name: policy.downloadName(item.getFilename(), url),
-        site: policy.siteOf(contents.getURL()) || '', private: isPrivate,
+        site: policy.siteOf(page.getURL()) || '', private: isPrivate, insecure,
       });
       return;
     }
@@ -1067,7 +1220,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     back: contents => { if (contents.navigationHistory.canGoBack()) { userMoved(contents); contents.navigationHistory.goBack(); } },
     forward: contents => { if (contents.navigationHistory.canGoForward()) { userMoved(contents); contents.navigationHistory.goForward(); } },
     reload: (contents, options) => { userMoved(contents); return options?.hard ? contents.reloadIgnoringCache() : contents.reload(); },
-    stop: contents => contents.stop(),
+    stop: contents => { endUpgrade(contents.id); contents.stop(); },
     zoom: (contents, direction) => zoom(contents, ['in', 'out', 'reset'].includes(direction) ? direction : 'reset'),
     // options.findNext: the next match of the search already made (Enter
     // again). Electron's own findNext means the opposite: "begin a new
