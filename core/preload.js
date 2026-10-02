@@ -111,6 +111,17 @@ contextBridge.exposeInMainWorld('atmosCore', {
     setup:         ()                      => ipcRenderer.invoke('extensions:setup'),
     finishSetup:   chosen                  => ipcRenderer.invoke('extensions:finish-setup', chosen),
     openAtmosDownload: ()                  => ipcRenderer.invoke('extensions:open-atmos-download'),
+    // Atmos updating itself: download (automatic updates off), install now
+    // (Atmos quits and starts again), and the setting.
+    downloadAtmosUpdate: ()                => ipcRenderer.invoke('extensions:atmos-update-download'),
+    installAtmosUpdate: ()                 => ipcRenderer.invoke('extensions:atmos-update-install'),
+    setAtmosAutoUpdate: on                 => ipcRenderer.invoke('extensions:atmos-update-auto', on === true),
+    // Atmos asks for Settings → Extensions (a reminder about an update was clicked).
+    onShowManager: callback => {
+      const listener = () => callback();
+      ipcRenderer.on('extensions:show-manager', listener);
+      return () => ipcRenderer.removeListener('extensions:show-manager', listener);
+    },
     onUpgradeDownloaded: callback => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('extensions:upgrade-downloaded', listener);

@@ -1,6 +1,6 @@
 {
   "name": "atmos",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "A modular personal desktop environment.",
   "license": "GPL-3.0-only",
   "author": "hashy",
@@ -10,13 +10,13 @@
     "test:core": "node --test core/js/core/*.test.cjs",
     "test:services": "node --experimental-vm-modules --test scripts/service-core-v2-contract.test.cjs",
     "test:permissions": "node --test scripts/extension-permissions.test.cjs",
-    "test:build": "node --test scripts/after-pack.test.cjs",
+    "test:build": "node --test scripts/after-pack.test.cjs scripts/pack-extensions.test.cjs scripts/electron-current.test.cjs",
     "test:finance": "node --experimental-vm-modules --test plugins/finance/tests/*.test.cjs plugins/finance/markets/tests/*.test.cjs",
     "test:sdk": "node --test scripts/new-extension.test.cjs scripts/sdk-contract.test.mjs",
     "test:all": "node scripts/test-all.cjs",
     "new:extension": "node scripts/new-extension.cjs",
-    "build": "electron-builder --win nsis",
-    "build:portable": "electron-builder --win portable",
+    "build": "electron-builder --win nsis --x64",
+    "build:portable": "electron-builder --win portable --x64",
     "build:personal": "node scripts/build-personal.cjs",
     "publish:prepare": "node scripts/publish-release.cjs",
     "keys:create": "node scripts/extension-keys.cjs create",
@@ -77,7 +77,7 @@
     ]
   },
   "devDependencies": {
-    "electron": "^44.4.5",
+    "electron": "44.5.1",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {

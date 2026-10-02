@@ -8,6 +8,11 @@
  * commits it there, ready for you to review and push. You never edit the
  * public checkout by hand.
  *
+ *  0. Stops if the Electron in the last commit's package.json isn't the
+ *     newest of its line on npm (scripts/electron-current.cjs): installed
+ *     copies update themselves to each release, so a release on an older
+ *     patch ships Chromium holes already fixed. --allow-old-electron goes
+ *     ahead anyway; offline, it only warns.
  *  1. Refuses if the public checkout has uncommitted changes to its files.
  *  2. Exports the last commit here (scripts/export-release.cjs) to a
  *     temporary folder; uncommitted work here is never included.
@@ -32,13 +37,27 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { exportTo } = require('./export-release.cjs');
 const { forbiddenTerms, scanTree, isNoreply } = require('./release-guard.cjs');
+const { checkElectron, fetchDistTags } = require('./electron-current.cjs');
 
 const repo = path.resolve(__dirname, '..');
 const run = (cwd, cmd, args) => execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 1 << 28 });
 const fail = message => { console.error(`publish: ${message}`); process.exit(1); };
 
-function main() {
-  const message = process.argv.slice(2).join(' ').trim();
+async function main() {
+  const flags = new Set(['--allow-old-electron']);
+  const allowOldElectron = process.argv.includes('--allow-old-electron');
+  const message = process.argv.slice(2).filter(arg => !flags.has(arg)).join(' ').trim();
+
+  // 0. The Electron this release ships: the newest of its line?
+  const pinned = JSON.parse(run(repo, 'git', ['show', 'HEAD:package.json'])).devDependencies?.electron;
+  const tags = await fetchDistTags();
+  if (!tags) console.log(`publish: couldn't reach npm to check that Electron ${pinned} is current; check it before releasing`);
+  else {
+    const electron = checkElectron(pinned, tags);
+    if (!electron.ok && !allowOldElectron) fail(electron.message);
+    console.log(`publish: ${electron.message}`);
+  }
+
   const release = JSON.parse(run(repo, 'git', ['show', 'HEAD:release.json']));
   const dest = path.resolve(repo, (release.export && release.export.dest) || '../Atmos Public');
   if (!fs.existsSync(path.join(dest, '.git'))) fail(`${dest} is not a git checkout (set release.json "export.dest")`);
@@ -171,4 +190,4 @@ function installGuard(dest, terms) {
   try { fs.chmodSync(path.join(gitDir, 'hooks', 'pre-push'), 0o755); } catch { /* Windows */ }
 }
 
-main();
+main().catch(error => fail(error.message));

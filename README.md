@@ -261,15 +261,21 @@ that use it; some also have main-process code.
 
 ## Installation
 
-Download `Atmos Setup <version>.exe` from the
+Download `Atmos.Setup.<version>.exe` from the
 [Releases](../../releases) page and run it. It comes with Atmos Browser;
 the other extensions are offered on the first start. Atmos keeps your
 settings in `%APPDATA%\atmos`; uninstalling leaves them.
 
-When a newer Atmos is out, Atmos says so on the Extensions button at the
-bottom of the sidebar and in Settings → Extensions, with a link to this
-page: run the new installer over the old one, and your settings and
-extensions stay.
+Atmos updates itself, as Chrome does: when a newer Atmos is out, it
+downloads the installer in the background, checks it against the release's
+signed index, and installs it when you quit Atmos (or at once, from
+"Restart to update" in Settings → Extensions; an update left waiting two
+days gets a reminder). Your settings and extensions stay. "Update Atmos automatically" there turns it off; Atmos
+then only says a new version is available. Atmos 0.18 and older say so
+with a link to this page: run the new installer over the old one.
+Installed for every user, Atmos installs an update only from "Restart to
+update", since Windows asks first. The portable build
+doesn't update itself.
 
 ## Development
 

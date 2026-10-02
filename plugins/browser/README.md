@@ -146,14 +146,16 @@ The full account is in `docs/ARCHITECTURE.md` ("Web pages") and
   which page was clicked, not which frame in it, so after a click anywhere
   in a page any frame in it (an ad's too) can open one pop-up.
 - **Weaker:** Chromium's security fixes arrive only with an Atmos release
-  that brings a newer Electron, and Atmos doesn't update itself, where
-  Chrome and Brave do within days. Keep Atmos up to date. There's no Safe
-  Browsing (no warnings about phishing or malware sites or downloads), and
-  no camera or microphone indicator in the browser (Windows shows its
+  that brings a newer Electron, where Chrome and Brave get them within
+  days. From Atmos 0.19, Atmos installs its releases by itself (Settings →
+  Extensions, "Update Atmos automatically"), so the wait is the release,
+  not you. There's no Safe Browsing (no warnings about phishing or malware
+  sites or downloads), no updated lists of revoked certificates and no
+  Certificate Transparency checks (Chrome gets those between releases),
+  and no camera or microphone indicator in the browser (Windows shows its
   own).
 
-For banking and the accounts that matter most, use a browser that updates
-itself.
+For banking and the accounts that matter most, use Chrome, Edge or Brave.
 
 ## Shortcuts
 

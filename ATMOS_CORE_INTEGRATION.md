@@ -1465,10 +1465,15 @@ user data). Unpackaged, `--extension-source=<folder or url>` (or
   hides updates. Publishing therefore always means a newer index; never
   mark an older release "latest" again.
 - **"Atmos X is available."** The index also carries the Atmos version of
-  the tree that was packed (`"core": { "version" }`). An older Atmos says so
-  in the footer and at the top of this page, with a Download button. Only
-  the version comes from the index: the page Download opens is Atmos's own
-  setting (`"download"` in `core/extension-sources.json`).
+  the tree that was packed and its Windows installer (`"core": { "version",
+  "installer": { file, size, sha256, platform, arch } }`). An installed
+  Atmos on Windows (0.19 and later) downloads that installer from the same
+  source, checks its size and hash against the signed index, and installs
+  it when you quit or from "Restart to update"
+  (`core/js/core/atmos-update.cjs`; "Update Atmos automatically" at the top
+  of this page). Any other copy says a version is available, with a
+  Download button that opens Atmos's own setting (`"download"` in
+  `core/extension-sources.json`), never an address from the index.
 - **Install / Update** downloads the package and any missing or too-old
   required dependency (never more bytes than the index's size), checks size
   and hash against the index, unpacks it safely, checks every file against

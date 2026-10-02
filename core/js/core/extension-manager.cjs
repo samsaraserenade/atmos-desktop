@@ -76,6 +76,13 @@ function readIndexEntry(item) {
   };
 }
 
+/** The installer fields of an index's "core" entry (atmos-update.cjs checks them), or null. */
+function installerFields(installer) {
+  if (!installer || typeof installer !== 'object' || Array.isArray(installer)) return null;
+  const { file, size, sha256: hash, platform, arch } = installer;
+  return { file, size, sha256: hash, platform, arch };
+}
+
 /**
  * @param {object} options
  * @param {string} options.userData            Atmos's user-data folder
@@ -116,7 +123,7 @@ function createExtensionManager({
     staging: path.join(userData, 'extension-staging'),
     previous: path.join(userData, 'extension-previous'),
   };
-  let lastCheck = { checkedAt: null, sources: [], packages: [], core: null };
+  let lastCheck = { checkedAt: null, sources: [], packages: [], core: null, coreSeen: false };
 
   // ── Sources ────────────────────────────────────────────────────────────
 
@@ -195,10 +202,14 @@ function createExtensionManager({
     checkFreshness(source.location, index.generated);
     const packages = index.packages.map(readIndexEntry).filter(Boolean)
       .map(item => ({ ...item, source: source.location }));
-    // The newest Atmos, as the signed index states it ("core": { "version" }).
-    // Only the version is taken from it: where to download Atmos is Core's
-    // own setting, never a URL from a source.
-    const core = isValidVersion(index.core?.version) ? { version: index.core.version } : null;
+    // The newest Atmos, as the signed index states it ("core": { "version",
+    // "installer" }). The download page "Atmos X is available" opens is
+    // Core's own setting, never a URL from a source; the installer Atmos
+    // updates itself with comes from this source, checked against the
+    // index's hash (atmos-update.cjs).
+    const core = isValidVersion(index.core?.version)
+      ? { version: index.core.version, installer: installerFields(index.core.installer), source: source.location }
+      : null;
     return { name: typeof index.name === 'string' ? index.name : null, packages, core };
   }
 
@@ -259,17 +270,19 @@ function createExtensionManager({
     const results = [];
     const packages = [];
     let core = null;
+    let coreSeen = false;
     for (const source of sources()) {
       try {
         const read = await readSource(source);
         packages.push(...read.packages);
+        if (read.core) coreSeen = true;
         if (read.core && (!core || compareVersions(read.core.version, core.version) > 0)) core = read.core;
         results.push({ ...source, ok: true, name: source.name || read.name, packages: read.packages.length, error: null });
       } catch (error) {
         results.push({ ...source, ok: false, packages: 0, error: error.code === 'ENOENT' ? 'Not found' : error.message });
       }
     }
-    lastCheck = { checkedAt: new Date().toISOString(), sources: results, packages, core };
+    lastCheck = { checkedAt: new Date().toISOString(), sources: results, packages, core, coreSeen };
     return status();
   }
 
@@ -351,12 +364,19 @@ function createExtensionManager({
       applied: appliedRecords(),
       updates: packages.filter(item => item.action === 'update' && !item.pending).length,
       // "Atmos X is available": the newest version a source's signed index
-      // names, when it is newer than this one.
-      core: {
-        current: appVersion,
-        available: lastCheck.core && isValidVersion(appVersion) && compareVersions(lastCheck.core.version, appVersion) > 0
-          ? lastCheck.core.version : null,
-      },
+      // names, when it is newer than this one. `offer` is that entry with
+      // its installer and source, for Atmos to update itself; `seen` says a
+      // source answered with a "core" entry at all (offline, nothing is
+      // known either way).
+      core: (() => {
+        const newer = lastCheck.core && isValidVersion(appVersion) && compareVersions(lastCheck.core.version, appVersion) > 0;
+        return {
+          current: appVersion,
+          available: newer ? lastCheck.core.version : null,
+          offer: newer ? lastCheck.core : null,
+          seen: lastCheck.coreSeen === true,
+        };
+      })(),
     };
   }
 
@@ -663,7 +683,7 @@ function createExtensionManager({
   async function installFromSeed(wanted = null) {
     const packages = await seedPackages();
     const saved = lastCheck;
-    lastCheck = { checkedAt: new Date().toISOString(), sources: [], packages, core: null };
+    lastCheck = { checkedAt: new Date().toISOString(), sources: [], packages, core: null, coreSeen: false };
     const changes = [];
     try {
       const present = installedByRef();

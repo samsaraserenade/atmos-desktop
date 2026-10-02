@@ -12,7 +12,7 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const cli = require.resolve('electron-builder/cli.js');
-const args = [cli, '--win', 'nsis', '-c.nsis.artifactName=Atmos Personal Setup ${version}.${ext}', ...process.argv.slice(2)];
+const args = [cli, '--win', 'nsis', '--x64', '-c.nsis.artifactName=Atmos Personal Setup ${version}.${ext}', ...process.argv.slice(2)];
 const result = spawnSync(process.execPath, args, {
   cwd: path.join(__dirname, '..'),
   stdio: 'inherit',

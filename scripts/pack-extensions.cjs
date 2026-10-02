@@ -13,7 +13,11 @@
  * same key: <out> is a source Atmos can install from (a folder, or the same
  * files on a web server). The index also names the Atmos version of the
  * tree it packed ("core": { "version" }, from its package.json), so an
- * older Atmos reading it says "Atmos X is available".
+ * older Atmos reading it says "Atmos X is available", and that version's
+ * Windows installer ("core": { "installer": { file, size, sha256 } }),
+ * copied into <out>, so an installed Atmos updates itself with it
+ * (core/js/core/atmos-update.cjs) after checking it against this signed
+ * hash.
  *
  *   ids      plugin or service ids; default: the released ones in release.json.
  *            --all packs every extension except system ones (they are part of Core).
@@ -31,6 +35,17 @@
  *            never see the change. --same-version allows it. Unreachable:
  *            a warning, and the run carries on.
  *
+ *   --installer  the installer to name in the index (default: --from's
+ *            dist/Atmos Setup <version>.exe, as npm run build writes it). It
+ *            is copied into <out> as GitHub names the asset (Atmos.Setup.
+ *            <version>.exe): attach everything in <out> to the release. With
+ *            --from another folder (a release), a missing installer stops the
+ *            run, before anything is cleared or packed, and so does one
+ *            older than --from's last commit (built before publish:prepare
+ *            wrote it; --any-installer allows it); --no-installer packs
+ *            without one (installed copies then can't update themselves to
+ *            this version).
+ *
  * Extensions with uncommitted changes in --from (a git checkout) are
  * refused, so what is signed is what was pushed; --allow-dirty allows it.
  */
@@ -47,7 +62,12 @@ const fail = message => { console.error(`pack: ${message}`); process.exit(1); };
 const { spawnSync } = require('child_process');
 const { keyIdFor } = require('../core/js/core/extension-signing.cjs');
 const { compareVersions } = require('../core/js/core/extension-version.cjs');
-const FLAGS = { '--all': 'all', '--keep': 'keep', '--untrusted': 'untrusted', '--same-version': 'sameVersion', '--allow-dirty': 'allowDirty' };
+const FLAGS = { '--all': 'all', '--keep': 'keep', '--untrusted': 'untrusted', '--same-version': 'sameVersion', '--allow-dirty': 'allowDirty', '--no-installer': 'noInstaller', '--any-installer': 'anyInstaller' };
+// The Windows installer electron-builder writes (package.json "build.nsis"),
+// and the name GitHub gives it as a release asset (spaces become dots).
+const installerSource = version => `Atmos Setup ${version}.exe`;
+const installerAsset = version => `Atmos.Setup.${version}.exe`;
+const INSTALLER_ASSET = /^Atmos\.Setup\..+\.exe$/;
 
 /** electron-builder style glob (relative to the kind folder) → RegExp. */
 function globToRegExp(glob) {
@@ -91,13 +111,13 @@ function copyBundled(root, kind, id, dest, filters) {
 
 function parseArgs(argv) {
   const args = {
-    ids: [], all: false, keep: false, untrusted: false, sameVersion: false, allowDirty: false, previous: null,
+    ids: [], all: false, keep: false, untrusted: false, sameVersion: false, allowDirty: false, noInstaller: false, anyInstaller: false, previous: null, installer: null,
     key: process.env.ATMOS_SIGNING_KEY || null, out: path.join(repo, 'dist', 'packages'), from: repo,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (FLAGS[arg]) args[FLAGS[arg]] = true;
-    else if (['--key', '--out', '--from', '--previous'].includes(arg)) {
+    else if (['--key', '--out', '--from', '--previous', '--installer'].includes(arg)) {
       if (!argv[i + 1]) fail(`${arg} needs a value`);
       const value = argv[i += 1];
       args[arg.slice(2)] = /^https:\/\//i.test(value) ? value : path.resolve(value);
@@ -150,6 +170,9 @@ async function main() {
     const dirty = uncommitted(args.from, selected);
     if (dirty.length) fail(`uncommitted changes in ${dirty.join(', ')} (commit them, or --allow-dirty)`);
   }
+  // The installer, found (or refused) before anything is cleared or packed.
+  const core = coreOf(args.from);
+  const installerFrom = core ? findInstaller(args, core.version) : null;
   const privateKey = await loadSigningKey(args.key);
   const trustedKeys = loadTrustedKeys([path.join(repo, 'core', 'trusted-keys.json')]);
   const keyId = keyIdFor(crypto.createPublicKey(privateKey));
@@ -160,7 +183,7 @@ async function main() {
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-pack-'));
   fs.mkdirSync(args.out, { recursive: true });
   if (!args.keep) {
-    const old = fs.readdirSync(args.out).filter(file => file.endsWith(PACKAGE_EXTENSION) || file === 'index.json');
+    const old = fs.readdirSync(args.out).filter(file => file.endsWith(PACKAGE_EXTENSION) || file === 'index.json' || INSTALLER_ASSET.test(file));
     for (const file of old) fs.rmSync(path.join(args.out, file));
     if (old.length) console.log(`  cleared ${old.length} file${old.length === 1 ? '' : 's'} from ${path.relative(process.cwd(), args.out) || '.'}`);
   }
@@ -190,9 +213,56 @@ async function main() {
     for (const { out } of written) fs.rmSync(out, { force: true });
     fail(`${problems.join('; ')}. Existing installs only update to a higher version: bump "version" in extension.json (or --same-version). Nothing was written.`);
   }
-  const index = buildIndex(args.out, privateKey, 'Atmos', { core: coreOf(args.from) });
-  console.log(`  ${path.relative(process.cwd(), path.join(args.out, 'index.json'))}  ${index.packages.length} packages, signed`);
+  const installer = installerFrom ? await copyInstaller(args, installerFrom, core.version) : null;
+  const index = buildIndex(args.out, privateKey, 'Atmos', { core: core && installer ? { ...core, installer } : core });
+  console.log(`  ${path.relative(process.cwd(), path.join(args.out, 'index.json'))}  ${index.packages.length} packages${installer ? ' and the installer' : ''}, signed`);
   if (untrusted) console.log('pack: packed with --untrusted: Atmos will refuse these packages unless it trusts the key (--trusted-keys, unpackaged).');
+}
+
+/**
+ * The installer for `version`: --installer, or --from's dist/ (as npm run
+ * build writes it); null without one. A release (--from another folder)
+ * needs it, built after --from's last commit.
+ */
+function findInstaller(args, version) {
+  if (args.noInstaller) return null;
+  const from = args.installer || path.join(args.from, 'dist', installerSource(version));
+  if (!fs.existsSync(from)) {
+    if (args.installer || path.resolve(args.from) !== path.resolve(repo)) {
+      fail(`no installer at ${from}: build it first (npm run build in ${args.from}), or --no-installer (installed copies then can't update themselves to ${version})`);
+    }
+    return null;
+  }
+  const commit = spawnSync('git', ['log', '-1', '--format=%ct'], { cwd: args.from, encoding: 'utf8' });
+  const committedAt = commit.status === 0 ? Number(commit.stdout.trim()) * 1000 : NaN;
+  if (!args.anyInstaller && Number.isFinite(committedAt) && fs.statSync(from).mtimeMs < committedAt) {
+    fail(`${from} is older than the last commit in ${args.from}, so it may not be what was published: build it again (npm run build there), or --any-installer`);
+  }
+  return from;
+}
+
+/**
+ * The installer copied into <out> under its release name, as the index's
+ * "core.installer" entry.
+ */
+async function copyInstaller(args, from, version) {
+  const name = installerAsset(version);
+  const to = path.join(args.out, name);
+  if (path.resolve(from) !== path.resolve(to)) fs.copyFileSync(from, to);
+  const entry = await installerEntry(to);
+  console.log(`  ${path.relative(process.cwd(), to)}  the installer, ${(entry.size / 1024 / 1024).toFixed(1)} MB`);
+  return entry;
+}
+
+/**
+ * The index's "core.installer" for an installer file: its name, size and
+ * SHA-256, and the platform it installs on (npm run build makes an x64
+ * installer: --win nsis --x64).
+ */
+async function installerEntry(file, { platform = 'win32', arch = 'x64' } = {}) {
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return { file: path.basename(file), size: fs.statSync(file).size, sha256: hash.digest('hex'), platform, arch };
 }
 
 /** Selected extensions (as "plugins/<id>") with uncommitted changes in `root`, if it is a git checkout. */
@@ -297,6 +367,6 @@ function buildIndex(dir, privateKey, name = 'Atmos', { core = null } = {}) {
   return index;
 }
 
-module.exports = { bundleFilters, copyBundled, buildIndex };
+module.exports = { bundleFilters, copyBundled, buildIndex, installerEntry, installerAsset };
 
 if (require.main === module) main().catch(error => fail(error.message));

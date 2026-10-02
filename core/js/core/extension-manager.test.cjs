@@ -476,18 +476,33 @@ test('a signed index naming a newer Atmos offers it; an older, equal or malforme
 
   // No "core" entry (an index from before this was added): nothing offered.
   let status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
-  assert.deepEqual(status.core, { current: '0.12.0', available: null });
+  assert.deepEqual(status.core, { current: '0.12.0', available: null, offer: null, seen: false });
 
   w.resignWith({ core: { version: '0.13.0' } });
   status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
-  assert.deepEqual(status.core, { current: '0.12.0', available: '0.13.0' });
+  assert.deepEqual(status.core, {
+    current: '0.12.0', available: '0.13.0', seen: true,
+    offer: { version: '0.13.0', installer: null, source: w.source },
+  });
   assert.equal(status.packages.length, 1, 'the packages are read as before');
+
+  // The installer an index names comes with the offer, from that source;
+  // only its known fields (atmos-update.cjs checks them).
+  const installer = { file: 'Atmos.Setup.0.13.0.exe', size: 1234, sha256: 'a'.repeat(64), platform: 'win32', arch: 'x64', url: 'https://elsewhere.example/x.exe' };
+  w.resignWith({ core: { version: '0.13.0', installer } });
+  status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
+  const { url: _ignored, ...fields } = installer;
+  assert.deepEqual(status.core.offer, { version: '0.13.0', installer: fields, source: w.source });
 
   for (const [version, app] of [['0.12.0', '0.12.0'], ['0.11.0', '0.12.0'], ['not a version', '0.12.0'], ['0.13.0', null]]) {
     w.resignWith({ core: { version } });
     status = await w.start({ appVersion: app }).manager.checkForUpdates();
     assert.equal(status.core.available, null, `index ${version}, Atmos ${app}`);
+    assert.equal(status.core.offer, null, `index ${version}, Atmos ${app}`);
   }
+  // A source that answered with an older "core" counts as seen: nothing newer.
+  w.resignWith({ core: { version: '0.11.0' } });
+  assert.equal((await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates()).core.seen, true);
 });
 
 test('"core" is covered by the index signature', async t => {
@@ -500,5 +515,19 @@ test('"core" is covered by the index signature', async t => {
   fs.writeFileSync(indexFile, JSON.stringify(index));
   const status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
   assert.equal(status.core.available, null);
+  assert.equal(status.core.seen, false, 'a source that failed has said nothing either way');
+  assert.equal(status.sources[0].ok, false);
+});
+
+test('the installer\'s hash is covered by the index signature', async t => {
+  const w = world(t);
+  w.publish('plugin', 'sounds', '1.0.0');
+  w.resignWith({ core: { version: '0.13.0', installer: { file: 'Atmos.Setup.0.13.0.exe', size: 10, sha256: 'a'.repeat(64), platform: 'win32', arch: 'x64' } } });
+  const indexFile = path.join(w.source, 'index.json');
+  const index = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+  index.core.installer.sha256 = 'b'.repeat(64);
+  fs.writeFileSync(indexFile, JSON.stringify(index));
+  const status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
+  assert.equal(status.core.offer, null);
   assert.equal(status.sources[0].ok, false);
 });

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage, utilityProcess } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage, utilityProcess, powerMonitor } = require('electron');
 const fs   = require('fs');
 const path = require('path');
 
@@ -9,6 +9,8 @@ const { createExtensionTrust } = require('./js/core/extension-trust.cjs');
 const { loadTrustedKeys } = require('./js/core/extension-signing.cjs');
 const { resolveDependencies, dependentsOf, normalizeDependencies, refOf } = require('./js/core/extension-dependencies.cjs');
 const { createExtensionManager } = require('./js/core/extension-manager.cjs');
+const { createAtmosUpdater, spawnDetached } = require('./js/core/atmos-update.cjs');
+const { createSourceFetch } = require('./js/core/source-fetch.cjs');
 const { createExtensionStateStore } = require('./js/core/extension-state.cjs');
 const { BASELINE_BROWSER, reachOf, reaches, exportDetails, describeExports, sharingRisk } = require('./js/core/extension-permissions.cjs');
 const { createLocationGate } = require('./js/core/location-gate.cjs');
@@ -347,6 +349,9 @@ function createWindow() {
     clearTimeout(saveTimer);
     _saveWindowState(win);
   });
+  // Windows is shutting down or signing out: no installer is started on
+  // the way out (it could be stopped halfway).
+  win.on('session-end', () => { _sessionEnding = true; });
 
   win.webContents.on('before-input-event', (event, input) => {
     // DevTools only when running from source, or started with --devtools:
@@ -688,20 +693,14 @@ function _usedBefore(userData) {
     .some(name => fs.existsSync(path.join(userData, name)));
 }
 
+// Downloads from sources (indexes, packages, the Atmos installer): Atmos's
+// own schemes bypassed, https kept through every redirect, bounded, and
+// stopped if they stall (source-fetch.cjs).
+const _sources = createSourceFetch({ net });
+
 /** A download for a web source, refused past maxBytes. */
-async function _fetchSourceFile(url, maxBytes) {
-  const response = await net.fetch(url, { cache: 'no-store', redirect: 'follow' });
-  if (!response.ok) throw new Error(`${new URL(url).pathname.split('/').pop()}: HTTP ${response.status}`);
-  const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > maxBytes) throw new Error('The file is too large');
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.length;
-    if (size > maxBytes) throw new Error('The file is too large');
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
+function _fetchSourceFile(url, maxBytes) {
+  return _sources.fetchBuffer(url, maxBytes);
 }
 
 const _manager = createExtensionManager({
@@ -720,6 +719,141 @@ const _manager = createExtensionManager({
   builtIn: (kind, id) => _BUILT_IN[kind]?.has(id) === true,
   appVersion: app.getVersion(),
 });
+
+// ── Atmos updating itself (atmos-update.cjs) ─────────────────────────────
+
+let _sessionEnding = false;     // Windows is shutting down: install nothing on the way out
+let _installOnQuit = false;     // "Restart to update": install as Atmos quits, and start it again
+let _relaunching = false;       // Atmos restarts itself (app.relaunch): install nothing on the way out
+let _started = false;           // the window is up (a second instance quits before it)
+
+/**
+ * Unpackaged, --update-test-install=<file> (end-to-end runs) stands in for
+ * an installed copy: the installer isn't run, what would have run is
+ * written to <file>.
+ */
+function _updateTestFile() {
+  if (app.isPackaged) return null;
+  const flag = process.argv.find(arg => arg.startsWith('--update-test-install='));
+  return flag ? path.resolve(flag.slice('--update-test-install='.length)) : null;
+}
+
+// electron-builder's registry key for Atmos's install (Software\<APP_GUID>,
+// in HKCU for this user, HKLM for every user): UUID v5 of the appId
+// "com.hashy.atmosphere" in its namespace (atmos-update.test.cjs checks it).
+const _INSTALL_GUID = '61a4a7c5-b328-533c-af00-52ce914e709f';
+
+/**
+ * Whether the installer would ask Windows' permission: the same test it
+ * makes (assistedInstaller.nsh, installer.nsi), an install for every user
+ * recorded in HKLM. If the registry can't be read, anything outside local
+ * app data counts, so Atmos never surprises you with a prompt on quit.
+ */
+function _installedForEveryUser(dir) {
+  const { spawnSync } = require('child_process');
+  // Windows' own reg.exe, by its full path (a bare name is looked for in
+  // the working folder first).
+  const reg = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
+  const query = spawnSync(reg, ['query', `HKLM\\Software\\${_INSTALL_GUID}`, '/v', 'InstallLocation', '/reg:64'], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
+  if (query.status === 0) return true;
+  // Not found (or not readable): still counted as for every user outside
+  // local app data, where a per-user install goes.
+  const local = process.env.LOCALAPPDATA;
+  const relative = local ? path.relative(path.resolve(local), path.resolve(dir)) : '..';
+  return !relative || relative.startsWith('..') || path.isAbsolute(relative);
+}
+
+/**
+ * How this copy of Atmos is installed, for updating itself: an NSIS
+ * install on Windows (its uninstaller beside Atmos.exe), for this user or
+ * for every user (asked only when it matters, then remembered). Null when
+ * it can't update itself: running from source, the portable build,
+ * another platform.
+ */
+function _updateInstall() {
+  if (!app.isPackaged) return _updateTestFile() ? { perMachine: false } : null;
+  if (process.platform !== 'win32' || process.env.PORTABLE_EXECUTABLE_FILE) return null;
+  const dir = path.dirname(process.execPath);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return null; }
+  if (!names.some(name => /^Uninstall .+\.exe$/i.test(name))) return null;
+  let perMachine = null;
+  return { get perMachine() { if (perMachine === null) perMachine = _installedForEveryUser(dir); return perMachine; } };
+}
+
+/**
+ * Where installers are downloaded: local app data on Windows (not the
+ * roaming user data, for a 100 MB file; not "atmos-updater", which is
+ * electron-builder's own), user data elsewhere.
+ */
+function _updateDownloadDir() {
+  const base = process.platform === 'win32' && app.isPackaged && process.env.LOCALAPPDATA ? process.env.LOCALAPPDATA : app.getPath('userData');
+  return path.join(base, 'atmos-updates');
+}
+
+/** Start the installer on its own, so it outlives Atmos. Throws if it can't start. */
+function _spawnInstaller(file, args) {
+  const testFile = _updateTestFile();
+  if (testFile) {
+    fs.writeFileSync(testFile, JSON.stringify({ file, args, at: new Date().toISOString() }));
+    return;
+  }
+  spawnDetached(file, args);
+}
+
+const _updater = createAtmosUpdater({
+  appVersion: app.getVersion(),
+  stateFile: path.join(app.getPath('userData'), 'atmos-update.json'),
+  downloadDir: _updateDownloadDir(),
+  install: _updateInstall(),
+  download: (url, file, options) => _sources.downloadToFile(url, file, options),
+  spawnInstaller: _spawnInstaller,
+  onChange: () => { if (_started) _broadcastManager(); },
+});
+
+/**
+ * "Restart to update": the installer must still match (said at once if
+ * not); Atmos then quits as usual, its pages closing first, and the
+ * installer starts once the windows are gone (will-quit) and starts Atmos
+ * again.
+ */
+function _quitToInstall() {
+  _updater.checkReady();
+  _installOnQuit = true;
+  console.log(`[update] quitting to install Atmos ${_updater.state().version}`);
+  setImmediate(() => app.quit());
+}
+
+/**
+ * An update downloaded two days ago and still not installed (Atmos left
+ * open, Windows shut down around it): one notification, which opens
+ * Settings → Extensions.
+ */
+const _nudges = new Set(); // kept referenced until closed, so clicks arrive
+function _nudgeAboutUpdate() {
+  if (!Notification.isSupported()) return;
+  const version = _updater.nudgeDue();
+  if (!version) return;
+  const notification = new Notification({
+    title: `Atmos ${version} is ready to install`,
+    body: _updater.state().perMachine
+      ? 'Restart Atmos to update it. It brings Chromium\'s latest security fixes to Atmos Browser.'
+      : 'It installs when you quit Atmos, or restart it now. It brings Chromium\'s latest security fixes to Atmos Browser.',
+  });
+  notification.on('click', () => {
+    const win = _atmosWindows()[0];
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    win.webContents.send('extensions:show-manager');
+  });
+  const forget = () => _nudges.delete(notification);
+  notification.on('close', forget);
+  notification.on('failed', forget);
+  _nudges.add(notification);
+  notification.show();
+}
 
 /**
  * Where "Atmos X is available" sends you: Core's own setting
@@ -853,9 +987,18 @@ function _managerSummary(status = _manager.status()) {
     else if (deps && !deps.ok && trust?.loadable) problems.push({ kind: entry.kind, id: entry.id, name, reason: deps.problems[0] });
     else if (_moveProblems.has(refOf(entry))) problems.push({ kind: entry.kind, id: entry.id, name, reason: _moveProblems.get(refOf(entry)) });
   }
+  // A newer Atmos: the updater's offer (it outlasts a check that couldn't
+  // reach the source), else what the last check found.
+  const update = _updater.state();
+  const newer = update.version || status.core?.available || null;
   return {
     updates: status.updates, pending: status.pending.length, problems, approvals, checkedAt: status.checkedAt,
-    atmosUpdate: status.core?.available ? { version: status.core.available, current: status.core.current, download: _atmosDownloadUrl() !== null } : null,
+    atmosUpdate: newer ? { version: newer, current: app.getVersion(), download: _atmosDownloadUrl() !== null } : null,
+    // Atmos updating itself: the setting, and where a newer version is.
+    atmos: update,
+    // Whether the last check heard from a source that names Atmos versions
+    // (a folder of packages alone doesn't say whether Atmos is current).
+    reached: !status.checkedAt || status.core?.seen === true,
   };
 }
 
@@ -902,6 +1045,11 @@ async function _checkForUpdates() {
   try {
     const status = await _manager.checkForUpdates();
     _lastUpdateCheck = Date.now();
+    // What the sources name (with "Update Atmos automatically", downloaded
+    // at once). An offer stands until its own source answers without it,
+    // so being offline changes nothing.
+    void _updater.consider(status.core?.offer || null, { answered: (status.sources || []).filter(source => source.ok).map(source => source.location) })
+      .then(() => _nudgeAboutUpdate(), () => {});
     return _broadcastManager(status);
   } catch (error) {
     console.warn('[extensions] update check failed:', error.message);
@@ -929,6 +1077,20 @@ _managerHandler('cancel', (kind, id) => _broadcastManager(_manager.cancel(kind, 
 _managerHandler('add-source', async location => { _manager.addSource(location); return _checkForUpdates(); });
 _managerHandler('remove-source', async location => { _manager.removeSource(location); return _checkForUpdates(); });
 _managerHandler('take-data-cleanup', () => _dataCleanup.splice(0));
+// Atmos updating itself: download when asked (automatic updates off), install
+// now, and the setting.
+_managerHandler('atmos-update-download', async () => {
+  await _updater.download();
+  return _broadcastManager();
+});
+_managerHandler('atmos-update-install', () => {
+  _quitToInstall();
+  return _broadcastManager();
+});
+_managerHandler('atmos-update-auto', on => {
+  _updater.setAuto(on === true);
+  return _broadcastManager();
+});
 _managerHandler('open-atmos-download', async () => {
   const url = _atmosDownloadUrl();
   if (!url) throw new Error('No download page is set for Atmos');
@@ -1314,8 +1476,22 @@ _page.handle('extensions:revoke', async (_event, kind, id) => {
 });
 
 _page.handle('extensions:restart', () => {
+  // Any restart Atmos makes itself (Restart to apply, the window effects'
+  // restart, the first start's Install and restart): an Atmos update that
+  // would install on quit goes in now instead, and the installer starts
+  // Atmos again; the extensions' changes apply then.
+  if (_updater.wouldInstallOnQuit()) {
+    try {
+      _quitToInstall();
+      return;
+    } catch (error) {
+      console.warn('[update] restarting without the update:', error.message);
+    }
+  }
   // quit() (not exit()) closes windows normally, so the renderer's unload
-  // handlers flush pending saves and the window state is written.
+  // handlers flush pending saves and the window state is written. Nothing
+  // installs on the way out: the installer would close the new Atmos.
+  _relaunching = true;
   app.relaunch();
   app.quit();
 });
@@ -1877,6 +2053,11 @@ if (process.platform === 'win32') app.setAppUserModelId('com.hashy.atmosphere');
 
 if (hasInstanceLock) app.whenReady().then(async () => {
   console.log('[main] userData:', app.getPath('userData'));
+  // How the last Atmos update went (atmos-update.cjs).
+  const lastUpdate = _updater.startup();
+  if (lastUpdate.installed) console.log(`[update] updated to Atmos ${lastUpdate.installed.version} from ${lastUpdate.installed.from}`);
+  if (lastUpdate.failed) console.warn(`[update] Atmos ${lastUpdate.failed} didn't install`);
+  powerMonitor.on('shutdown', () => { _sessionEnding = true; });
   // Upgrading from an Atmos that bundled every extension: what came with it
   // is installed from the packages that come with this one, at once, so
   // nothing disappears (settings and data are kept by id). A first start
@@ -1959,19 +2140,43 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   // Atmos Browser's sessions are set up when its first page attaches
   // (web-host.cjs configureSessions), so there are none without it.
   createWindow();
+  _started = true;
   _watchDeveloperFolders();
   void _cleanUpSharedOriginStorage();
-  // Check the sources soon after start and twice a day; this only reads
-  // their indexes (nothing downloads until Install or Update is pressed).
+  // Check the sources soon after start and twice a day. Extensions only
+  // download when Install or Update is pressed; a newer Atmos downloads by
+  // itself with "Update Atmos automatically" (atmos-update.cjs). Hourly, a
+  // reminder for an Atmos update left waiting two days.
   if (upgrading && !_seedSources().length) void _downloadForUpgrade();
   setTimeout(() => void _checkForUpdates(), 5000);
   setInterval(() => {
     if (!_lastUpdateCheck || Date.now() - _lastUpdateCheck > 12 * 60 * 60 * 1000) void _checkForUpdates();
+    else _nudgeAboutUpdate();
   }, 60 * 60 * 1000).unref?.();
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// Like Chrome: a downloaded Atmos update installs as Atmos quits (when
+// updating automatically, on a per-user install), or for "Restart to
+// update" (and starts Atmos again). will-quit comes once the windows have
+// closed, browser pages' last events included (atmos-update.cjs).
+app.on('will-quit', () => {
+  if (!_started || _sessionEnding) return;
+  if (_installOnQuit) {
+    try {
+      _updater.installNow();
+      console.log(`[update] installing Atmos ${_updater.state().version}; it starts again afterwards`);
+    } catch (error) {
+      console.warn('[update] not installed, starting again as before:', error.message);
+      app.relaunch();
+    }
+    return;
+  }
+  if (_relaunching) return;
+  if (_updater.installOnQuit()) console.log(`[update] installing Atmos ${_updater.state().version} as Atmos quits`);
 });
 
 app.on('activate', () => {

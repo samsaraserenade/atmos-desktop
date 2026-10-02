@@ -482,7 +482,13 @@ function describeExtensionAttention(summary) {
       ? `${summary.problems[0].name} didn't load`
       : `${summary.problems.length} extensions didn't load`);
   }
-  if (summary?.atmosUpdate) lines.push(`Atmos ${summary.atmosUpdate.version} is available`);
+  if (summary?.atmosUpdate) {
+    const { version } = summary.atmosUpdate;
+    const self = summary.atmos?.version === version ? summary.atmos : null;
+    if (self?.phase === 'ready') lines.push(`Atmos ${version} is ready: restart to update`);
+    else if (self?.phase === 'downloading') lines.push(`Downloading Atmos ${version}`);
+    else lines.push(`Atmos ${version} is available`);
+  }
   if (summary?.updates) lines.push(`${summary.updates} update${summary.updates === 1 ? '' : 's'} available`);
   if (summary?.pending) lines.push('Restart to apply changes');
   return lines;

@@ -1348,6 +1348,79 @@ function _leftUnused(extension, installed, pendingByKey) {
   return out;
 }
 
+/**
+ * Settings → Extensions, the Atmos section. A newer version comes from a
+ * source's signed index; an installed copy on Windows downloads it, checks
+ * it and installs it (atmos-update.cjs; its offer outlasts a check that
+ * couldn't reach the source), any other copy offers the download page from
+ * Core's own settings (the main process opens it).
+ */
+function _atmosSectionHtml(summary, status) {
+  const atmos = summary.atmos || {};
+  const offer = summary.atmosUpdate;
+  const current = escapeHtml(atmos.current || offer?.current || '');
+  const mine = !!atmos.version && atmos.version === offer?.version;
+  const page = offer?.download ? _button('atmos-page', 'Download page', { key: 'atmos-page', busyLabel: 'Opening…' }) : '';
+  let name;
+  let detail;
+  let actions = '';
+  if (!offer) {
+    name = `Atmos ${current}`;
+    const updated = atmos.justInstalled ? `Updated from ${escapeHtml(atmos.justInstalled.from || 'an older version')}. ` : '';
+    const firstError = (status.sources || []).find(source => source.error)?.error;
+    if (!status.checkedAt) detail = `${updated}Not checked yet`;
+    else if (summary.reached === false) detail = `${updated}Couldn't check for a newer version${firstError ? `: ${escapeHtml(firstError)}` : ''}`;
+    else detail = `${updated}Up to date`;
+  } else {
+    const version = escapeHtml(offer.version);
+    if (mine && atmos.phase === 'ready') {
+      name = `Atmos ${version} is ready to install`;
+      if (atmos.startFailed) detail = `The installer couldn't be started last time: ${escapeHtml(atmos.startFailed)}`;
+      else if (atmos.failedBefore) detail = `The last try to install it didn't finish; you have ${current}.`;
+      else if (atmos.perMachine) detail = 'Restart to update. Atmos is installed for every user, so Windows asks first.';
+      else if (atmos.installsOnQuit) detail = 'It installs when you quit Atmos, or restart now.';
+      else detail = `Restart to install it. You have ${current}.`;
+      const again = atmos.failedBefore || !!atmos.startFailed;
+      actions = _button('install-atmos', again ? 'Try again' : 'Restart to update', { key: 'atmos', primary: true, busyLabel: 'Restarting…' })
+        + (again ? page : '');
+    } else if (mine && atmos.phase === 'downloading') {
+      const progress = atmos.progress;
+      if (progress?.total) {
+        const percent = Math.floor((progress.bytes / progress.total) * 100);
+        name = `Downloading Atmos ${version}…`;
+        detail = `${percent}% of ${escapeHtml(_formatSize(progress.total))}. You have ${current}.`;
+      } else {
+        name = `Checking Atmos ${version}…`;
+        detail = `The download, against the signed index. You have ${current}.`;
+      }
+    } else if (mine && atmos.phase === 'error') {
+      name = `Atmos ${version} couldn't be downloaded`;
+      detail = escapeHtml(atmos.error || 'Something went wrong');
+      actions = _button('get-atmos', 'Try again', { key: 'atmos', primary: true, busyLabel: 'Downloading…' }) + page;
+    } else if (mine && atmos.installable) {
+      name = `Atmos ${version} is available`;
+      detail = `You have ${current}. Atmos downloads it, checks it against the signed index, then installs it when you restart.`;
+      actions = _button('get-atmos', 'Download', { key: 'atmos', primary: true, busyLabel: 'Downloading…' });
+    } else {
+      name = `Atmos ${version} is available`;
+      detail = `You have ${current || 'an older version'}. Download the new installer and run it; your settings and extensions stay.`;
+      actions = offer.download ? _button('download-atmos', 'Download', { key: 'atmos', primary: true, busyLabel: 'Opening…' }) : '';
+    }
+  }
+  const rows = [_managerRow({ key: 'atmos', name, detail, actions, extra: _managerErrorHtml('atmos-page') })];
+  if (atmos.canInstall) {
+    rows.push(_managerRow({
+      key: 'atmos-auto',
+      name: 'Update Atmos automatically',
+      detail: atmos.perMachine
+        ? 'Downloads new versions in the background; Restart to update installs them'
+        : 'Downloads new versions in the background and installs them when you quit',
+      actions: _toggleHtml(atmos.auto !== false, 'Update Atmos automatically'),
+    }));
+  }
+  return `<div class="sm-manager-heading">Atmos</div><div class="sm-card-group">${rows.join('')}</div>`;
+}
+
 function _renderExtensionManagerPage() {
   _headerEl.classList.add('sm-no-search');
   if (!window.atmosCore?.extensionManager) {
@@ -1366,7 +1439,7 @@ function _renderExtensionManagerPage() {
   // Header: when the sources were last checked, and restart when changes wait.
   sections.push(`
     <div class="sm-extension-toolbar">
-      <span>${status.checkedAt ? `Checked ${escapeHtml(_formatWhen(status.checkedAt))}` : 'Not checked yet'}. Updates are only downloaded when you press Update.</span>
+      <span>${status.checkedAt ? `Checked ${escapeHtml(_formatWhen(status.checkedAt))}` : 'Not checked yet'}. Extension updates are only downloaded when you press Update.</span>
       <span class="sm-manager-actions">
         ${status.pending.length ? '<button type="button" class="sm-restart-button" data-manager-action="restart">Restart to apply</button>' : ''}
         ${_button('check', 'Check for updates', { key: 'check', busyLabel: 'Checking…' })}
@@ -1375,19 +1448,9 @@ function _renderExtensionManagerPage() {
     </div>
     ${_managerErrorHtml('check')}`);
 
-  // A newer Atmos: the version from a source's signed index, the download
-  // page from Core's own settings (the main process opens it).
-  if (summary.atmosUpdate) {
-    const { version, current, download } = summary.atmosUpdate;
-    sections.push(`<div class="sm-manager-heading">Atmos</div><div class="sm-card-group">`);
-    sections.push(_managerRow({
-      key: 'atmos',
-      name: `Atmos ${escapeHtml(version)} is available`,
-      detail: `You have ${escapeHtml(current || 'an older version')}. Download the new installer and run it; your settings and extensions stay.`,
-      actions: download ? _button('download-atmos', 'Download', { key: 'atmos', primary: true, busyLabel: 'Opening…' }) : '',
-    }));
-    sections.push('</div>');
-  }
+  // Atmos itself: its version, a newer one (the version from a source's
+  // signed index), and updating itself where this copy can.
+  sections.push(_atmosSectionHtml(summary, status));
 
   // Community extensions copied in by hand wait for approval without
   // showing anything; say which, and take the user to each one's card.
@@ -1524,6 +1587,11 @@ function _renderExtensionManagerPage() {
   _listEl.innerHTML = sections.join('');
   _applyView();
 
+  _listEl.querySelector('.sm-manager-row[data-key="atmos-auto"] input[type="checkbox"]')?.addEventListener('change', event => {
+    const on = event.target.checked;
+    _managerRequest('atmos-auto', api => api.setAtmosAutoUpdate(on));
+  });
+
   _listEl.querySelector('.sm-manager-add-source')?.addEventListener('submit', event => {
     event.preventDefault();
     _listEl.querySelector('.sm-manager-add-source [data-manager-action="add-source"]')?.click();
@@ -1539,6 +1607,9 @@ function _renderExtensionManagerPage() {
     if (action === 'review') return openExtensionCard(kind, id);
     if (action === 'check') return _managerRequest('check', api => api.checkForUpdates());
     if (action === 'download-atmos') return _managerRequest('atmos', api => api.openAtmosDownload());
+    if (action === 'atmos-page') return _managerRequest('atmos-page', api => api.openAtmosDownload());
+    if (action === 'get-atmos') return _managerRequest('atmos', api => api.downloadAtmosUpdate());
+    if (action === 'install-atmos') return _managerRequest('atmos', api => api.installAtmosUpdate());
     if (action === 'install') return _managerRequest(key, api => api.install(kind, id));
     if (action === 'install-optional') {
       const target = button.closest('[data-target]')?.dataset.target || '';
