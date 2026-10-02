@@ -28,12 +28,51 @@ function openSettings() {
     .catch(error => console.warn('[settings] settings menu failed to load:', error.message));
 }
 
+let footerVersion = null;  // this Atmos's version, once known
+let footerUpdate = null;   // what the footer says about a newer one, if any
+
+function renderFooterVersion() {
+  const element = document.getElementById('sidebar-footer-version');
+  if (!element) return;
+  const text = footerVersion ? `Version ${footerVersion}` : 'Version —';
+  element.textContent = footerUpdate ? `${text} · ${footerUpdate.short}` : text;
+  element.classList.toggle('update', !!footerUpdate);
+  element.title = footerUpdate ? footerUpdate.long : '';
+  if (footerUpdate) {
+    element.setAttribute('role', 'button');
+    element.tabIndex = 0;
+  } else {
+    element.removeAttribute('role');
+    element.removeAttribute('tabindex');
+  }
+}
+
 function loadSidebarFooterVersion() {
-  const version = document.getElementById('sidebar-footer-version');
-  if (!version) return;
   Promise.resolve(window.atmosCore?.getAppVersion?.())
-    .then(appVersion => { version.textContent = appVersion ? `Version ${appVersion}` : 'Version —'; })
-    .catch(() => { version.textContent = 'Version —'; });
+    .then(appVersion => { footerVersion = appVersion || null; })
+    .catch(() => { footerVersion = null; })
+    .finally(renderFooterVersion);
+  const element = document.getElementById('sidebar-footer-version');
+  const open = () => {
+    if (!footerUpdate) return;
+    import('./settings-menu.js')
+      .then(module => module.openAtmosSettings())
+      .catch(error => console.warn('[settings] settings menu failed to load:', error.message));
+  };
+  element?.addEventListener('click', open);
+  element?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+  });
+}
+
+/** A newer Atmos, said beside the version in the footer; clicking it opens Settings → Atmos. */
+function describeAtmosUpdate(summary) {
+  if (!summary?.atmosUpdate) return null;
+  const { version } = summary.atmosUpdate;
+  const self = summary.atmos?.version === version ? summary.atmos : null;
+  if (self?.phase === 'ready') return { short: `${version} ready`, long: `Atmos ${version} is ready: restart to update` };
+  if (self?.phase === 'downloading') return { short: `downloading ${version}`, long: `Downloading Atmos ${version}` };
+  return { short: `${version} available`, long: `Atmos ${version} is available` };
 }
 
 function panel() { return document.getElementById('settings-panel-main'); }
@@ -482,13 +521,6 @@ function describeExtensionAttention(summary) {
       ? `${summary.problems[0].name} didn't load`
       : `${summary.problems.length} extensions didn't load`);
   }
-  if (summary?.atmosUpdate) {
-    const { version } = summary.atmosUpdate;
-    const self = summary.atmos?.version === version ? summary.atmos : null;
-    if (self?.phase === 'ready') lines.push(`Atmos ${version} is ready: restart to update`);
-    else if (self?.phase === 'downloading') lines.push(`Downloading Atmos ${version}`);
-    else lines.push(`Atmos ${version} is available`);
-  }
   if (summary?.updates) lines.push(`${summary.updates} update${summary.updates === 1 ? '' : 's'} available`);
   if (summary?.pending) lines.push('Restart to apply changes');
   return lines;
@@ -503,9 +535,15 @@ function showExtensionAttention(summary) {
   extensionsButton.setAttribute('aria-label', label);
 }
 
-window.atmosCore?.extensionManager?.onChange?.(payload => showExtensionAttention(payload?.summary));
+function showManagerSummary(summary) {
+  showExtensionAttention(summary);
+  footerUpdate = describeAtmosUpdate(summary);
+  renderFooterVersion();
+}
+
+window.atmosCore?.extensionManager?.onChange?.(payload => showManagerSummary(payload?.summary));
 Promise.resolve(window.atmosCore?.extensionManager?.status?.())
-  .then(payload => showExtensionAttention(payload?.summary))
+  .then(payload => showManagerSummary(payload?.summary))
   .catch(() => {});
 
 loadSidebarFooterVersion();
@@ -536,6 +574,14 @@ document.addEventListener('pointerup', event => {
 document.addEventListener('pointercancel', event => {
   if (middleClick?.pointerId === event.pointerId) middleClick = null;
 }, true);
+
+// The mouse back button does nothing in Atmos's own page (it used to switch
+// panels). Chromium treats it as "go back" unless mousedown is cancelled,
+// which would take the page or a frame back through its history. Pages in
+// Atmos Browser are their own web contents and keep it.
+for (const type of ['mousedown', 'mouseup', 'auxclick']) {
+  document.addEventListener(type, event => { if (event.button === 3) event.preventDefault(); });
+}
 
 sections().forEach(attachSidebarSection);
 onStateLoaded(() => {

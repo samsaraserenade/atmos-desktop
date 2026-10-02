@@ -77,7 +77,7 @@ export function createOverlays({ engine, root, pageEl, onLayout, focusPage }) {
       h('div', { class: 'br-prompt-title' }, h('strong', { text: siteName(request.origin) }), ' wants to'),
       h('ul', { class: 'br-prompt-list' }, ...request.permissions.map(name => h('li', {}, icon(PERMISSION_ICONS[name] || 'globe'), PERMISSION_WORDS[name] || name))),
       tab.private ? h('div', { class: 'br-prompt-note', text: 'Your answer lasts until the last private tab closes.' })
-        : h('div', { class: 'br-prompt-note', text: 'Remembered for this site. Change it in Settings → Appearance → Atmos Browser.' }),
+        : h('div', { class: 'br-prompt-note', text: 'Remembered for this site. Change it in Settings → Browser.' }),
       h('div', { class: 'br-prompt-buttons' }, block, allow));
     guardedClick(permissionGuard, block, () => { void engine.answerPermission(tab.id, request.requestId, false); });
     guardedClick(permissionGuard, allow, () => { void engine.answerPermission(tab.id, request.requestId, true); });

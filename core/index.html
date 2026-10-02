@@ -247,6 +247,9 @@ html[data-sidebar-shadow="hidden"] #settings-drawer.open { box-shadow: none; }
 .sidebar-footer-brand { min-width:0; line-height:1; }
 .sidebar-footer-name { font-size:.72rem; font-weight:650; letter-spacing:.16em; color:rgba(var(--ink-rgb),.82); }
 .sidebar-footer-version { margin-top:5px; font-size:.52rem; letter-spacing:.06em; color:rgba(var(--ink-rgb),.32); }
+.sidebar-footer-version.update { color:rgb(129,140,248); cursor:pointer; }
+.sidebar-footer-version.update:hover { color:rgb(165,180,252); }
+.sidebar-footer-version.update:focus-visible { outline:1px solid rgba(129,140,248,.6); outline-offset:2px; border-radius:3px; }
 .sidebar-footer-actions { display:flex; align-items:center; gap:2px; }
 #sidebar-footer-settings, #sidebar-footer-extensions {
   width:30px; height:30px; flex:0 0 30px;
@@ -433,6 +436,15 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
 /* Home has no search, and the close button now lives in the sidebar —
    nothing left to show in the header at all. */
 .sm-main-header.sm-no-search { display: none; }
+/* A page's own buttons beside the search box (Settings → Extensions). */
+.sm-main-header { gap: 8px; }
+.sm-main-header .sm-search { flex: 1; min-width: 0; }
+.sm-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.sm-header-actions:empty { display: none; }
+.sm-header-actions .sm-trust-secondary, .sm-header-actions .sm-restart-button { height: 30px; padding: 0 11px; margin: 0; }
+.sm-header-actions .sm-view-toggle button { height: 28px; position: relative; }
+.sm-view-toggle button:disabled { opacity: .35; cursor: default; }
+.sm-header-actions .sm-view-toggle .sm-source-dot { position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; box-shadow: none; }
 #settings-menu-close {
   background: none; border: none; color: rgba(var(--ink-rgb),.4);
   font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 2px 6px;
@@ -587,6 +599,8 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .atmos-extension-icon { display:inline-block; width:16px; height:16px; flex-shrink:0; background:currentColor; -webkit-mask:var(--atmos-extension-icon) center / contain no-repeat; mask:var(--atmos-extension-icon) center / contain no-repeat; }
 .sm-extension-trust { padding: 0 8px 0 50px; }
 .sm-extension-trust:empty { display: none; }
+/* Nothing to show under a card but its closed details: nothing below the row, so it stays centred. */
+.sm-extension-trust:not(:has(> :not(details.sm-permissions:not([open])))) { display: none; }
 .sm-permissions { margin: -6px 0 8px; font-size: .62rem; color: rgba(var(--ink-rgb),.4); }
 .sm-permissions summary { cursor: pointer; width: max-content; color: rgba(var(--ink-rgb),.34); }
 .sm-permissions summary:hover { color: rgba(var(--ink-rgb),.6); }
@@ -603,6 +617,7 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-manager-also { margin-top: 4px; color: rgba(var(--ink-rgb),.55); }
 .sm-manager-subheading { display:flex; align-items:center; gap:6px; margin:8px 8px 2px; font-size:.62rem; color:rgba(var(--ink-rgb),.5); }
 .sm-manager-subheading span { font-size:.56rem; color:rgba(var(--ink-rgb),.28); font-variant-numeric:tabular-nums; }
+.sm-extension-card .sm-manager-actions { gap:10px; }
 .sm-manager-needs { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:5px; }
 .sm-manager-needs-label { font-size:.56rem; letter-spacing:.04em; color:rgba(var(--ink-rgb),.35); margin-right:1px; }
 .sm-manager-needs-label:not(:first-child) { margin-left:6px; }
@@ -615,14 +630,14 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-as-grid .sm-card-group { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; padding:4px 8px 8px; }
 .sm-as-grid .sm-card-group > .sm-card { border:1px solid rgba(var(--ink-rgb),.08); border-radius:10px; display:flex; flex-direction:column; }
 .sm-as-grid .sm-card-group > .sm-card:last-child { border-bottom:1px solid rgba(var(--ink-rgb),.08); }
-.sm-as-grid .sm-extension-card > .sm-card-main { height:auto; flex-wrap:wrap; align-items:flex-start; padding:12px 12px 6px; gap:10px; }
+.sm-as-grid .sm-extension-card > .sm-card-main { height:auto; min-height:58px; align-items:center; padding:12px; gap:10px; }
 .sm-as-grid .sm-extension-card > .sm-card-main .sm-card-text { flex:1 1 0; }
 .sm-as-grid .sm-extension-card .sm-card-detail { white-space:normal; }
 .sm-as-grid .sm-extension-card .sm-card-name { white-space:normal; line-height:1.35; } /* the badge goes under a long name, not off the card */
-.sm-as-grid .sm-extension-card .sm-extension-trust { padding:0 12px 10px; }
+.sm-as-grid .sm-extension-card .sm-extension-trust { padding:0 12px 12px; }
+.sm-as-grid .sm-extension-card .sm-manager-actions { margin-top:0; align-self:center; }
 .sm-as-grid .sm-extension-card .sm-permissions { margin-left:0 !important; }
 .sm-as-grid .sm-card-group:has(.sm-extension-card) { align-items:start; }
-.sm-as-grid .sm-extension-card .sm-extension-trust { margin-top:2px; }
 .sm-as-grid .sm-card-group:has(.sm-widget-card) { grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); }
 .sm-as-grid .sm-widget-card > .sm-card-main { height:auto; min-height:52px; padding:8px 10px; }
 .sm-as-grid .sm-widget-card .sm-card-name { white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; line-height:1.3; }
@@ -640,18 +655,28 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-manager-optional > span { flex: 1; min-width: 0; }
 .sm-manager-optional .sm-trust-error { flex-basis: 100%; margin: 0; }
 .sm-trust-note.sm-manager-problem, .sm-trust-note.sm-manager-empty { margin: 2px 8px 6px; }
-.sm-manager-source { display: flex; align-items: center; gap: 10px; padding: 6px 8px; font-size: .64rem; color: rgba(var(--ink-rgb),.6); }
-.sm-manager-source-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sm-manager-source-state { flex-shrink: 0; color: rgba(var(--ink-rgb),.35); }
-.sm-manager-source.sm-trust-alert .sm-manager-source-state { color: rgb(248,113,113); }
-.sm-manager-add-source { display: flex; gap: 8px; padding: 6px 8px; }
+.sm-source-list { display:flex; flex-direction:column; gap:6px; padding:4px 8px 8px; }
+.sm-manager-source { border:1px solid rgba(var(--ink-rgb),.08); border-radius:10px; background:rgba(var(--ink-rgb),.02); }
+.sm-manager-source:last-child { border-bottom:1px solid rgba(var(--ink-rgb),.08); }
+.sm-manager-source > .sm-card-main { cursor:default; gap:12px; padding:0 12px; }
+.sm-manager-source .sm-card-detail { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sm-source-tag { margin-left:6px; padding:1px 6px; border-radius:999px; font-size:.54rem; letter-spacing:.02em; color:rgba(var(--ink-rgb),.45); background:rgba(var(--ink-rgb),.06); vertical-align:1px; }
+.sm-source-state { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; font-size:.62rem; color:rgba(var(--ink-rgb),.5); }
+.sm-source-state.error { color:rgb(248,113,113); cursor:help; }
+.sm-source-dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:rgba(var(--ink-rgb),.25); }
+.sm-source-dot.ok { background:var(--color-positive, #34d399); box-shadow:0 0 0 3px rgba(52,211,153,.12); }
+.sm-source-dot.error { background:rgb(248,113,113); box-shadow:0 0 0 3px rgba(248,113,113,.12); }
+.sm-source-add { display:flex; align-items:center; gap:12px; width:100%; padding:8px 12px; border:1px dashed rgba(var(--ink-rgb),.14); border-radius:10px; background:transparent; color:rgba(var(--ink-rgb),.45); font:inherit; font-size:.68rem; cursor:pointer; text-align:left; transition:color .15s, border-color .15s, background .15s; }
+.sm-source-add:hover { color:rgba(var(--ink-rgb),.8); border-color:rgba(var(--ink-rgb),.28); background:rgba(var(--ink-rgb),.03); }
+.sm-source-add .sm-icon, .sm-manager-add-source .sm-icon { width:30px; height:30px; }
+.sm-manager-add-source { display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid rgba(129,140,248,.3); border-radius:10px; background:rgba(var(--ink-rgb),.02); }
 .sm-manager-add-source input {
-  flex: 1; min-width: 0; padding: 6px 9px; border-radius: 6px;
+  flex: 1; min-width: 0; padding: 7px 10px; border-radius: 7px;
   border: 1px solid rgba(var(--ink-rgb),.1); background: rgba(var(--ink-rgb),.04);
   color: rgb(var(--ink-rgb)); font: inherit; font-size: .66rem; outline: none;
 }
 .sm-manager-add-source input:focus { border-color: rgba(129,140,248,.38); }
-.sm-manager-add-source + .sm-trust-error { margin: 0 8px 8px; font-size: .64rem; }
+.sm-manager-add-source + .sm-trust-error { margin: 0 4px 2px; font-size: .64rem; }
 .sm-permission-list { margin: 6px 0 8px; padding-left: 16px; line-height: 1.55; }
 .sm-sharing-heading { margin: 8px 0 0; font-size: .6rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: rgba(var(--ink-rgb),.34); }
 .sm-permission-new { color: rgba(var(--ink-rgb),.82); }
@@ -699,6 +724,21 @@ p.sm-trust-caution { margin: 0 0 8px; }
 .sm-home-version {
   font-size: .68rem; color: rgba(var(--ink-rgb),.32); letter-spacing: .02em;
 }
+/* Under the version: up to date (one quiet line), or the newer Atmos as a
+   small card with its button; and "Update automatically". */
+.sm-home-updates { width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.sm-home-updates:empty { display: none; }
+.sm-home-status { font-size: .64rem; color: rgba(var(--ink-rgb),.4); }
+.sm-home-link { padding: 0; border: 0; background: none; font: inherit; color: rgba(var(--ink-rgb),.6); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: rgba(var(--ink-rgb),.25); cursor: pointer; }
+.sm-home-link:hover { color: rgb(var(--ink-rgb)); }
+.sm-home-update { margin-top: 6px; padding: 12px 14px; border: 1px solid rgba(129,140,248,.28); border-radius: 10px; background: rgba(129,140,248,.06); display: flex; flex-direction: column; gap: 4px; }
+.sm-home-update-name { font-size: .76rem; color: rgb(var(--ink-rgb)); }
+.sm-home-update-detail { font-size: .64rem; line-height: 1.45; color: rgba(var(--ink-rgb),.5); }
+.sm-home-update .sm-manager-actions { margin-top: 6px; }
+.sm-home-update .sm-trust-error { margin: 2px 0 0; font-size: .64rem; }
+.sm-home-auto { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; margin-top: 4px; border-top: 1px solid rgba(var(--ink-rgb),.07); font-size: .66rem; color: rgba(var(--ink-rgb),.6); }
+.sm-home-auto > span { cursor: help; }
+.sm-home-updates > .sm-trust-error { margin: 0; font-size: .64rem; }
 /* ── Appearance page ───────────────────────────────────────────────────────
    Settings → Appearance (settings-menu.js _renderAppearancePage()). Core's
    sections (appearance.js) and the services that add one (Wallpaper,
@@ -844,7 +884,13 @@ p.sm-trust-caution { margin: 0 0 8px; }
 }
 .sm-widget-card.disabled .sm-icon, .sm-widget-card.disabled .sm-card-name { opacity: .5; }
 .sm-card-main .sm-toggle { cursor: pointer; }
-.sm-extension-card > .sm-card-main, .sm-widget-card > .sm-card-main { cursor: default; }
+.sm-widget-card > .sm-card-main { cursor: default; }
+/* An extension card shows its details when clicked (anywhere but its switch and buttons). */
+.sm-extension-card > .sm-card-main[role="button"] { cursor: pointer; }
+.sm-extension-card > .sm-card-main:not([role="button"]) { cursor: default; }
+.sm-extension-card > .sm-card-main:focus-visible { outline: 1px solid rgba(var(--ink-rgb),.35); outline-offset: -1px; border-radius: 8px; }
+.sm-extension-card .sm-permissions:not([open]) { margin: 0; }
+.sm-extension-card .sm-permissions[open] { margin: -4px 0 10px; }
 .sm-main-header.sm-no-search + #settings-menu-list { padding-top: 12px; }
 .sm-nav-item:focus-visible { outline: 2px solid rgba(129,140,248,.6); outline-offset: -2px; }
 .sm-toggle {
@@ -874,12 +920,6 @@ p.sm-trust-caution { margin: 0 0 8px; }
 .sm-toggle input:focus-visible + .sm-toggle-track { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-positive, #34d399) 50%, transparent); }
 
 /* ── Panels page (plugin workspace switcher) ───────────────────────────── */
-.sm-shortcut-hint { margin-top: 14px; }
-.sm-shortcuts { display:flex; flex-direction:column; gap:6px; }
-.sm-shortcut-row { display:grid; grid-template-columns:34px 1fr; align-items:center; gap:4px 12px; padding:8px 12px; border:1px solid rgba(var(--ink-rgb),.07); border-radius:8px; background:rgba(var(--ink-rgb),.025); font-size:.7rem; color:rgba(var(--ink-rgb),.75); }
-.sm-shortcut-row kbd { display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:22px; padding:0 6px; border:1px solid rgba(var(--ink-rgb),.18); border-bottom-width:2px; border-radius:5px; font:inherit; font-size:.72rem; color:rgb(var(--ink-rgb)); }
-.sm-shortcut-row small { margin-left:8px; font-size:.62rem; color:rgba(var(--ink-rgb),.36); }
-.sm-shortcut-clash { grid-column:2; font-size:.62rem; color:rgba(251,191,36,.95); }
 .sm-panel-layouts { display:flex; flex-wrap:wrap; gap:6px; padding:10px 0 14px; }
 .sm-panel-section { display:grid; grid-template-columns:minmax(90px,.7fr) minmax(150px,1fr); align-items:center; gap:12px; padding:10px 12px; border:1px solid rgba(var(--ink-rgb),.07); border-radius:8px; background:rgba(var(--ink-rgb),.025); margin-bottom:7px; }
 .sm-panel-section-name { font-size:.66rem; color:rgba(var(--ink-rgb),.5); letter-spacing:.08em; text-transform:uppercase; }

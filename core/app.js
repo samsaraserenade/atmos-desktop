@@ -133,8 +133,8 @@ const _setup = await window.atmosCore?.extensionManager?.setup?.().catch(() => n
 // are, Settings → Extensions shows them waiting for a restart.
 const _showDownloaded = () => import('./js/core/settings-menu.js').then(module => module.openExtensionManager()).catch(() => {});
 window.atmosCore?.extensionManager?.onUpgradeDownloaded?.(_showDownloaded);
-// A reminder that an Atmos update is waiting, clicked.
-window.atmosCore?.extensionManager?.onShowManager?.(_showDownloaded);
+// A reminder that an Atmos update is waiting, clicked: Settings → Atmos.
+window.atmosCore?.extensionManager?.onShowManager?.(() => import('./js/core/settings-menu.js').then(module => module.openAtmosSettings()).catch(() => {}));
 if (_setup?.upgradeDownloaded) _showDownloaded();
 if (_setup?.needed || (_installedPlugins.length === 0 && _installedServices.length === 0)) {
   openOnboardingSettings();

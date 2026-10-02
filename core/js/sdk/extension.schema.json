@@ -127,8 +127,8 @@
       "allOf": [{ "$ref": "#/definitions/surface" }],
       "properties": {
         "default": { "description": "The panel Atmos opens on.", "type": "boolean" },
-        "shortcut": { "description": "One printable key that opens it from anywhere in Atmos.", "type": "string", "maxLength": 2 },
-        "shortcutToggles": { "type": "boolean" },
+        "shortcut": { "description": "Ignored since Atmos 0.19.1 (panel keys are gone); accepted so older manifests stay valid.", "type": "string", "maxLength": 2, "deprecated": true },
+        "shortcutToggles": { "description": "Ignored since Atmos 0.19.1.", "type": "boolean", "deprecated": true },
         "glass": { "description": "Atmos draws frosted glass under the frame where it says (atmos.surface.trackGlass).", "type": "boolean" },
         "drawer": {
           "description": "First-party: the panel lives in a drawer sliding up from the bottom of the workspace.",

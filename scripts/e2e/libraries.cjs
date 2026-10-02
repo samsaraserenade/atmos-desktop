@@ -1,6 +1,6 @@
 // Library services end to end: Currency and Media Metadata imported into a
 // sandboxed frame, Audio Player using Media Metadata from its own frame,
-// and the libraries listed under Settings → Services. (Finance's display
+// and the libraries listed under Settings → Extensions → Services. (Finance's display
 // currency is checked in finance.cjs.)
 // Usage: node scripts/e2e/libraries.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
@@ -101,11 +101,9 @@ const frameFor = (page, ext, surface) => page.frames().find(f => f.url().include
     return metadata.readTags(path).then(tags => tags.title ?? null);
   }, song).catch(e => `ERR ${e.message}`);
 
-  // Settings → Services still lists the libraries, with no settings pages of their own.
-  await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsMenu());
-  await s.page.waitForTimeout(500);
-  await s.page.getByText('Services', { exact: true }).first().click();
-  await s.page.waitForTimeout(1000);
+  // Settings → Extensions still lists the libraries under Services, with no settings pages of their own.
+  await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openExtensionManager());
+  await s.page.waitForTimeout(1500);
   r.servicesPage = await s.page.evaluate(() => {
     const text = [...document.querySelectorAll('.settings-overlay, [role="dialog"], body')].map(el => el.innerText).join('\n');
     return Object.fromEntries(['Currency', 'Media Metadata', 'Charting'].map(name => [name, text.includes(name)]));

@@ -2,14 +2,13 @@
  * Panel registry: registration, activation and the workspace (which plugin
  * occupies which section of which layout). Layout mechanics live in
  * panel-layouts.js (tiles) and panel-windows.js (freeform), persisted state
- * in panel-state.js, and recent-panel cycling in panel-history.js.
+ * in panel-state.js.
  */
 import { save } from '../persist.js';
 import { createLifecycleScope } from './lifecycle.js';
 import { PANEL_LAYOUTS, panelState, layoutDescriptor as _layoutDescriptor } from './panel-state.js';
 import { createFittedContent as _createFittedContent, mountSplitters } from './panel-layouts.js';
 import { mountFreeformWindows } from './panel-windows.js';
-import { bindPanelHistory, liveHistory as _liveHistory, pushHistory as _pushHistory } from './panel-history.js';
 import { getPanelAppearance, onAppearanceChange } from './appearance.js';
 import { nextDefault } from './panel-default.js';
 
@@ -149,7 +148,6 @@ export function activatePanelPlugin(id, sectionId = 'main') {
 
   if (_activeId !== null) _unmountPrimary();
 
-  _pushHistory(_activeId);
   _activeId = id;
   panelState.activePlugin = id;
   panelState.sections.main = id;
@@ -453,37 +451,9 @@ export function assignPanelPlugin(sectionId, pluginId) {
   save();
 }
 
-export function getPreviousPanelPluginId() { return _liveHistory()[0] ?? null; }
-
-/**
- * Swap to whichever plugin was active immediately before the current one.
- * This is what makes back-and-forth toggling work with a single verb: each
- * call routes through activatePanelPlugin(), which itself pushes whatever
- * was active going in onto the front of _history — so the plugin you just
- * left becomes the new front of the stack, ready for the next call to
- * bounce straight back to it.
- *
- * A no-op if nothing has been switched yet this session (_history still
- * empty) or if every entry in it has since been unregistered — same
- * "unregistered id" case activatePanelPlugin() itself already throws on, so
- * that path is left to it rather than duplicated here.
- */
-export function activatePreviousPanelPlugin() {
-  const id = _liveHistory()[0];
-  if (id === undefined) return;
-  activatePanelPlugin(id);
-}
-
 /** For the future switcher UI (icon/label per registered plugin). */
 export function listPanelPlugins() {
   return [..._plugins.entries()].map(([id, { icon, label, panelAppearance, passThrough, default: isDefault }]) => ({
     id, icon, label, panelAppearance, passThrough, default: !!isDefault,
   }));
 }
-
-bindPanelHistory({
-  isRegistered: id => _plugins.has(id),
-  ids: () => [..._plugins.keys()],
-  activeId: () => _activeId,
-  activate: id => activatePanelPlugin(id),
-});

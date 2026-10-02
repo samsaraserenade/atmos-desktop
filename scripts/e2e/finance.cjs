@@ -4,7 +4,7 @@
 // reaching the others; a widget header menu; the chart's menu (ticks,
 // dropdowns); an Appearance font inside the frames; opening a watchlist
 // symbol from the panel's ticker picker (where the watchlist lives);
-// symbol's chart from a widget; the ']' toggle; state after a restart.
+// symbol's chart from a widget; state after a restart.
 // A synthetic VPS (fake-vps.cjs) stands in for the real one.
 // Usage: node scripts/e2e/finance.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
@@ -49,7 +49,6 @@ async function frameFor(page, title, timeout = 15000) {
   return null;
 }
 const text = frame => frame?.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').trim()).catch(e => e.message);
-const activePanel = page => page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).getActivePanelPluginId());
 
 const step = message => { if (process.env.E2E_STEPS) console.error('[step]', message); };
 
@@ -236,15 +235,6 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   await s.page.waitForTimeout(1500);
   r.appFontInWidget = await balance?.evaluate(async () => { await document.fonts.ready; return document.fonts.check('12px "E2E App Font"'); }).catch(e => e.message);
 
-  step("// ']' closes");
-  // ']' closes and reopens the Finance panel.
-  await s.page.evaluate(() => document.body.focus());
-  await s.page.keyboard.press(']');
-  await s.page.waitForTimeout(600);
-  r.afterToggleOff = await activePanel(s.page);
-  await s.page.keyboard.press(']');
-  await s.page.waitForTimeout(600);
-  r.afterToggleOn = await activePanel(s.page);
   r.errors = s.errors;
   await s.page.evaluate(async () => (await import('atmos-core/persist.js')).flushPendingSave());
   await s.page.waitForTimeout(500);

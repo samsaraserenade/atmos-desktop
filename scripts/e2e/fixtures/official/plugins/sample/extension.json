@@ -1,0 +1,24 @@
+{
+  "apiVersion": 3,
+  "tier": "first-party",
+  "version": "1.0.0",
+  "publisher": "atmos",
+  "runtime": "frame",
+  "isolation": "origin",
+  "exports": {},
+  "displayName": "Sample",
+  "description": "An official-style plugin for the end-to-end checks: a panel, a background frame and saved state.",
+  "requires": {
+    "extensions.frames": 1
+  },
+  "contributes": {
+    "panel": {
+      "label": "Sample",
+      "icon": "icon.svg"
+    },
+    "boot": {
+      "entry": "boot.js"
+    }
+  },
+  "permissions": {}
+}

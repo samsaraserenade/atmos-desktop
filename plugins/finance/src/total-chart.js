@@ -468,14 +468,12 @@ export function setTotalChartVisible(on) {
   if (on) {
     activatePanelPlugin('portfolio-tracker');
     // Deliberately NOT dispatching atmos:chart-mode:portfolio here anymore.
-    // This only means "make the finance panel visible" -- both call sites
-    // (boot.js's initial-visibility check, and boot.js's ']' panel-toggle
-    // shortcut) just want the panel shown/hidden, not to force the chart
-    // sub-view back to Portfolio. panel.js's own mount()/restoreMode()
-    // already restores whichever of Portfolio/Markets was last active, and
-    // this dispatch was stomping on that -- every boot (and every ']'
-    // toggle) snapped straight back to Portfolio regardless of what the
-    // user had last been viewing.
+    // This only means "make the finance panel visible"; callers just want
+    // the panel shown, not to force the chart sub-view back to Portfolio.
+    // panel.js's own mount()/restoreMode() already restores whichever of
+    // Portfolio/Markets was last active, and this dispatch was stomping on
+    // that: every boot snapped straight back to Portfolio regardless of
+    // what the user had last been viewing.
   } else if (getActivePanelPluginId() === 'portfolio-tracker') activateDefaultPanelPlugin();
 }
 

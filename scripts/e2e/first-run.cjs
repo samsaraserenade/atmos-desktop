@@ -128,7 +128,7 @@ const r = {};
   await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openExtensionManager());
   await s.page.waitForSelector('.sm-manager-heading', { timeout: 10000 });
   await s.page.click('[data-manager-action="check"]');
-  await s.page.waitForFunction(() => /Checked/.test(document.getElementById('settings-menu-list').textContent), null, { timeout: 20000 });
+  await s.page.waitForFunction(() => /^Checked/.test(document.querySelector('#sm-header-actions [data-manager-action="check"]:not([disabled])')?.title || ''), null, { timeout: 20000 });
   await s.page.waitForTimeout(400);
   await s.page.screenshot({ path: path.join(out, '20-extensions.png') });
   r['2-extensionsPage'] = await s.page.evaluate(() => [...document.querySelectorAll('#settings-menu-list .sm-manager-heading, #settings-menu-list .sm-manager-row, #settings-menu-list .sm-manager-source')]

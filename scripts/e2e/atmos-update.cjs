@@ -1,12 +1,12 @@
 // Atmos updating itself (core/js/core/atmos-update.cjs), through Settings →
-// Extensions, with a local source whose signed index names Atmos 99.0.0 and
+// Atmos, with a local source whose signed index names Atmos 99.0.0 and
 // its installer. Unpackaged, --update-test-install=<file> stands in for an
 // installed copy: the installer isn't run, what would have run is written to
 // <file>.
 //
 //  1. The check finds 99.0.0, downloads (copies) and checks the installer by
 //     itself: "Atmos 99.0.0 is ready to install … installs when you quit";
-//     the footer's tooltip says restart to update. "Update Atmos
+//     the footer's version says it's ready. "Update Atmos
 //     automatically" is on.
 //  2. Switched off, the row says Restart to install, and quitting installs
 //     nothing. Switched on again.
@@ -73,9 +73,16 @@ async function launch(w) {
   return { app, page, logs };
 }
 
+/** Settings → Atmos, where its version and updates are. */
 async function openManager(page) {
-  await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openExtensionManager());
-  await page.waitForSelector('.sm-manager-heading', { timeout: 10000 });
+  await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openAtmosSettings());
+  await page.waitForSelector('.sm-manager-row[data-key="atmos"]', { timeout: 10000 });
+}
+/** Check the sources now: "Check now" when Atmos is up to date, the manager itself when an update is shown. */
+async function checkNow(page) {
+  const link = await page.$('.sm-manager-row[data-key="atmos"] [data-manager-action="check"]');
+  if (link) return link.click();
+  return page.evaluate(() => window.atmosCore.extensionManager.checkForUpdates());
 }
 const atmosRow = page => page.evaluate(() => {
   const row = document.querySelector('.sm-manager-row[data-key="atmos"]');
@@ -90,7 +97,7 @@ const waitRow = (page, pattern) => page.waitForFunction(source => {
   const row = document.querySelector('.sm-manager-row[data-key="atmos"]');
   return row && new RegExp(source).test(row.innerText);
 }, pattern.source, { timeout: 30000 });
-const footerTitle = page => page.evaluate(() => document.getElementById('sidebar-footer-extensions')?.title || null);
+const footerTitle = page => page.evaluate(() => document.getElementById('sidebar-footer-version')?.title || null);
 const readRecord = w => { try { return JSON.parse(fs.readFileSync(w.record, 'utf8')); } catch { return null; } };
 const quit = async s => { await s.app.close(); };
 const exited = app => new Promise(resolve => {
@@ -105,7 +112,7 @@ const exited = app => new Promise(resolve => {
   // 1. Downloaded and checked by itself.
   let s = await launch(w);
   await openManager(s.page);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await waitRow(s.page, /ready to install/);
   let row = await atmosRow(s.page);
   await s.page.screenshot({ path: path.join(out, '1-ready.png') });
@@ -139,7 +146,7 @@ const exited = app => new Promise(resolve => {
   const before = fs.statSync(downloaded).mtimeMs;
   s = await launch(w);
   await openManager(s.page);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await waitRow(s.page, /ready to install/);
   check('4 the download is used again, not copied again', fs.statSync(downloaded).mtimeMs === before);
   await s.page.screenshot({ path: path.join(out, '4-ready-again.png') });
@@ -153,7 +160,7 @@ const exited = app => new Promise(resolve => {
   fs.rmSync(w.record, { force: true });
   s = await launch(w);
   await openManager(s.page);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await waitRow(s.page, /ready to install/);
   await s.page.evaluate(() => window.atmosCore.restartAtmos()).catch(() => {});
   check('5 Restart to apply quits Atmos', await exited(s.app));
@@ -166,7 +173,7 @@ const exited = app => new Promise(resolve => {
   fs.writeFileSync(w6.installer, crypto.randomBytes(w6.entry.size)); // same size, other bytes
   s = await launch(w6);
   await openManager(s.page);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await waitRow(s.page, /couldn't be downloaded/);
   row = await atmosRow(s.page);
   await s.page.screenshot({ path: path.join(out, '6-mismatch.png') });
@@ -182,7 +189,7 @@ const exited = app => new Promise(resolve => {
   fs.writeFileSync(path.join(w7.installRoot, 'atmos-update.json'), JSON.stringify({ format: 1, auto: false }));
   s = await launch(w7);
   await openManager(s.page);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await waitRow(s.page, /is available/);
   row = await atmosRow(s.page);
   await s.page.screenshot({ path: path.join(out, '7-available.png') });
@@ -198,10 +205,10 @@ const exited = app => new Promise(resolve => {
   const w8 = await world('atmos-update-offline-');
   s = await launch(w8);
   await openManager(s.page);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await waitRow(s.page, /ready to install/);
   fs.renameSync(w8.source, `${w8.source}-gone`);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await s.page.waitForTimeout(1500);
   row = await atmosRow(s.page);
   check('8 offline: the update waiting stands', /ready to install/.test(row.text), row.text);
@@ -212,13 +219,13 @@ const exited = app => new Promise(resolve => {
   fs.writeFileSync(path.join(w8.installRoot, 'atmos-update.json'), JSON.stringify({ format: 1 })); // as if never attempted
   s = await launch(w8);
   await openManager(s.page);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await s.page.waitForTimeout(1500);
   row = await atmosRow(s.page);
   check('8 offline at a new start: says it couldn\'t check', /Couldn't check/.test(row.text), row.text);
   check('8 offline at a new start: the download is kept', fs.existsSync(path.join(w8.installRoot, 'atmos-updates', 'Atmos.Setup.99.0.0.exe')));
   fs.renameSync(`${w8.source}-gone`, w8.source);
-  await s.page.click('[data-manager-action="check"]');
+  await checkNow(s.page);
   await waitRow(s.page, /ready to install/);
   check('8 back online: ready again from the kept download', true);
   await quit(s);

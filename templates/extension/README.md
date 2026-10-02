@@ -21,7 +21,7 @@ straight from here, without asking for approval, and its frames reload
 whenever you save a file. Adding or removing a surface in `extension.json`
 needs a restart. Add `--devtools` to open the developer tools (F12).
 
-Settings → Plugins shows it with a **Developer** badge. If an installed
+Settings → Extensions shows it with a **Developer** badge. If an installed
 extension already has this folder's name as its id, Atmos loads that one
 instead and says so there: remove it, or rename this folder.
 

@@ -1,7 +1,7 @@
 {
   "apiVersion": 3,
   "tier": "first-party",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -16,9 +16,7 @@
       "entry": "frame-panel.js",
       "legacyId": "portfolio-tracker",
       "label": "Finance",
-      "icon": "icons/portfolio-tracker.svg",
-      "shortcut": "]",
-      "shortcutToggles": true
+      "icon": "icons/portfolio-tracker.svg"
     },
     "sidebar": [
       {

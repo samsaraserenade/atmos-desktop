@@ -16,8 +16,9 @@
 
 Atmos is a browser and a workspace for Windows: browse, listen, chat and
 follow your markets side by side, in one window you can extend. Its browser
-blocks ads and trackers from the start and keeps every site in a sandbox of
-its own. Its extensions don't reach into your pages. They build the place
+blocks ads and trackers from the start, keeps every site in a sandbox of
+its own, and keeps itself up to date with Chromium's security fixes. Its
+extensions don't reach into your pages. They build the place
 around them instead: panels beside your pages, widgets in the sidebar, and
 services other extensions can use, all written in plain web technologies.
 
@@ -46,6 +47,10 @@ as extensions anyone can build.**
 
 Built in: Atmos opens on it.
 
+- **Up to date by itself.** Atmos downloads new versions in the
+  background and installs them when you quit, so Chromium's security
+  fixes reach you without a new installer to run. Each one is checked
+  against the release's signature before it runs.
 - **Ads and trackers blocked,** like Brave's shields: uBlock Origin's
   lists, EasyList and EasyPrivacy, on from the start. A shield in the
   address bar counts what was blocked and turns blocking off for a site
@@ -94,8 +99,7 @@ Atmos Core owns the shell, and extensions fill it.
 - **Panels and layouts.** Show one panel full screen, split two side by side
   or stacked, run four in a grid, or float them as windows you can move,
   resize and layer. Dividers are draggable and every layout remembers its
-  proportions. The mouse back button steps through recent panels; hold it
-  for Task View.
+  proportions. Ctrl+Tab opens Task View; a middle click opens Settings.
 - **A sidebar of widgets.** Widgets from any extension share one sidebar.
   Reorder them, resize them, collapse them, and choose whether each one
   shows everywhere or only beside a particular panel.
@@ -147,6 +151,10 @@ didn't write. Neither gets more than it needs.
 - **Signed packages.** Official extensions are signed packages. Atmos
   checks every file against the signature when it starts and refuses to
   load one that has been changed.
+- **Updates you can trust.** Atmos runs a new installer only if its size
+  and SHA-256 match the release's signed index, so a file swapped on the
+  download page is refused. Whoever hosts the files can hold an update
+  back, not change one.
 - **A locked-down core.** The Atmos page, the window's own document, runs
   only Atmos's own code and never navigates away from Atmos: its
   Content-Security-Policy refuses injected scripts, it is sandboxed, and
@@ -269,7 +277,8 @@ settings in `%APPDATA%\atmos`; uninstalling leaves them.
 Atmos updates itself, as Chrome does: when a newer Atmos is out, it
 downloads the installer in the background, checks it against the release's
 signed index, and installs it when you quit Atmos (or at once, from
-"Restart to update" in Settings → Extensions; an update left waiting two
+"Restart to update" in Settings → Atmos, which the footer's version opens
+when one is waiting; an update left waiting two
 days gets a reminder). Your settings and extensions stay. "Update Atmos automatically" there turns it off; Atmos
 then only says a new version is available. Atmos 0.18 and older say so
 with a link to this page: run the new installer over the old one.
@@ -382,11 +391,24 @@ Atmos/
 
 ## Project status
 
-Atmos is actively evolving. The current focus is:
+Atmos is actively evolving. Atmos now updates itself (0.19), so each
+improvement reaches everyone on its own. The current focus is bringing
+Atmos Browser up to Chrome's security level, closing the protections Chrome
+adds on top of Chromium that Atmos doesn't have yet:
 
-- Making Atmos Browser one you can live in: updates that keep up with
-  Chromium's security fixes, phishing and malware warnings, saved
-  passwords, and bringing your bookmarks over from other browsers
+- **Encrypted cookies** on disk, so your sign-ins aren't stored in plain
+  text
+- **Automatic https:** pages try a secure connection first, and say so if
+  a site only has an insecure one
+- **Blocking insecure downloads** started from secure pages, as Chrome does
+- **Secure DNS**, so the sites you visit aren't sent in the clear
+- **Phishing and malware warnings**
+- **A code-signed app**, so Windows can vouch for Atmos and its updates
+
+Then:
+
+- Making Atmos Browser one you can live in: saved passwords, and bringing
+  your bookmarks over from other browsers
 - Letting extensions work with the pages you browse, safely
 - Expanding the SDK, and the foundation for a wider extension ecosystem
 - Hosted portfolio servers for Finance, and a way for anyone to add a

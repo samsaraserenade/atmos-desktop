@@ -2,8 +2,7 @@
 // the footer and Settings → Extensions say they wait for approval; Review
 // opens each one's card, which says what it shares and flags that it can
 // read the location and shares with every extension; approving loads it at
-// once (and one approved earlier that needed it), with no restart; its
-// panel key is its own and a second panel asking for it doesn't get it;
+// once (and one approved earlier that needed it), with no restart;
 // what another extension may use of it names what that gives; its icon is
 // in Settings; after a restart both load as usual.
 // Usage: node scripts/e2e/approval.cjs [outDir]   (see scripts/e2e/README.md)
@@ -38,7 +37,7 @@ function write(folder, files) {
 write(path.join(installRoot, 'plugins', 'skyloom'), {
   'extension.json': {
     apiVersion: 4, engines: { atmos: '>=0.16.0' }, version: '0.1.0', displayName: 'Skyloom',
-    contributes: { panel: { label: 'Sky', icon: 'icon.svg', shortcut: '^' }, boot: {} },
+    contributes: { panel: { label: 'Sky', icon: 'icon.svg' }, boot: {} },
     permissions: { invokes: ['service:location'] },
     exports: { methods: { snapshot: { with: 'all', description: "The sky's colours now, without your location" } }, events: { sky: 'all' } },
   },
@@ -46,11 +45,11 @@ write(path.join(installRoot, 'plugins', 'skyloom'), {
   'boot.js': "import atmos from 'atmos-sdk';\nawait atmos.expose({ snapshot: () => ({ palette: ['#224466', '#ffcc88'] }) });\n",
   'panel.js': "document.body.textContent = 'Skyloom panel';\n",
 });
-// Sky Reader: needs Skyloom, asks for the same key, and can't read the location itself.
+// Sky Reader: needs Skyloom, and can't read the location itself.
 write(path.join(installRoot, 'plugins', 'sky-reader'), {
   'extension.json': {
     apiVersion: 4, engines: { atmos: '>=0.16.0' }, version: '0.1.0', displayName: 'Sky Reader',
-    contributes: { panel: { label: 'Reader', shortcut: '^' } },
+    contributes: { panel: { label: 'Reader' } },
     dependencies: { 'plugin:skyloom': '^0.1.0' },
     permissions: { invokes: ['plugin:skyloom'] },
   },
@@ -133,23 +132,10 @@ const frameFor = (page, ext, surface) => page.frames().find(f => f.url().include
   await s.page.screenshot({ path: path.join(out, '30-approved.png') });
   r.footerAfter = await footer(s.page);
 
-  // The Panels page: the key is Skyloom's; Sky Reader asked for it too.
-  await s.page.evaluate(() => [...document.querySelectorAll('#settings-menu .sm-nav-item')].find(item => /Panels/.test(item.textContent))?.click());
-  r.shortcuts = await until(() => s.page.evaluate(() => document.querySelector('.sm-shortcuts')?.innerText.replace(/\s+/g, ' ').trim() || null));
-  await s.page.screenshot({ path: path.join(out, '40-panels.png') });
-  await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).closeSettingsMenu());
-
   // Sky Reader's panel: Skyloom's shared snapshot, and no location of its own.
   await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('sky-reader'));
   const reader = await until(async () => frameFor(s.page, 'plugin:sky-reader', 'panel'));
   r.readerPanel = reader ? await until(() => reader.evaluate(() => window.__results)) : 'no frame';
-  // The ^ key opens Skyloom's panel.
-  await s.page.evaluate(() => document.activeElement?.blur?.());
-  await s.page.keyboard.press('^');
-  r.afterKey = await until(() => s.page.evaluate(async () => {
-    const id = (await import('atmos-core/core/panel-registry.js')).getActivePanelPluginId();
-    return id === 'skyloom' ? id : null;
-  }), { timeout: 3000 }) || await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).getActivePanelPluginId());
   r.errors1 = s.errors;
   await s.app.close();
 

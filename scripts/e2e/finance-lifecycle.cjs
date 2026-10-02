@@ -137,7 +137,7 @@ const waitFor = (page, fn, arg) => page.waitForFunction(fn, arg, { timeout: 2000
 const press = (page, rowKey, action) => page.click(`.sm-manager-row[data-key="${rowKey}"] [data-manager-action="${action}"]`);
 async function check(page) {
   await page.click('[data-manager-action="check"]');
-  await waitFor(page, () => !document.querySelector('[data-manager-action="check"][disabled]') && /Checked/.test(document.getElementById('settings-menu-list').textContent));
+  await waitFor(page, () => /^Checked/.test(document.querySelector('#sm-header-actions [data-manager-action="check"]:not([disabled])')?.title || ''));
   await page.waitForTimeout(300);
 }
 const pendingIds = page => page.evaluate(async () => (await window.atmosCore.extensionManager.status()).status.pending.map(c => `${c.action} ${c.id} ${c.version || ''}`.trim()));
@@ -348,9 +348,9 @@ const r = { home };
   r['6-connections'] = await waitForText(s.page, await frameFor(s.page, 'Portfolio Connections'), /Server: 100\.100\.1\.1:8080/);
   await openManager(s.page, '60-stalled.png');
   r['6-attention'] = (await rows(s.page)).filter(line => /Stall/.test(line));
-  await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsMenu());
-  await s.page.evaluate(() => [...document.querySelectorAll('#settings-menu *')].find(el => el.children.length <= 2 && /^\s*Services\s*$/.test(el.textContent || ''))?.click());
+  await s.page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openExtensionManager());
   await s.page.waitForTimeout(400);
+  await s.page.evaluate(() => document.querySelector('.sm-extension-card[data-key="service:early-stall"]')?.scrollIntoView());
   r['6-serviceCard'] = await s.page.evaluate(() => [...document.querySelectorAll('.sm-extension-card')].filter(c => /Early Stall/.test(c.textContent)).map(c => c.innerText.replace(/\s+/g, ' ').trim()));
   await s.page.screenshot({ path: path.join(out, '61-stalled-card.png') });
   r['6-errors'] = s.errors;

@@ -6,9 +6,12 @@
  * from discovery metadata, so Atmos never needs to import an extension's
  * settings module merely to let the user disable that extension.
  *
- * The left navigation is entirely Core-owned: Appearance, About, Sidebar,
- * Panels, System, Plugins, and Services. Extension rows expose lifecycle controls
- * rather than extension-owned preference forms.
+ * The left navigation is entirely Core-owned: Atmos, Appearance, Sidebar,
+ * Panels, Browser, Extensions and System. Extensions is one page: Atmos's
+ * own update, approvals, updates, what's available and the sources at the
+ * top, then the installed plugins and services, each split into Official
+ * and Community. Extension cards expose lifecycle controls rather than
+ * extension-owned preference forms.
  *
  * Distinct from #settings-drawer (the "Sidebar" ctx-menu item) on purpose:
  * the sidebar is non-modal, always-visible widget content, driven by
@@ -45,7 +48,6 @@ import {
 import {
   listSettingsPanels, mountSettingsPanel, unmountSettingsPanel,
 } from './settings-registry.js';
-import { listPanelShortcuts } from './extension-frame-host.js';
 
 // The first static page, handled directly by _renderNav()/_renderList().
 // Declared up top since _activeCategory's default below references it.
@@ -63,8 +65,7 @@ const _SIDEBAR_PAGE_ID = '__sidebar__';
 // concern, not any one plugin's own settings. Previously there was no
 // dedicated switcher UI at all (panel-registry.js's listPanelPlugins() was
 // added for exactly this, but nothing consumed it yet) — plugins could
-// only activate a panel from their own code (e.g. total-chart.js's "]"
-// shortcut). This page is that switcher, reusing the same accordion
+// only activate a panel from their own code. This page is that switcher, reusing the same accordion
 // row shell as everything else in this file rather than introducing a new
 // pattern — see _renderPanelsPage().
 const _PANELS_PAGE_ID = '__panels__';
@@ -78,14 +79,19 @@ const _APPEARANCE_PAGE_ID = '__appearance__';
 // (extension-manager.cjs in the main process), opened from the footer's
 // Extensions button too.
 const _EXTENSIONS_PAGE_ID = '__extensions__';
+// Atmos Browser's settings: a page of their own above Extensions, since the
+// browser is what Atmos is built around (extension-frames.cjs gives its
+// settings contribution the "Browser" category).
+const _BROWSER_PAGE_ID = '__browser__';
+// Atmos's own capabilities (Audio, Wallpaper, Location): always on. Every
+// other plugin and service is on the Extensions page.
 const _SYSTEM_PAGE_ID = 'System';
-const _PLUGINS_PAGE_ID = 'Plugins';
-const _SERVICES_PAGE_ID = 'Services';
 
 let _overlay    = null;
 let _navEl      = null;
 let _listEl     = null;
 let _headerEl   = null;
+let _headerActionsEl = null; // the page's own buttons, beside the search box
 let _searchEl   = null;
 
 // Refreshed on every open; search filtering uses this in-memory inventory.
@@ -113,11 +119,9 @@ let _onboardingVisible = false;
 // inside its box without this offset.
 const _FALLBACK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(4,0)"><path d="M4 7h3a2 2 0 1 1 4 0h3a1 1 0 0 1 1 1v3a2 2 0 1 0 0 4v3a1 1 0 0 1-1 1h-3a2 2 0 1 0-4 0H4a1 1 0 0 1-1-1v-3a2 2 0 1 1 0-4V8a1 1 0 0 1 1-1z"/></g></svg>`;
 
-// Generic nav icon for the installed Plugins and Services pages.
-const _CATEGORY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="11" cy="18" r="1.6" fill="currentColor" stroke="none"/></svg>`;
-
 const _SYSTEM_NAV_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.55 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.55a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.45 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.12.38.33.72.6 1 .3.28.68.42 1.1.4H21v4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>`;
 
+const _BROWSER_NAV_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"/></svg>`;
 const _PACKAGE_NAV_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>`;
 
 const _SEARCH_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`;
@@ -144,9 +148,6 @@ const _APPEARANCE_NAV_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="curre
 // ── Home ─────────────────────────────────────────────────────────────────
 const APP_NAME = 'ATMOS';
 
-// Tiers as users see them: system (part of Atmos), official (bundled or
-// signed with an official key), community (anything else; sandboxed).
-const _TIER_LABELS = Object.freeze({ system: 'System', 'first-party': 'Official', 'third-party': 'Community' });
 
 // Version comes from package.json's "version" field — the single source of
 // truth electron-builder itself reads from — via app.getVersion() in the
@@ -224,6 +225,7 @@ function _build() {
             ${_SEARCH_ICON}
             <input type="text" id="sm-search-input" placeholder="Search…" autocomplete="off">
           </div>
+          <div class="sm-header-actions" id="sm-header-actions"></div>
         </div>
         <div id="settings-menu-list"></div>
       </div>
@@ -233,6 +235,7 @@ function _build() {
   _navEl      = _overlay.querySelector('#sm-nav');
   _listEl     = _overlay.querySelector('#settings-menu-list');
   _headerEl   = _overlay.querySelector('.sm-main-header');
+  _headerActionsEl = _overlay.querySelector('#sm-header-actions');
   _searchEl   = _overlay.querySelector('#sm-search-input');
 
   _overlay.querySelector('#settings-menu-backdrop').addEventListener('click', closeSettingsMenu);
@@ -252,7 +255,9 @@ function _renderNav() {
   _navEl.innerHTML = '';
 
   // Fall back to Home if a stale session value no longer names a page.
-  const validPages = new Set([_HOME_PAGE_ID, _APPEARANCE_PAGE_ID, _SIDEBAR_PAGE_ID, _PANELS_PAGE_ID, _EXTENSIONS_PAGE_ID, _SYSTEM_PAGE_ID, _PLUGINS_PAGE_ID, _SERVICES_PAGE_ID]);
+  const browserSettings = _browserSettingsPanels();
+  const validPages = new Set([_HOME_PAGE_ID, _APPEARANCE_PAGE_ID, _SIDEBAR_PAGE_ID, _PANELS_PAGE_ID, _EXTENSIONS_PAGE_ID, _SYSTEM_PAGE_ID]);
+  if (browserSettings.length) validPages.add(_BROWSER_PAGE_ID);
   if (_onboardingVisible) validPages.add(_ONBOARDING_PAGE_ID);
   if (!_activeCategory || !validPages.has(_activeCategory)) {
     _activeCategory = _HOME_PAGE_ID;
@@ -279,7 +284,8 @@ function _renderNav() {
   homeItem.className = 'sm-nav-item' + (_activeCategory === _HOME_PAGE_ID ? ' active' : '');
   homeItem.innerHTML = `
     <span class="sm-nav-icon">${_INFO_NAV_ICON}</span>
-    <span class="sm-nav-label">Atmos</span>`;
+    <span class="sm-nav-label">Atmos</span>
+    ${_manager?.summary?.atmosUpdate ? '<span class="sm-nav-count sm-nav-attention" aria-label="A newer Atmos">1</span>' : ''}`;
   homeItem.addEventListener('click', () => {
     if (_activeCategory === _HOME_PAGE_ID) return;
     _activeCategory = _HOME_PAGE_ID;
@@ -345,6 +351,24 @@ function _renderNav() {
   workspaceDivider.setAttribute('aria-hidden', 'true');
   _navEl.appendChild(workspaceDivider);
 
+  // Atmos Browser, while it runs (switched off, it has no settings to show).
+  if (browserSettings.length) {
+    const browserItem = document.createElement('div');
+    browserItem.className = 'sm-nav-item' + (_activeCategory === _BROWSER_PAGE_ID ? ' active' : '');
+    browserItem.innerHTML = `
+      <span class="sm-nav-icon">${_BROWSER_NAV_ICON}</span>
+      <span class="sm-nav-label">Browser</span>`;
+    browserItem.addEventListener('click', () => {
+      if (_activeCategory === _BROWSER_PAGE_ID) return;
+      _activeCategory = _BROWSER_PAGE_ID;
+      _searchTerm = '';
+      _searchEl.value = '';
+      _renderNav();
+      _renderList();
+    });
+    _navEl.appendChild(browserItem);
+  }
+
   const managerItem = document.createElement('div');
   const attention = _managerAttentionCount();
   managerItem.className = 'sm-nav-item' + (_activeCategory === _EXTENSIONS_PAGE_ID ? ' active' : '');
@@ -362,24 +386,21 @@ function _renderNav() {
   });
   _navEl.appendChild(managerItem);
 
-  for (const category of [_SYSTEM_PAGE_ID, _PLUGINS_PAGE_ID, _SERVICES_PAGE_ID]) {
-    const groupEntries = _extensionsForPage(category);
-    const item = document.createElement('div');
-    item.className = 'sm-nav-item' + (category === _activeCategory ? ' active' : '');
-    item.innerHTML = `
-      <span class="sm-nav-icon">${category === _SYSTEM_PAGE_ID ? _SYSTEM_NAV_ICON : _CATEGORY_ICON}</span>
-      <span class="sm-nav-label">${category}</span>
-      <span class="sm-nav-count">${groupEntries.length}</span>`;
-    item.addEventListener('click', () => {
-      if (_activeCategory === category) return;
-      _activeCategory = category;
-      _searchTerm = '';
-      _searchEl.value = '';
-      _renderNav();
-      _renderList();
-    });
-    _navEl.appendChild(item);
-  }
+  const systemItem = document.createElement('div');
+  systemItem.className = 'sm-nav-item' + (_activeCategory === _SYSTEM_PAGE_ID ? ' active' : '');
+  systemItem.innerHTML = `
+    <span class="sm-nav-icon">${_SYSTEM_NAV_ICON}</span>
+    <span class="sm-nav-label">System</span>
+    <span class="sm-nav-count">${_systemExtensions().length}</span>`;
+  systemItem.addEventListener('click', () => {
+    if (_activeCategory === _SYSTEM_PAGE_ID) return;
+    _activeCategory = _SYSTEM_PAGE_ID;
+    _searchTerm = '';
+    _searchEl.value = '';
+    _renderNav();
+    _renderList();
+  });
+  _navEl.appendChild(systemItem);
   _makeNavKeyboardFriendly();
 }
 
@@ -551,6 +572,7 @@ function _renderHome() {
           <div class="sm-home-title-fallback">${APP_NAME}</div>
         </div>
         <div class="sm-home-version">${_appVersion ? `Version ${_appVersion}` : 'Version —'}</div>
+        <div class="sm-home-updates">${_atmosHomeHtml()}</div>
       </div>
       <div class="sm-about-logo">
         <img src="assets/Rev2.png" alt="Atmos mascot" id="sm-about-mascot">
@@ -589,6 +611,7 @@ function _renderHome() {
     mascotImg.addEventListener('touchend', release);
     mascotImg.addEventListener('touchcancel', release);
   }
+  _wireManagerActions();
 }
 
 // Settings → Appearance: Core's Theme, Sidebar and Glass sections
@@ -617,6 +640,28 @@ function _renderAppearancePage() {
   }
 }
 
+/** Settings contributions for the Browser page (Atmos Browser's). */
+function _browserSettingsPanels() {
+  return listSettingsPanels().filter(panel => panel.category === 'Browser');
+}
+
+// Settings → Browser: Atmos Browser's own settings (search engine, links,
+// downloads, ads and trackers, tabs, site permissions, clearing data), the
+// whole page, its sections drawn by the browser itself.
+function _renderBrowserPage() {
+  _headerEl.classList.add('sm-no-search');
+  _clearPageCleanups();
+  _listEl.innerHTML = '<div class="sm-appearance sm-browser-settings" id="sm-browser-settings"></div>';
+  const page = _listEl.querySelector('#sm-browser-settings');
+  for (const contribution of _browserSettingsPanels()) {
+    const body = document.createElement('div');
+    body.className = 'sm-appearance-contribution-body';
+    page.appendChild(body);
+    mountSettingsPanel(contribution.id, body);
+    _pageCleanups.push(() => unmountSettingsPanel(contribution.id));
+  }
+}
+
 // The Extensions, System, Plugins, Services and Sidebar pages show their
 // cards as a list or a grid: one choice for all of them, per viewer.
 const _VIEW_KEY = 'atmos:extensions-view';
@@ -632,7 +677,7 @@ function _viewToggleHtml() {
 /** Apply the list/grid choice to the page just rendered, and wire its toggle. */
 function _applyView() {
   _listEl.classList.toggle('sm-as-grid', _view === 'grid');
-  _listEl.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+  [..._listEl.querySelectorAll('[data-view]'), ..._headerActionsEl.querySelectorAll('[data-view]')].forEach(button => button.addEventListener('click', () => {
     _view = button.dataset.view === 'grid' ? 'grid' : 'list';
     try { localStorage.setItem(_VIEW_KEY, _view); } catch { /* per viewer only */ }
     _renderList();
@@ -751,33 +796,7 @@ function _renderPanelsPage() {
     row.appendChild(select);
     _listEl.appendChild(row);
   }
-
-  // The keys panels open with ("shortcut"), and any two that asked for the same one.
-  const shortcuts = listPanelShortcuts();
-  if (shortcuts.length) {
-    _listEl.insertAdjacentHTML('beforeend', `
-      <div class="sm-sidebar-page-hint sm-shortcut-hint">Keys that open a panel from anywhere in Atmos, except while typing.</div>
-      <div class="sm-shortcuts">${shortcuts.map(item => `
-        <div class="sm-shortcut-row">
-          <kbd>${escapeHtml(item.key)}</kbd>
-          <span>${escapeHtml(item.label)}<small>${escapeHtml(item.name)}</small></span>
-          ${item.others.length ? `<span class="sm-shortcut-clash">${item.others.map(other => `${escapeHtml(other.name)}’s ${escapeHtml(other.label)}`).join(', ')} asked for it too and ${item.others.length === 1 ? 'doesn’t' : 'don’t'} get it</span>` : ''}
-        </div>`).join('')}
-      </div>`);
-  }
 }
-
-/** Its panel's key for its own card: which one, or who has it instead. */
-function _shortcutLine(extension) {
-  const ref = `${extension.kind}:${extension.id}`;
-  for (const item of listPanelShortcuts()) {
-    if (item.extension === ref) return `Its panel opens with the ${escapeHtml(item.key)} key`;
-    const lost = item.others.find(other => other.extension === ref);
-    if (lost) return `Asks for the ${escapeHtml(item.key)} key, which opens ${escapeHtml(item.name)}’s ${escapeHtml(item.label)} instead`;
-  }
-  return null;
-}
-
 
 /**
  * An extension's own icon (its panel's, else its first surface's), drawn as
@@ -804,13 +823,6 @@ function _extensionLabel(extension) {
 
 // Trust states that keep an extension from loading (see extension-trust.cjs).
 const _UNTRUSTED = new Set(['pending', 'changed', 'blocked', 'tampered', 'incompatible']);
-const _STATUS_TEXT = {
-  pending: 'needs approval',
-  changed: 'changed since approval',
-  blocked: 'blocked',
-  tampered: 'files modified',
-  incompatible: 'not for this Atmos',
-};
 
 /** Whether a restart would load or unload this extension. */
 function _needsRestart(extension) {
@@ -821,19 +833,6 @@ function _needsRestart(extension) {
 
 function _hasPendingRestart() {
   return [..._extensions.Plugins, ..._extensions.Services].some(_needsRestart);
-}
-
-function _extensionStatusText(extension) {
-  if (extension.tier === 'system') return _UNTRUSTED.has(extension.status) ? _STATUS_TEXT[extension.status] : 'always on';
-  if (extension.status === 'developer' && !_needsRestart(extension)) return 'developer folder, reloads when you save';
-  if (extension.approvalChanged) return 'restart required';
-  if (_UNTRUSTED.has(extension.status) && extension.enabled) return _STATUS_TEXT[extension.status];
-  if (extension.enabled && (extension.dependencyProblems || []).length && !_needsRestart(extension)) {
-    return extension.activationFailed ? "didn't start" : 'missing a dependency';
-  }
-  if (_needsRestart(extension)) return 'restart required';
-  if (extension.active && _approvedThisSession.has(`${extension.kind}:${extension.id}`)) return 'loaded when you approved it';
-  return extension.enabled ? 'loaded at startup' : 'not loaded';
 }
 
 const _SANDBOX_WARNING = 'Community extensions run in their own sandboxed frame: they cannot see the rest of Atmos, '
@@ -889,8 +888,6 @@ function _packageDetailsHtml(extension) {
   if (required.length) lines.push(`Needs ${names(required)}`);
   if (optional.length) lines.push(`Works better with ${names(optional)}${(extension.optionalMissing || []).length ? ` (not loaded: ${extension.optionalMissing.map(escapeHtml).join(', ')})` : ''}`);
   if ((extension.usedBy || []).length) lines.push(`Used by ${names(extension.usedBy)}`);
-  const shortcut = extension.active ? _shortcutLine(extension) : null;
-  if (shortcut) lines.push(shortcut);
   return lines.length ? `<ul class="sm-permission-list sm-package-details">${lines.map(line => `<li>${line}</li>`).join('')}</ul>` : '';
 }
 
@@ -946,7 +943,7 @@ function _extensionTrustHtml(extension) {
     : '';
   return `${developer}${fellBack}${loadedNow}${_sharingRiskHtml(extension)}
     <details class="sm-permissions">
-      <summary>Details</summary>
+      <summary hidden>Details</summary>
       ${_packageDetailsHtml(extension)}
       ${_permissionList(summary)}
       ${_sharingHtml(extension)}
@@ -957,61 +954,52 @@ function _extensionTrustHtml(extension) {
     </details>`;
 }
 
-function _renderExtensionsPage() {
-  _headerEl.classList.remove('sm-no-search');
-  const extensions = _extensionsForPage(_activeCategory);
-  const kind = _activeCategory === _PLUGINS_PAGE_ID ? 'plugin' : 'service'; // System and Services are services
-  const filtered = _searchTerm
-    ? extensions.filter(extension => `${_extensionLabel(extension)} ${extension.id}`.toLowerCase().includes(_searchTerm))
-    : extensions;
-
-  const pageNoun = _activeCategory === _SYSTEM_PAGE_ID ? 'system capabilities' : _activeCategory.toLowerCase();
-  _searchEl.placeholder = `Search ${pageNoun}…`;
-
-  if (!extensions.length) {
-    _listEl.innerHTML = `<div id="settings-menu-empty">No ${pageNoun} are installed.</div>`;
-    return;
+/**
+ * Its version, and whether it's off or waits for a restart. Anything else
+ * (approval, problems, a developer folder) is said under the card.
+ */
+function _cardDetail(extension) {
+  let state = '';
+  if (extension.tier !== 'system') {
+    const blocked = _UNTRUSTED.has(extension.status) || (extension.dependencyProblems || []).length || extension.approvalChanged;
+    if (!extension.enabled) state = extension.active ? 'off after a restart' : 'off';
+    else if (!blocked && _needsRestart(extension)) state = 'on after a restart';
   }
-  if (!filtered.length) {
-    _listEl.innerHTML = `<div id="settings-menu-empty">No matches for "${escapeHtml(_searchEl.value.trim())}".</div>`;
-    return;
-  }
+  return [extension.version, state].filter(Boolean).map(escapeHtml).join(' · ');
+}
 
-  _listEl.innerHTML = `
-    <div class="sm-extension-toolbar">
-      <span>${_activeCategory === _SYSTEM_PAGE_ID
-        ? 'System capabilities are built into Atmos and are always available.'
-        : 'Disabled extensions are skipped before any of their code is loaded.'}</span>
-      <span class="sm-manager-actions">
-        ${_hasPendingRestart() ? '<button type="button" class="sm-restart-button">Restart Atmos</button>' : ''}
-        ${_viewToggleHtml()}
-      </span>
-    </div>`;
-  const group = document.createElement('div');
-  group.className = 'sm-card-group';
-
-  _listEl.querySelector('.sm-restart-button')?.addEventListener('click', () => {
-    window.atmosCore?.restartAtmos?.();
-  });
-
-  for (const extension of filtered) {
-    const label = _extensionLabel(extension);
-    const system = extension.tier === 'system';
-    const tierLabel = _TIER_LABELS[extension.tier] || _TIER_LABELS['third-party'];
-    const card = document.createElement('div');
-    card.className = `sm-card sm-extension-card${extension.enabled ? '' : ' disabled'}`;
-    card.dataset.key = `${kind}:${extension.id}`;
-    card.innerHTML = `
+/**
+ * An installed extension's card: its switch, Remove where it can be
+ * removed (`remove`), and its approval, problems and Details below.
+ * `below` goes under the card (Remove's confirmation, optional extras).
+ */
+function _installedCardHtml(extension, { remove = '', below = '' } = {}) {
+  const key = `${extension.kind}:${extension.id}`;
+  const label = _extensionLabel(extension);
+  const system = extension.tier === 'system';
+  return `
+    <div class="sm-card sm-extension-card sm-manager-row${extension.enabled ? '' : ' disabled'}" data-key="${escapeHtml(key)}">
       <div class="sm-card-main">
         <div class="sm-icon">${_extensionIconHtml(extension)}</div>
         <div class="sm-card-text">
-          <div class="sm-card-name">${escapeHtml(label)} <span class="sm-tier-badge" data-tier="${escapeHtml(extension.tier || 'third-party')}">${tierLabel}</span>${extension.source === 'developer' ? ' <span class="sm-tier-badge" data-tier="developer">Developer</span>' : ''}</div>
-          <div class="sm-card-detail">${escapeHtml(extension.id)}${extension.version ? ` ${escapeHtml(extension.version)}` : ''} · ${escapeHtml(_extensionStatusText(extension))}</div>
+          <div class="sm-card-name">${escapeHtml(label)}${extension.source === 'developer' ? ' <span class="sm-tier-badge" data-tier="developer">Developer</span>' : ''}</div>
+          <div class="sm-card-detail">${_cardDetail(extension)}</div>
         </div>
-        ${system ? '' : _toggleHtml(extension.enabled, `Enable ${label}`)}
+        <div class="sm-manager-actions">${remove}${system ? '' : _toggleHtml(extension.enabled, `Enable ${label}`)}</div>
       </div>
-      <div class="sm-extension-trust">${_extensionTrustHtml(extension)}</div>`;
+      <div class="sm-extension-trust">${_extensionTrustHtml(extension)}</div>
+      ${below}
+      ${_managerErrorHtml(key)}
+    </div>`;
+}
 
+/** Approve, Keep disabled, Remove approval, Restart and the switch on the cards just drawn. */
+function _wireInstalledCards() {
+  const all = [..._extensions.Plugins, ..._extensions.Services];
+  _listEl.querySelectorAll('.sm-extension-card[data-key]').forEach(card => {
+    const extension = all.find(item => `${item.kind}:${item.id}` === card.dataset.key);
+    if (!extension) return;
+    const { kind, id } = extension;
     card.querySelectorAll('[data-trust-action]').forEach(button => button.addEventListener('click', async () => {
       const action = button.dataset.trustAction;
       const errorEl = card.querySelector('.sm-trust-error');
@@ -1022,7 +1010,7 @@ function _renderExtensionsPage() {
           return;
         }
         if (action === 'approve') {
-          const result = await window.atmosCore?.approveExtension?.(kind, extension.id, extension.fingerprint);
+          const result = await window.atmosCore?.approveExtension?.(kind, id, extension.fingerprint);
           if (result?.loaded?.length) {
             // Loaded at once (the frame host registers its surfaces, from
             // the main process's extensions:loaded): say so on its card.
@@ -1032,17 +1020,16 @@ function _renderExtensionsPage() {
           }
           extension.approvalChanged = true;
         } else if (action === 'revoke') {
-          await window.atmosCore?.revokeExtensionApproval?.(kind, extension.id);
+          await window.atmosCore?.revokeExtensionApproval?.(kind, id);
           extension.approvalChanged = true;
         } else if (action === 'keep-disabled') {
-          await window.atmosCore?.setExtensionEnabled?.(kind, extension.id, false);
+          await window.atmosCore?.setExtensionEnabled?.(kind, id, false);
           extension.enabled = false;
         }
-        _renderNav();
-        _renderExtensionsPage();
+        _redrawKeepingState();
       } catch (error) {
         button.disabled = false;
-        console.warn(`[settings] ${action} failed for ${kind} '${extension.id}':`, error.message);
+        console.warn(`[settings] ${action} failed for ${kind} '${id}':`, error.message);
         if (errorEl) {
           errorEl.hidden = false;
           errorEl.textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
@@ -1050,37 +1037,76 @@ function _renderExtensionsPage() {
       }
     }));
 
-    const toggle = card.querySelector('input[type="checkbox"]');
+    // Clicking the card (not its switch or buttons) shows or hides its details.
+    const details = card.querySelector('.sm-extension-trust > details.sm-permissions');
+    const main = card.querySelector('.sm-card-main');
+    if (details && main) {
+      const sync = () => {
+        main.setAttribute('aria-expanded', String(details.open));
+        card.classList.toggle('open', details.open);
+      };
+      main.setAttribute('role', 'button');
+      main.tabIndex = 0;
+      sync();
+      details.addEventListener('toggle', sync);
+      main.addEventListener('click', event => {
+        if (event.target.closest('button, input, label, a, select, textarea')) return;
+        details.open = !details.open;
+      });
+      main.addEventListener('keydown', event => {
+        if (event.target !== main || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        details.open = !details.open;
+      });
+    }
+
+    const toggle = card.querySelector('.sm-card-main input[type="checkbox"]');
     toggle?.addEventListener('change', async () => {
       const nextEnabled = toggle.checked;
       toggle.disabled = true;
       try {
-        await window.atmosCore?.setExtensionEnabled?.(kind, extension.id, nextEnabled);
+        await window.atmosCore?.setExtensionEnabled?.(kind, id, nextEnabled);
         extension.enabled = nextEnabled;
-        _renderNav();
-        _renderExtensionsPage();
+        _redrawKeepingState();
       } catch (error) {
         toggle.checked = !nextEnabled;
         toggle.disabled = false;
-        console.warn(`[settings] failed to update ${kind} '${extension.id}':`, error.message);
+        console.warn(`[settings] failed to update ${kind} '${id}':`, error.message);
       }
     });
-
-    group.appendChild(card);
-  }
-  _listEl.appendChild(group);
-  _applyView();
+  });
 }
 
-function _extensionsForPage(category) {
-  if (category === _SYSTEM_PAGE_ID) return _extensions.Services.filter(extension => extension.tier === 'system');
-  if (category === _SERVICES_PAGE_ID) return _extensions.Services.filter(extension => extension.tier !== 'system');
-  return _extensions[category] || [];
+function _systemExtensions() {
+  return _extensions.Services.filter(extension => extension.tier === 'system');
+}
+
+/** Whether the search box's text is in its name or id. */
+function _matchesSearch(name, id) {
+  return !_searchTerm || `${name} ${id}`.toLowerCase().includes(_searchTerm);
+}
+
+function _renderSystemPage() {
+  _headerEl.classList.add('sm-no-search');
+  const extensions = _systemExtensions();
+  if (!extensions.length) {
+    _listEl.innerHTML = '<div id="settings-menu-empty">No system capabilities are installed.</div>';
+    return;
+  }
+  _listEl.innerHTML = `
+    <div class="sm-extension-toolbar">
+      <span>Built into Atmos and always available.</span>
+      <span class="sm-manager-actions">${_viewToggleHtml()}</span>
+    </div>
+    <div class="sm-card-group">${extensions.map(extension => _installedCardHtml(extension)).join('')}</div>`;
+  _wireInstalledCards();
+  _applyView();
 }
 
 function _renderList() {
   _clearPageCleanups();
   _headerEl.classList.remove('sm-no-search');
+  _headerActionsEl.innerHTML = '';
   _listEl.classList.remove('sm-as-grid');
 
   if (_activeCategory === _ONBOARDING_PAGE_ID) {
@@ -1095,6 +1121,11 @@ function _renderList() {
 
   if (_activeCategory === _APPEARANCE_PAGE_ID) {
     _renderAppearancePage();
+    return;
+  }
+
+  if (_activeCategory === _BROWSER_PAGE_ID) {
+    _renderBrowserPage();
     return;
   }
 
@@ -1113,7 +1144,7 @@ function _renderList() {
     return;
   }
 
-  _renderExtensionsPage();
+  _renderSystemPage();
 }
 
 function _render() {
@@ -1169,18 +1200,20 @@ let _managerSubscribed = false;
 
 function _managerAttentionCount() {
   const summary = _manager?.summary;
-  return summary ? (summary.atmosUpdate ? 1 : 0) + (summary.updates || 0) + (summary.pending || 0) + (summary.problems?.length || 0) + (summary.approvals?.length || 0) : 0;
+  return summary ? (summary.updates || 0) + (summary.pending || 0) + (summary.problems?.length || 0) + (summary.approvals?.length || 0) : 0;
 }
 
 /** Settings on an extension's own card (from "Review" on the Extensions page, or elsewhere). */
 export function openExtensionCard(kind, id) {
-  _activeCategory = kind === 'plugin' ? _PLUGINS_PAGE_ID : _SERVICES_PAGE_ID;
+  const system = _systemExtensions().some(item => item.id === id && kind === 'service');
+  _extensionsMode = 'installed';
+  _activeCategory = system ? _SYSTEM_PAGE_ID : _EXTENSIONS_PAGE_ID;
   _searchTerm = '';
   if (_searchEl) _searchEl.value = '';
   if (!_overlay?.classList.contains('open')) openSettingsMenu();
   else _render();
   const show = () => {
-    const card = _listEl?.querySelector(`[data-key="${CSS.escape(`${kind}:${id}`)}"]`);
+    const card = _listEl?.querySelector(`.sm-extension-card[data-key="${CSS.escape(`${kind}:${id}`)}"]`);
     if (!card) return false;
     card.scrollIntoView({ block: 'center' });
     card.classList.add('sm-card-highlight');
@@ -1195,7 +1228,7 @@ function _setManager(payload) {
   if (!payload?.status) return;
   _manager = { status: payload.status, summary: payload.summary };
   if (!_overlay?.classList.contains('open')) return;
-  if (_activeCategory === _EXTENSIONS_PAGE_ID) _redrawKeepingState();
+  if (_activeCategory === _EXTENSIONS_PAGE_ID || _activeCategory === _HOME_PAGE_ID) _redrawKeepingState();
   else _renderNav();
 }
 
@@ -1227,7 +1260,7 @@ async function _managerRequest(key, run) {
     return null;
   } finally {
     _managerBusy.delete(key);
-    if (_activeCategory === _EXTENSIONS_PAGE_ID) _renderList();
+    if (_activeCategory === _EXTENSIONS_PAGE_ID || _activeCategory === _HOME_PAGE_ID) _renderList();
   }
 }
 
@@ -1349,13 +1382,16 @@ function _leftUnused(extension, installed, pendingByKey) {
 }
 
 /**
- * Settings → Extensions, the Atmos section. A newer version comes from a
- * source's signed index; an installed copy on Windows downloads it, checks
- * it and installs it (atmos-update.cjs; its offer outlasts a check that
- * couldn't reach the source), any other copy offers the download page from
- * Core's own settings (the main process opens it).
+ * Settings → Atmos, under the version: whether it's up to date, or the
+ * newer version and what to do about it, and "Update automatically". A
+ * newer version comes from a source's signed index; an installed copy on
+ * Windows downloads it, checks it and installs it (atmos-update.cjs; its
+ * offer outlasts a check that couldn't reach the source), any other copy
+ * offers the download page (the main process opens it).
  */
-function _atmosSectionHtml(summary, status) {
+function _atmosHomeHtml() {
+  if (!window.atmosCore?.extensionManager || !_manager) return '';
+  const { status, summary } = _manager;
   const atmos = summary.atmos || {};
   const offer = summary.atmosUpdate;
   const current = escapeHtml(atmos.current || offer?.current || '');
@@ -1364,13 +1400,25 @@ function _atmosSectionHtml(summary, status) {
   let name;
   let detail;
   let actions = '';
+  const auto = atmos.canInstall ? `
+    <div class="sm-home-auto sm-manager-row" data-key="atmos-auto">
+      <span title="${atmos.perMachine
+        ? 'Downloads new versions in the background; Restart to update installs them'
+        : 'Downloads new versions in the background and installs them when you quit'}">Update automatically</span>
+      ${_toggleHtml(atmos.auto !== false, 'Update Atmos automatically')}
+    </div>` : '';
   if (!offer) {
-    name = `Atmos ${current}`;
-    const updated = atmos.justInstalled ? `Updated from ${escapeHtml(atmos.justInstalled.from || 'an older version')}. ` : '';
+    const updated = atmos.justInstalled ? `Updated from ${escapeHtml(atmos.justInstalled.from || 'an older version')} · ` : '';
     const firstError = (status.sources || []).find(source => source.error)?.error;
-    if (!status.checkedAt) detail = `${updated}Not checked yet`;
-    else if (summary.reached === false) detail = `${updated}Couldn't check for a newer version${firstError ? `: ${escapeHtml(firstError)}` : ''}`;
-    else detail = `${updated}Up to date`;
+    let state;
+    if (_managerBusy.has('check')) state = 'Checking…';
+    else if (!status.checkedAt) state = 'Not checked yet';
+    else if (summary.reached === false) state = `<span title="${escapeHtml(firstError || '')}">Couldn't check</span>`;
+    else state = `Up to date · ${escapeHtml(_formatWhen(status.checkedAt))}`;
+    return `
+      <div class="sm-home-status sm-manager-row" data-key="atmos">${updated}${state}${_managerBusy.has('check') ? '' : ' · <button type="button" class="sm-home-link" data-manager-action="check">Check now</button>'}</div>
+      ${_managerErrorHtml('check')}
+      ${auto}`;
   } else {
     const version = escapeHtml(offer.version);
     if (mine && atmos.phase === 'ready') {
@@ -1407,22 +1455,94 @@ function _atmosSectionHtml(summary, status) {
       actions = offer.download ? _button('download-atmos', 'Download', { key: 'atmos', primary: true, busyLabel: 'Opening…' }) : '';
     }
   }
-  const rows = [_managerRow({ key: 'atmos', name, detail, actions, extra: _managerErrorHtml('atmos-page') })];
-  if (atmos.canInstall) {
-    rows.push(_managerRow({
-      key: 'atmos-auto',
-      name: 'Update Atmos automatically',
-      detail: atmos.perMachine
-        ? 'Downloads new versions in the background; Restart to update installs them'
-        : 'Downloads new versions in the background and installs them when you quit',
-      actions: _toggleHtml(atmos.auto !== false, 'Update Atmos automatically'),
-    }));
+  return `
+    <div class="sm-home-update sm-manager-row" data-key="atmos">
+      <div class="sm-home-update-name">${name}</div>
+      <div class="sm-home-update-detail">${detail}</div>
+      ${actions ? `<div class="sm-manager-actions">${actions}</div>` : ''}
+      ${_managerErrorHtml('atmos')}${_managerErrorHtml('atmos-page')}
+    </div>
+    ${auto}`;
+}
+
+// ── Sources ──
+let _addingSource = false; // the Add a source row is open
+
+const _SOURCE_WEB_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"/></svg>`;
+const _SOURCE_FOLDER_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`;
+const _SOURCE_ADD_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`;
+
+/** A source's error in a few words; the full message is its tooltip. */
+function _sourceProblem(error) {
+  const text = String(error || '');
+  if (/CERT|certificate/i.test(text)) return 'Certificate not trusted';
+  if (/NAME_NOT_RESOLVED|ENOTFOUND|NAME_RESOLUTION/i.test(text)) return 'Address not found';
+  if (/INTERNET_DISCONNECTED|NETWORK_CHANGED|ENETUNREACH/i.test(text)) return 'Offline';
+  if (/TIMED_OUT|timed out|stalled/i.test(text)) return 'Timed out';
+  if (/ENOENT|no such file|not found/i.test(text)) return 'Not found';
+  if (/signature|signed/i.test(text)) return 'Signature not valid';
+  return "Couldn't be read";
+}
+
+function _sourceCardHtml(source) {
+  const web = /^https?:/i.test(source.location);
+  let title = source.name;
+  let where = source.location;
+  if (web) {
+    try {
+      const url = new URL(source.location);
+      title ||= url.hostname;
+      where = `${url.hostname}${url.pathname.replace(/\/$/, '')}`;
+    } catch { /* shown as written */ }
+  } else {
+    title ||= source.location.split(/[\\/]/).filter(Boolean).pop() || source.location;
   }
-  return `<div class="sm-manager-heading">Atmos</div><div class="sm-card-group">${rows.join('')}</div>`;
+  const state = source.ok === true ? 'ok' : source.ok === false ? 'error' : 'idle';
+  const label = state === 'ok' ? `${source.packages} package${source.packages === 1 ? '' : 's'}`
+    : state === 'error' ? _sourceProblem(source.error) : 'Not checked yet';
+  const origin = source.origin === 'built-in' ? 'Built in' : source.origin === 'session' ? 'This session' : '';
+  return `
+    <div class="sm-card sm-manager-source${state === 'error' ? ' sm-trust-alert' : ''}" data-location="${escapeHtml(source.location)}">
+      <div class="sm-card-main">
+        <div class="sm-icon">${web ? _SOURCE_WEB_ICON : _SOURCE_FOLDER_ICON}</div>
+        <div class="sm-card-text">
+          <div class="sm-card-name">${escapeHtml(title)}${origin ? ` <span class="sm-source-tag">${origin}</span>` : ''}</div>
+          <div class="sm-card-detail" title="${escapeHtml(source.location)}">${escapeHtml(where)}</div>
+        </div>
+        <span class="sm-source-state ${state}"${state === 'error' ? ` title="${escapeHtml(source.error || '')}"` : ''}><i class="sm-source-dot ${state}"></i>${escapeHtml(label)}</span>
+        ${source.origin === 'user' ? '<button type="button" class="sm-trust-secondary" data-manager-action="remove-source">Remove</button>' : ''}
+      </div>
+    </div>`;
+}
+
+// What Settings → Extensions lists: what's installed, or the sources.
+let _extensionsMode = 'installed';
+const _MODE_INSTALLED_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>`;
+const _MODE_SOURCES_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
+
+/** Settings → Extensions switched to its sources: where packages come from, and adding one. */
+function _renderSourcesList(status, sections) {
+  const shown = status.sources.filter(source => _matchesSearch(source.name || '', source.location));
+  sections.push(`
+    <div class="sm-source-list">
+      ${shown.map(_sourceCardHtml).join('')}
+      ${_searchTerm && !shown.length ? `<div id="settings-menu-empty">No matches for "${escapeHtml(_searchEl.value.trim())}".</div>` : ''}
+      ${_addingSource ? `
+        <form class="sm-manager-add-source">
+          <span class="sm-icon">${_SOURCE_ADD_ICON}</span>
+          <input type="text" placeholder="A folder, or an https:// address with an index.json" aria-label="New source">
+          ${_button('add-source', 'Add', { key: 'source', primary: true, busyLabel: 'Checking…' })}
+          <button type="button" class="sm-trust-secondary" data-manager-action="cancel-add-source">Cancel</button>
+        </form>
+        ${_managerErrorHtml('source')}`
+        : `<button type="button" class="sm-source-add" data-manager-action="show-add-source"><span class="sm-icon">${_SOURCE_ADD_ICON}</span>Add a source</button>`}
+    </div>`);
+  _listEl.innerHTML = sections.join('');
+  _wireManagerActions();
 }
 
 function _renderExtensionManagerPage() {
-  _headerEl.classList.add('sm-no-search');
+  _headerEl.classList.remove('sm-no-search');
   if (!window.atmosCore?.extensionManager) {
     _listEl.innerHTML = '<div id="settings-menu-empty">The extension manager is not available.</div>';
     return;
@@ -1436,21 +1556,26 @@ function _renderExtensionManagerPage() {
   const installedExtensions = [..._extensions.Plugins, ..._extensions.Services];
   const sections = [];
 
-  // Header: when the sources were last checked, and restart when changes wait.
-  sections.push(`
-    <div class="sm-extension-toolbar">
-      <span>${status.checkedAt ? `Checked ${escapeHtml(_formatWhen(status.checkedAt))}` : 'Not checked yet'}. Extension updates are only downloaded when you press Update.</span>
-      <span class="sm-manager-actions">
-        ${status.pending.length ? '<button type="button" class="sm-restart-button" data-manager-action="restart">Restart to apply</button>' : ''}
-        ${_button('check', 'Check for updates', { key: 'check', busyLabel: 'Checking…' })}
-        ${_viewToggleHtml()}
-      </span>
-    </div>
-    ${_managerErrorHtml('check')}`);
+  // Beside the search box: restart when changes wait, check now (when it
+  // last did, on hover), what the page lists (installed or sources), and
+  // list or grid.
+  const sourcesMode = _extensionsMode === 'sources';
+  const sourceTrouble = status.sources.some(source => source.ok === false);
+  _headerActionsEl.innerHTML = `
+    ${status.pending.length || _hasPendingRestart() ? '<button type="button" class="sm-restart-button" data-manager-action="restart">Restart to apply</button>' : ''}
+    ${_button('check', 'Check for updates', { key: 'check', busyLabel: 'Checking…' }).replace('<button ', `<button title="${status.checkedAt ? `Checked ${escapeHtml(_formatWhen(status.checkedAt))}` : 'Not checked yet'}" `)}
+    <span class="sm-view-toggle" role="group" aria-label="Show">
+      <button type="button" data-extensions-mode="installed" aria-pressed="${!sourcesMode}" title="Extensions">${_MODE_INSTALLED_ICON}</button>
+      <button type="button" data-extensions-mode="sources" aria-pressed="${sourcesMode}" title="${sourceTrouble ? 'Sources: one has a problem' : 'Sources'}">${_MODE_SOURCES_ICON}${sourceTrouble ? '<i class="sm-source-dot error"></i>' : ''}</button>
+    </span>
+    ${sourcesMode ? _viewToggleHtml().replace(/<button /g, '<button disabled ') : _viewToggleHtml()}`;
+  _searchEl.placeholder = sourcesMode ? 'Search sources…' : 'Search extensions…';
+  sections.push(_managerErrorHtml('check'));
 
-  // Atmos itself: its version, a newer one (the version from a source's
-  // signed index), and updating itself where this copy can.
-  sections.push(_atmosSectionHtml(summary, status));
+  if (sourcesMode) {
+    _renderSourcesList(status, sections);
+    return;
+  }
 
   // Community extensions copied in by hand wait for approval without
   // showing anything; say which, and take the user to each one's card.
@@ -1459,7 +1584,7 @@ function _renderExtensionManagerPage() {
     for (const item of summary.approvals) {
       sections.push(_managerRow({
         key: `${item.kind}:${item.id}`,
-        name: `${escapeHtml(item.name)} <span class="sm-tier-badge" data-tier="third-party">${_TIER_LABELS['third-party']}</span>`,
+        name: escapeHtml(item.name),
         detail: item.status === 'changed'
           ? 'Its files changed since you approved it. It stays off until you review it again'
           : 'Not loaded until you approve it. Review what it asks for',
@@ -1499,7 +1624,7 @@ function _renderExtensionManagerPage() {
     sections.push('</div>');
   }
 
-  const updates = status.packages.filter(item => item.action === 'update' && !pendingByKey.has(`${item.kind}:${item.id}`));
+  const updates = status.packages.filter(item => item.action === 'update' && !pendingByKey.has(`${item.kind}:${item.id}`) && _matchesSearch(item.displayName || '', item.id));
   if (updates.length) {
     sections.push(`<div class="sm-manager-heading">Updates</div>`);
     sections.push(_groupByKind(updates, item => {
@@ -1513,7 +1638,7 @@ function _renderExtensionManagerPage() {
     }));
   }
 
-  const available = status.packages.filter(item => item.action === 'install' && !pendingByKey.has(`${item.kind}:${item.id}`));
+  const available = status.packages.filter(item => item.action === 'install' && !pendingByKey.has(`${item.kind}:${item.id}`) && _matchesSearch(item.displayName || '', item.id));
   if (available.length) {
     sections.push(`<div class="sm-manager-heading">Available</div>`);
     sections.push(_groupByKind(available, item => {
@@ -1521,7 +1646,7 @@ function _renderExtensionManagerPage() {
       const replaces = item.installedTier === 'third-party' ? ' · replaces the community copy' : '';
       return _managerRow({
         key,
-        name: `${escapeHtml(item.displayName || item.id)} <span class="sm-tier-badge" data-tier="first-party">Official</span>`,
+        name: escapeHtml(item.displayName || item.id),
         detail: `${escapeHtml(item.version)} · ${escapeHtml(_formatSize(item.size))}${item.description ? ` · ${escapeHtml(item.description)}` : ''}${replaces}`,
         needs: _needsHtml({ dependencies: item.dependencies }),
         actions: _button('install', 'Install', { key, primary: true, busyLabel: 'Downloading…' }),
@@ -1530,63 +1655,63 @@ function _renderExtensionManagerPage() {
     }));
   }
 
-  const removable = installedExtensions.filter(extension => extension.removable && !pendingByKey.has(`${extension.kind}:${extension.id}`));
-  if (removable.length) {
-    sections.push(`<div class="sm-manager-heading">Installed</div>`);
-    sections.push(_groupByKind(removable, extension => {
-      const key = `${extension.kind}:${extension.id}`;
-      const confirming = _confirmRemove === key;
-      const bundled = extension.bundledFallback === true;
-      return _managerRow({
-        key,
-        name: `${escapeHtml(_extensionLabel(extension))} <span class="sm-tier-badge" data-tier="${escapeHtml(extension.tier)}">${_TIER_LABELS[extension.tier] || ''}</span>`,
-        detail: `${extension.version ? escapeHtml(extension.version) : ''}${extension.manifest?.description ? ` · ${escapeHtml(extension.manifest.description)}` : ''}`,
-        needs: _needsHtml({ dependencies: extension.dependencies, usedBy: extension.usedBy }),
-        actions: confirming ? '' : _button('ask-remove', 'Remove', { key }),
-        extra: confirming ? `
-          <div class="sm-trust-note sm-trust-review sm-manager-confirm">
-            <div>Remove ${escapeHtml(_extensionLabel(extension))} when Atmos restarts?${bundled ? ' The version that comes with Atmos is used again.' : ''}</div>
-            <label class="sm-manager-choice"><input type="radio" name="remove-data-${escapeHtml(key)}" value="keep" checked> Keep its settings and data</label>
-            <label class="sm-manager-choice"><input type="radio" name="remove-data-${escapeHtml(key)}" value="delete"> Delete its settings and data</label>
-            ${(() => {
-              const unused = _leftUnused(extension, installedExtensions, pendingByKey);
-              return unused.length ? `<div class="sm-manager-also">Nothing else uses these; remove them too:</div>
-                ${unused.map(item => `<label class="sm-manager-choice"><input type="checkbox" data-also-remove="${escapeHtml(`${item.kind}:${item.id}`)}" checked> ${escapeHtml(_extensionLabel(item))}</label>`).join('')}` : '';
-            })()}
-            <div class="sm-trust-actions">
-              ${_button('remove', 'Remove', { key, primary: true })}
-              <button type="button" class="sm-trust-secondary" data-manager-action="keep">Cancel</button>
-            </div>
-          </div>` : _optionalOffersHtml(key),
-      });
-    }));
+  // What's installed: plugins, then services, each Official then Community.
+  // (System capabilities have their own page.)
+  const removeHtml = extension => {
+    const key = `${extension.kind}:${extension.id}`;
+    if (!extension.removable || pendingByKey.has(key)) return { remove: '', below: '' };
+    if (_confirmRemove !== key) return { remove: _button('ask-remove', 'Remove', { key }), below: _optionalOffersHtml(key) };
+    const bundled = extension.bundledFallback === true;
+    const unused = _leftUnused(extension, installedExtensions, pendingByKey);
+    return {
+      remove: '',
+      below: `
+        <div class="sm-trust-note sm-trust-review sm-manager-confirm">
+          <div>Remove ${escapeHtml(_extensionLabel(extension))} when Atmos restarts?${bundled ? ' The version that comes with Atmos is used again.' : ''}</div>
+          <label class="sm-manager-choice"><input type="radio" name="remove-data-${escapeHtml(key)}" value="keep" checked> Keep its settings and data</label>
+          <label class="sm-manager-choice"><input type="radio" name="remove-data-${escapeHtml(key)}" value="delete"> Delete its settings and data</label>
+          ${unused.length ? `<div class="sm-manager-also">Nothing else uses these; remove them too:</div>
+            ${unused.map(item => `<label class="sm-manager-choice"><input type="checkbox" data-also-remove="${escapeHtml(`${item.kind}:${item.id}`)}" checked> ${escapeHtml(_extensionLabel(item))}</label>`).join('')}` : ''}
+          <div class="sm-trust-actions">
+            ${_button('remove', 'Remove', { key, primary: true })}
+            <button type="button" class="sm-trust-secondary" data-manager-action="keep">Cancel</button>
+          </div>
+        </div>`,
+    };
+  };
+  let shown = 0;
+  for (const [label, list] of [['Plugins', _extensions.Plugins], ['Services', _extensions.Services.filter(item => item.tier !== 'system')]]) {
+    const mine = list.filter(extension => _matchesSearch(_extensionLabel(extension), extension.id));
+    if (!mine.length) continue;
+    shown += mine.length;
+    sections.push(`<div class="sm-manager-heading">${label}</div>`);
+    for (const [segment, inSegment] of [['Official', item => item.tier !== 'third-party'], ['Community', item => item.tier === 'third-party']]) {
+      const cards = mine.filter(inSegment);
+      if (!cards.length) continue;
+      sections.push(`<div class="sm-manager-subheading">${segment}<span>${cards.length}</span></div>`);
+      sections.push(`<div class="sm-card-group">${cards.map(extension => _installedCardHtml(extension, removeHtml(extension))).join('')}</div>`);
+    }
   }
-
-  // Sources: where packages come from.
-  sections.push(`<div class="sm-manager-heading">Sources</div>`);
-  if (!status.sources.length) {
-    sections.push('<div class="sm-trust-note sm-manager-empty">No sources yet. Add a folder or an https:// address that has an index.json.</div>');
+  if (_searchTerm && !shown && !updates.length && !available.length) {
+    sections.push(`<div id="settings-menu-empty">No matches for "${escapeHtml(_searchEl.value.trim())}".</div>`);
   }
-  for (const source of status.sources) {
-    const state = source.ok === null || source.ok === undefined ? 'not checked yet'
-      : source.ok ? `${source.packages} package${source.packages === 1 ? '' : 's'}` : source.error;
-    sections.push(`
-      <div class="sm-manager-source${source.ok === false ? ' sm-trust-alert' : ''}" data-location="${escapeHtml(source.location)}">
-        <span class="sm-manager-source-name">${escapeHtml(source.name ? `${source.name} · ` : '')}${escapeHtml(source.location)}</span>
-        <span class="sm-manager-source-state">${escapeHtml(state)}${source.origin === 'built-in' ? ' · built in' : source.origin === 'session' ? ' · this session' : ''}</span>
-        ${source.origin === 'user' ? '<button type="button" class="sm-trust-secondary" data-manager-action="remove-source">Remove</button>' : ''}
-      </div>`);
-  }
-  sections.push(`
-    <form class="sm-manager-add-source">
-      <input type="text" placeholder="Folder or https:// address" aria-label="New source">
-      ${_button('add-source', 'Add source', { key: 'source' })}
-    </form>
-    ${_managerErrorHtml('source')}`);
 
   _listEl.innerHTML = sections.join('');
+  _wireInstalledCards();
   _applyView();
 
+  _wireManagerActions();
+}
+
+/** The manager's buttons, switches and forms on the page just drawn (Extensions, or Atmos's own). */
+function _wireManagerActions() {
+  _headerActionsEl.querySelectorAll('[data-extensions-mode]').forEach(button => button.addEventListener('click', () => {
+    if (_extensionsMode === button.dataset.extensionsMode) return;
+    _extensionsMode = button.dataset.extensionsMode;
+    _searchTerm = '';
+    _searchEl.value = '';
+    _renderList();
+  }));
   _listEl.querySelector('.sm-manager-row[data-key="atmos-auto"] input[type="checkbox"]')?.addEventListener('change', event => {
     const on = event.target.checked;
     _managerRequest('atmos-auto', api => api.setAtmosAutoUpdate(on));
@@ -1597,7 +1722,7 @@ function _renderExtensionManagerPage() {
     _listEl.querySelector('.sm-manager-add-source [data-manager-action="add-source"]')?.click();
   });
 
-  _listEl.querySelectorAll('[data-manager-action]').forEach(button => button.addEventListener('click', event => {
+  [..._listEl.querySelectorAll('[data-manager-action]'), ..._headerActionsEl.querySelectorAll('[data-manager-action]')].forEach(button => button.addEventListener('click', event => {
     event.preventDefault();
     const action = button.dataset.managerAction;
     const row = button.closest('[data-key]');
@@ -1636,15 +1761,35 @@ function _renderExtensionManagerPage() {
       const location = button.closest('[data-location]')?.dataset.location;
       return _managerRequest('source', api => api.removeSource(location));
     }
+    if (action === 'show-add-source') {
+      _addingSource = true;
+      _managerError = null;
+      _renderList();
+      return _listEl.querySelector('.sm-manager-add-source input')?.focus();
+    }
+    if (action === 'cancel-add-source') { _addingSource = false; _managerError = null; return _renderList(); }
     if (action === 'add-source') {
       const input = _listEl.querySelector('.sm-manager-add-source input');
-      return _managerRequest('source', api => api.addSource(input?.value || ''));
+      const value = input?.value || '';
+      return _managerRequest('source', api => api.addSource(value)).then(payload => {
+        if (payload) { _addingSource = false; _renderList(); }
+        else {
+          const again = _listEl.querySelector('.sm-manager-add-source input');
+          if (again) { again.value = value; again.focus(); }
+        }
+      });
     }
     return undefined;
   }));
 }
 
 // ── Public API ───────────────────────────────────────────────────────────
+
+/** Settings, opened on Atmos's own page: its version and updates (the footer's version). */
+export function openAtmosSettings() {
+  _activeCategory = _HOME_PAGE_ID;
+  openSettingsMenu();
+}
 
 /** Settings, opened on the extension manager (the footer's Extensions button). */
 export function openExtensionManager() {

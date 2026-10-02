@@ -96,21 +96,26 @@ test('contributions come from the manifest or convention, as plain text and file
   ]);
 });
 
-test('panel shortcuts are opt-in and narrow; drawers and boot keys are first-party', () => {
+test('settings show on the Appearance page, an official web extension\'s (Atmos Browser) on the Browser page', () => {
+  const files = ['settings.js'];
+  const category = (tier, permissions) => frames.describeContributions(entry(tier, { manifest: { permissions } }), files)
+    .find(c => c.surface === 'settings').category;
+  assert.equal(category('first-party', {}), 'Appearance');
+  assert.equal(category('first-party', { web: true }), 'Browser');
+  assert.equal(category('third-party', { web: true }), 'Appearance', 'a community extension never gets the browser\'s page');
+  assert.equal(category('third-party', {}), 'Appearance');
+});
+
+test('drawers and boot keys are first-party; panel keys are ignored', () => {
   const files = ['panel.js', 'sidebar.js', 'boot.js'];
   const make = (tier, panel) => frames.describeContributions(entry(tier, { manifest: { contributes: { panel, sidebar: {}, boot: { keys: ['Space'] } } } }), files);
-  const [panel, sidebar, boot] = make('first-party', { shortcut: '#', drawer: { bar: 60, keys: true } });
-  assert.equal(panel.shortcut, '#');
-  assert.equal(sidebar.shortcut, null);
-  assert.equal(panel.shortcutToggles, false);
+  const [panel, , boot] = make('first-party', { shortcut: '#', shortcutToggles: true, drawer: { bar: 60, keys: true } });
+  assert.equal(panel.shortcut, undefined, 'panel keys are gone (Atmos 0.19.1)');
+  assert.equal(panel.shortcutToggles, undefined);
   assert.deepEqual(panel.drawer, { bar: 60, keys: true });
   assert.deepEqual(boot.keys, ['Space']);
   assert.equal(panel.fileDrops, undefined, 'file drops are gone (SDK 1.0)');
-  assert.equal(make('first-party', { shortcut: ']', shortcutToggles: true })[0].shortcutToggles, true);
-  assert.equal(make('first-party', { shortcut: 'ab' })[0].shortcut, null);
-  assert.equal(make('first-party', { shortcut: ' ' })[0].shortcut, null);
-  const [thirdPanel, , thirdBoot] = make('third-party', { shortcut: '#', drawer: { bar: 60, keys: true } });
-  assert.equal(thirdPanel.shortcut, '#');
+  const [thirdPanel, , thirdBoot] = make('third-party', { drawer: { bar: 60, keys: true } });
   assert.equal(thirdPanel.drawer, null, 'a drawer takes the whole workspace\'s wheel and typing: official only');
   assert.deepEqual(thirdBoot.keys, []);
 });

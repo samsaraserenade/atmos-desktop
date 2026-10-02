@@ -12,5 +12,5 @@ export function getRegisteredPanel(id) { return _panels.get(id) ?? null; }
 export function activatePanelPlugin() { atmos.panel.show().catch(() => {}); }
 /** Only the panel frame knows it is showing. */
 export function getActivePanelPluginId() { return role === 'panel' ? 'portfolio-tracker' : null; }
-/** Closing the panel is Atmos's (the "]" shortcut toggles it). */
+/** Closing the panel is Atmos's. */
 export function activateDefaultPanelPlugin() {}

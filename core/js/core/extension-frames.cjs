@@ -286,12 +286,6 @@ function describeContributions(entry, files) {
       showIn: surface === 'sidebar' && Array.isArray(def?.showIn)
         ? [...new Set(def.showIn.filter(id => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,59}$/.test(id)))].slice(0, 8)
         : null,
-      // One printable key that opens the panel from anywhere in Atmos
-      // (typing in a field excepted), e.g. "#".
-      shortcut: surface === 'panel' && typeof def?.shortcut === 'string' && /^[^\s\p{C}]$/u.test(def.shortcut) ? def.shortcut : null,
-      // With "shortcutToggles": true the key also closes the panel again
-      // (back to the previous one) when it is already showing.
-      shortcutToggles: surface === 'panel' && def?.shortcutToggles === true,
       // Core draws the panel's frosted glass under the frame where the frame
       // says (atmos.surface.setGlass), following the panel's blur and opacity.
       glass: surface === 'panel' && def?.glass === true,
@@ -311,8 +305,11 @@ function describeContributions(entry, files) {
       keys: surface === 'boot' && entry.tier !== 'third-party' && Array.isArray(def?.keys)
         ? def.keys.filter(code => typeof code === 'string' && /^[A-Za-z0-9]{1,20}$/.test(code)).slice(0, 8)
         : [],
-      // Settings only shows contributions on its Appearance page.
-      category: surface === 'settings' ? 'Appearance' : '',
+      // Where Settings shows a settings contribution: the browser's (an
+      // official extension declaring "web", which only Atmos Browser does)
+      // on a page of its own, the rest on the Appearance page.
+      category: surface !== 'settings' ? ''
+        : (entry.tier !== 'third-party' && manifest.permissions?.web === true ? 'Browser' : 'Appearance'),
     });
   };
   for (const surface of SURFACES) {

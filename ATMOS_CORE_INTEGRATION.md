@@ -69,7 +69,7 @@ npm start -- --dev-extension="C:\path\to\weather"
 ```
 
 - It loads straight from that folder, without asking for approval, as a
-  community extension with a **Developer** badge in Settings → Plugins.
+  community extension with a **Developer** badge in Settings → Extensions.
 - Its frames reload whenever you save a file. A changed `extension.json` is
   read again first (new permissions and hosts apply at once). A surface
   added or removed needs a restart, and Settings says so.
@@ -109,7 +109,8 @@ Copy the folder (you can leave out `node_modules`, `tests` and
 `services\` for a service, and restart Atmos. Nothing of it shows yet: the
 footer's Extensions button turns red ("Weather needs your approval"), and
 Settings → Extensions lists it under **Waiting for your approval** with a
-Review button that opens its card in Settings → Plugins. The card lists its
+Review button that takes you to its card further down, under Plugins →
+Community. The card lists its
 permissions and what it shares; **Approve** loads it at once, with no second
 restart. Any later change to its files asks for approval again (section 7).
 
@@ -175,7 +176,7 @@ Atmos makes a frame for each entry file:
 |---|---|---|
 | `panel.js` | panel | fills the panel while it is shown |
 | `sidebar.js` | sidebar widget | sized to its content |
-| `settings.js` | settings page | the extension's settings, on Settings → Appearance |
+| `settings.js` | settings page | the extension's settings, on Settings → Appearance (Atmos Browser's have a Browser page of their own) |
 | `boot.js` | background | hidden, running for the whole session |
 
 **How tall a frame is.** A panel's frame fills the panel. A sidebar
@@ -200,7 +201,7 @@ surfaces it lists are created, so list each one (`"boot": {}` is enough for
 ```json
 {
   "contributes": {
-    "panel":    { "label": "Weather", "icon": "icon.svg", "glass": true, "shortcut": "#" },
+    "panel":    { "label": "Weather", "icon": "icon.svg", "glass": true },
     "sidebar":  [{ "label": "Forecast", "order": 10, "defaultHeight": 120 },
                  { "id": "alerts", "entry": "alerts-sidebar.js", "label": "Alerts" }],
     "settings": { "label": "Weather" },
@@ -217,14 +218,16 @@ file other than the conventional one). A second sidebar widget needs an
 |---|---|---|
 | `"order": 10` | panel, widget | Where it goes among the others (lower first) |
 | `"default": true` | panel | Asks to be the panel Atmos opens on. Atmos Browser, which Atmos ships with, comes first (from Atmos 0.18); otherwise the first extension to ask gets it, and any other is passed over with a line in the log |
-| `"shortcut": "#"` | panel | One printable key that opens the panel from anywhere in Atmos, except while typing in a field. Atmos listens for it, so it works without a frame open. One panel per key: official extensions' panels first, then the first in start order. Settings → Panels lists every key, and names a panel that asked for one it didn't get |
-| `"shortcutToggles": true` | panel | The same key closes it again, back to the previous panel |
 | `"glass": true` | panel | Atmos draws its frosted glass under the frame where the frame asks (`atmos.surface.trackGlass`, section 4), following the panel's blur and opacity. A frame's own `backdrop-filter` can't blur the wallpaper behind it |
 | `"defaultHeight": 120` | widget | Its height before the user resizes it |
 | `"defaultEnabled": false` | widget | Starts hidden until the user shows it |
 | `"resizable": false` | widget | Its height always follows its content |
 | `"showIn": ["audio-player"]` | widget | The panels it shows beside until the user chooses otherwise. Absent: beside the extension's own panel (every panel if it has none). `[]`: every panel |
 | `"legacyId"`, `"drawer"`, boot `"keys"` | | Official extensions only (section 4) |
+
+Panels have no keys of their own from Atmos 0.19.1: `"shortcut"` and
+`"shortcutToggles"` are still accepted, so a manifest that has them stays
+valid, and ignored.
 
 Labels are plain text and icons are drawn as a mask in the current text
 colour, so single-colour SVGs work best. Nothing an extension declares is
@@ -704,8 +707,7 @@ script them. `atmos.state` is kept in a file of its own
   dialogs (`alert`, `confirm`, `prompt`: use your own interface), or embed
   frames. Links and `window.open()` to the web open in Atmos Browser (or
   in the user's default browser, when they turned that off).
-- Listen for keys pressed outside it. A panel's global key is declared
-  (`"shortcut"`), not listened for.
+- Listen for keys pressed outside it.
 - Use browser permissions it didn't declare (and the user didn't approve).
 - Draw outside its surface or catch input outside it. Only Atmos draws
   across the workspace.
@@ -713,8 +715,7 @@ script them. `atmos.state` is kept in a file of its own
 Keys pressed inside a focused frame that aren't typing are passed on to
 Atmos: modifier combinations (Ctrl+` for Settings), F-keys, Escape, Space
 outside fields and buttons, and Atmos's single-key shortcuts outside fields
-and buttons (Tab for the sidebar, Shift+Tab to move it, panel shortcuts such
-as Finance's `]`). A key the frame handled itself (`preventDefault()`)
+and buttons (Tab for the sidebar, Shift+Tab to move it). A key the frame handled itself (`preventDefault()`)
 stays its own.
 
 ### Official extensions only

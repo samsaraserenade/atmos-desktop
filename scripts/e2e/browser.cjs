@@ -852,11 +852,10 @@ setTimeout(() => {
     await registry(r => r.activatePanelPlugin('portfolio-tracker'));
     await wait(900);
     check('another panel: the page is hidden', (await layerBox()) === null && !near(pixel(640, 500), hex('1d4ed8')));
-    // The panel's key brings the browser back (the keyboard on Atmos, not in a page).
-    await page.evaluate(() => document.activeElement?.blur?.());
-    await page.keyboard.press('[');
+    // Back to the browser's panel.
+    await registry(r => r.activatePanelPlugin('browser'));
     await wait(400);
-    check('panel opens with its key', await registry(r => r.getActivePanelPluginId()) === 'browser');
+    check('the browser\'s panel again', await registry(r => r.getActivePanelPluginId()) === 'browser');
     await panel();
     await wait(900);
     const backPixel = pixel(640, 500);
@@ -1196,12 +1195,12 @@ setTimeout(() => {
     check('a page open as Atmos quit saved first, and it was kept', quitSaved.includes('pagehide'), quitSaved);
     await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsMenu());
     await wait(500);
-    await page.evaluate(() => [...document.querySelectorAll('#settings-menu button, #settings-menu [role="tab"], #settings-menu .sm-nav-item')].find(el => /Appearance/.test(el.textContent))?.click());
+    await page.evaluate(() => [...document.querySelectorAll('#settings-menu button, #settings-menu [role="tab"], #settings-menu .sm-nav-item')].find(el => /^\s*Browser\s*$/.test(el.textContent))?.click());
     await wait(1500);
     const settingsFrame = page.frames().find(f => f.url().includes('ext=plugin%3Abrowser') && f.url().includes('surface=settings'));
     const settingsText = settingsFrame ? await settingsFrame.evaluate(() => document.body.innerText) : '';
-    check('the settings page shows (Settings → Appearance → Atmos Browser), with the site permission kept', /search engine/i.test(settingsText) && /site permissions/i.test(settingsText) && /location: blocked/i.test(settingsText), settingsText);
-    await page.evaluate(() => document.querySelector('.sm-appearance-contribution:last-of-type')?.scrollIntoView());
+    check('the settings page shows (Settings → Browser, a page of its own), with the site permission kept', /search engine/i.test(settingsText) && /site permissions/i.test(settingsText) && /location: blocked/i.test(settingsText), settingsText);
+    await page.evaluate(() => document.querySelector('#sm-browser-settings .sm-appearance-contribution-body')?.scrollIntoView());
     await wait(400);
     grab('20-settings');
   } catch (error) {

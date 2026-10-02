@@ -57,10 +57,9 @@ const list = page => page.evaluate(async () => {
   return Object.fromEntries(all.map(p => [p.id, `${p.tier}/${p.status}/${p.active ? 'active' : 'off'}${p.approvalChanged ? '/changed-approval' : ''}`]));
 });
 async function openPlugins(page, name) {
-  await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsMenu());
-  await page.waitForTimeout(500);
-  await page.evaluate(() => [...document.querySelectorAll('#settings-menu *')].find(el => el.children.length <= 2 && /^\s*Plugins\s*$/.test(el.textContent || ''))?.click());
-  await page.waitForTimeout(500);
+  await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openExtensionManager());
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => [...document.querySelectorAll('#settings-menu-list .sm-manager-heading')].find(el => el.textContent.trim() === 'Plugins')?.scrollIntoView());
   await page.screenshot({ path: path.join(out, name) });
 }
 const frameLoaded = (page, id) => page.frames().some(f => f.url().includes(`ext=plugin%3A${id}`) && f.url().includes('surface=boot'));

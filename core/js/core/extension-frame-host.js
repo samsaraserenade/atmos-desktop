@@ -19,7 +19,6 @@ import { emit, on } from './events.js';
 import { openMenu, closeOpenMenu, openMenuOwner } from './context-menu.js';
 import {
   registerPanelPlugin, activatePanelPlugin, isPanelPluginRegistered, listPanelPlugins, ensureDefaultPanelPlugin, restorePanelWorkspace,
-  getActivePanelPluginId, getPreviousPanelPluginId, activatePreviousPanelPlugin, activateDefaultPanelPlugin,
 } from './panel-registry.js';
 import { registerSection } from './sidebar-registry.js';
 import { registerSettingsPanel } from './settings-registry.js';
@@ -81,59 +80,6 @@ let _hiddenHost = null;
 const key = extension => `${extension.kind}:${extension.id}`;
 
 const _isTyping = target => !!target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
-// Keys that open a framed panel ("shortcut"); typing them never goes to a drawer.
-const _panelShortcuts = new Set();
-// key -> [{ panelId, label, extension, name, tier, toggles }], the one that
-// has the key first. Official (and system) extensions come before community
-// ones, then first come first served (start order). The others are listed
-// so Settings can say who asked for a key and didn't get it.
-const _shortcutClaims = new Map();
-const _TIER_RANK = { system: 0, 'first-party': 0, 'third-party': 1 };
-
-function _claimShortcut(extension, surface) {
-  const claim = {
-    panelId: surface.id, label: surface.label || surface.id, extension: key(extension),
-    name: _displayName(key(extension)), tier: extension.tier || 'third-party', toggles: !!surface.shortcutToggles,
-  };
-  const claims = _shortcutClaims.get(surface.shortcut) || [];
-  const at = claims.findIndex(other => (_TIER_RANK[other.tier] ?? 1) > (_TIER_RANK[claim.tier] ?? 1));
-  if (at === -1) claims.push(claim); else claims.splice(at, 0, claim);
-  _shortcutClaims.set(surface.shortcut, claims);
-  _panelShortcuts.add(surface.shortcut);
-  if (claims.length > 1) {
-    const [kept, ...rest] = claims;
-    console.warn(`[extension-frames] the "${surface.shortcut}" key opens ${kept.name}'s ${kept.label}; ${rest.map(other => `${other.name}'s ${other.label}`).join(', ')} asked for it too and doesn't get it`);
-  }
-}
-
-// One listener for every panel key: the key's first claim opens its panel.
-// Keys typed inside a frame never reach this document, so a frame can't
-// have typed it into a field of its own.
-document.addEventListener('keydown', event => {
-  if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
-  const claim = _shortcutClaims.get(event.key)?.find(item => isPanelPluginRegistered(item.panelId));
-  if (!claim) return;
-  if (event.target?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
-  if (claim.toggles && getActivePanelPluginId() === claim.panelId) {
-    if (getPreviousPanelPluginId()) activatePreviousPanelPlugin();
-    else activateDefaultPanelPlugin();
-  } else {
-    activatePanelPlugin(claim.panelId);
-  }
-});
-
-/**
- * Panel keys for Settings: [{ key, panelId, label, name, extension,
- * others: [{ label, name, extension }] }], `others` being the panels that
- * asked for the same key and don't get it.
- */
-export function listPanelShortcuts() {
-  return [..._shortcutClaims].map(([shortcut, [kept, ...others]]) => ({
-    key: shortcut, panelId: kept.panelId, label: kept.label, name: kept.name, extension: kept.extension,
-    others: others.map(({ label, name, extension }) => ({ label, name, extension })),
-  })).sort((a, b) => a.key.localeCompare(b.key));
-}
-
 // Core's own markup for a ticked menu row (frames send plain data only).
 const MENU_TICK = '<span class="ctx-ico" style="color:var(--color-positive, #34d399)" aria-hidden="true">✓</span>';
 
@@ -728,9 +674,9 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
         },
         entry: `${base}${surface.entry}`,
         appearance: _appearance(),
-        // Atmos's own single-key shortcuts, which a focused frame passes on
-        // when they aren't typing: Tab (the sidebar) and panel shortcuts.
-        shortcutKeys: ['Tab', ..._panelShortcuts],
+        // Atmos's own single-key shortcut, which a focused frame passes on
+        // when it isn't typing: Tab (the sidebar).
+        shortcutKeys: ['Tab'],
       },
     }, origin, [channel.port2]);
     resolveReady(true);
@@ -926,7 +872,7 @@ function _mountDrawer(extension, surface, surfaceEl) {
     }
     if (!surface.drawer.keys || event.isTrusted === false) return;
     if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1 || !event.key.trim()) return;
-    if (_panelShortcuts.has(event.key) || _isTyping(event.target)) return;
+    if (_isTyping(event.target)) return;
     if (document.activeElement?.tagName === 'IFRAME') return;
     event.preventDefault();
     frame.element.focus();
@@ -981,7 +927,6 @@ function _registerContribution(extension, surface) {
         context?.onCleanup?.(frame.dispose);
       },
     });
-    if (surface.shortcut) _claimShortcut(extension, surface);
   } else if (surface.surface === 'sidebar') {
     const mounted = new Map();
     registerSection(surface.id, {

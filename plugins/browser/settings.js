@@ -1,6 +1,6 @@
 /**
- * Atmos Browser's settings (a section of Settings → Appearance, where Atmos
- * shows extensions' settings): the search engine, links from Atmos,
+ * Atmos Browser's settings (Settings → Browser, a page of their own that
+ * Core gives the browser's settings): the search engine, links from Atmos,
  * downloads, blocking ads and trackers, how long tabs stay loaded, what sites
  * may do, and clearing what the browser keeps.
  */
@@ -13,9 +13,12 @@ document.head.append(h('link', { rel: 'stylesheet', href: new URL('./assets/brow
 const root = h('div', { class: 'br-settings' });
 document.body.append(root);
 
+/** A label or heading whose explanation shows when you hover over it (or focus it). */
+const tip = (hint, attrs = {}) => (hint ? { ...attrs, class: `${attrs.class || ''} br-tip`.trim(), tabindex: '0', 'aria-description': hint, 'data-tip': hint } : attrs);
 const row = (label, hint, control) => h('div', { class: 'atmos-row' },
-  h('span', { class: 'atmos-label' }, label, hint ? h('small', { text: hint }) : null),
+  h('span', { class: 'atmos-label' }, h('span', tip(hint), label)),
   h('span', { class: 'atmos-control' }, control));
+const heading = (text, hint) => h('div', { class: 'atmos-heading' }, h('span', tip(hint), text));
 
 function select(options, value, onChange, label) {
   const element = h('select', { class: 'atmos-select', 'aria-label': label },
@@ -80,7 +83,7 @@ const render = soon(() => {
   // Ads and trackers: on or off, the lists, and the sites allowed them.
   const blocker = engine.adblock();
   const blocking = options.blockAds !== false;
-  const update = h('button', { class: 'atmos-button', text: updating ? 'Checking…' : 'Update the lists now', disabled: updating || !blocking });
+  const update = h('button', { class: 'atmos-button', text: updating ? 'Checking…' : 'Update lists', disabled: updating || !blocking });
   update.addEventListener('click', async () => {
     updating = true;
     render();
@@ -91,24 +94,29 @@ const render = soon(() => {
     updating = false;
     render();
   });
-  const listState = !blocking ? 'Off: pages load everything they ask for.'
-    : !blocker || blocker.state === 'loading' || blocker.state === 'off' ? 'Getting the filter lists ready…'
-      : blocker.state === 'error' && !blocker.updatedAt ? `The filter lists couldn’t be fetched (${blocker.error}). Atmos tries again every hour.`
-        : `Lists updated ${ago(blocker.updatedAt)}, ${(blocker.rules || 0).toLocaleString()} rules. ${(blocker.total || 0).toLocaleString()} blocked so far.${blocker.error ? ` Last check: ${blocker.error}` : ''}`;
+  // One short line; the rest is in the hover.
+  const listState = !blocking ? 'Off'
+    : !blocker || blocker.state === 'loading' || blocker.state === 'off' ? 'Getting the lists ready…'
+      : blocker.state === 'error' && !blocker.updatedAt ? 'Couldn’t fetch the lists; trying again hourly'
+        : `${(blocker.total || 0).toLocaleString()} blocked · lists updated ${ago(blocker.updatedAt)}`;
+  const listDetail = [
+    blocker?.rules ? `${blocker.rules.toLocaleString()} rules.` : '',
+    blocker?.error ? `Last check: ${blocker.error}.` : '',
+  ].filter(Boolean).join(' ');
   // uBlock Origin's own lists keep the page scripts that need their trust
   // only as GitHub serves them (Core's rule): say when a copy came from elsewhere.
   const fallback = blocking && Array.isArray(blocker?.untrusted) && blocker.untrusted.length
-    ? `${blocker.untrusted.join(', ')} came from a backup copy (not GitHub), so the page scripts that need uBlock Origin’s trust are off for now. Atmos asks GitHub again every hour.`
+    ? `${blocker.untrusted.join(', ')} came from a backup copy (not GitHub), so the page scripts that need uBlock Origin’s trust are off until GitHub answers (asked hourly).`
     : '';
 
   const siteRows = permissionSites.length
     ? permissionSites.map(siteRow)
-    : [h('div', { class: 'br-settings-note', text: 'Sites ask before using your camera, microphone, location, notifications or clipboard. What you answer shows here, to take back, with the sites whose pop-ups you always allow.' })];
+    : [h('div', { class: 'br-settings-note', text: 'None yet' })];
 
   const clearHistory = h('button', { class: 'atmos-button', text: 'Clear history' });
-  const clearCookies = h('button', { class: 'atmos-button', text: 'Clear cookies and site data' });
-  const clearCache = h('button', { class: 'atmos-button', text: 'Clear cached files' });
-  const resetSites = h('button', { class: 'atmos-button', text: 'Reset site permissions, shields and zoom' });
+  const clearCookies = h('button', { class: 'atmos-button', text: 'Clear cookies', title: 'Cookies and site data: sites will ask you to sign in again' });
+  const clearCache = h('button', { class: 'atmos-button', text: 'Clear cache' });
+  const resetSites = h('button', { class: 'atmos-button', text: 'Reset site settings', title: 'Site permissions, shields and zoom' });
   clearHistory.addEventListener('click', () => clear({ history: true }, 'History cleared'));
   clearCookies.addEventListener('click', () => clear({ cookies: true }, 'Cookies and site data cleared: sites will ask you to sign in again'));
   clearCache.addEventListener('click', () => clear({ cache: true }, 'Cached files cleared'));
@@ -120,40 +128,35 @@ const render = soon(() => {
 
   root.replaceChildren(
     h('section', { class: 'atmos-section' },
-      h('div', { class: 'atmos-heading', text: 'Browsing' }),
+      heading('Browsing', 'Pages open in a browser session of their own, apart from Atmos and its extensions; private tabs share another, kept only in memory. Not yet: phishing and malware warnings, saved passwords, sync, protected video (Netflix and the like).'),
       row('Search engine', 'What the address bar searches with', select(engines.map(item => ({ value: item.id, label: item.name })), current,
         value => engine.setSettings({ searchEngine: value }), 'Search engine')),
-      row('Open links in Atmos Browser', 'Links Atmos and its extensions open go to a new tab here instead of your default browser',
+      row('Open links here', 'Links that Atmos and its extensions open go to a new tab in Atmos Browser instead of your default browser',
         toggle(options.openLinks === true, value => engine.setOptions({ openLinks: value }), 'Open links in Atmos Browser')),
-      row('Ask where to save each file', 'Off: downloads go straight to your Downloads folder',
+      row('Ask where to save', 'Off: downloads go straight to your Downloads folder',
         toggle(options.askWhereToSave !== false, value => engine.setOptions({ askWhereToSave: value }), 'Ask where to save each file'))),
     h('section', { class: 'atmos-section' },
-      h('div', { class: 'atmos-heading', text: 'Ads and trackers' }),
+      heading('Ads and trackers', 'Lists: uBlock Origin’s own (ads, privacy, badware risks, unbreak, quick fixes), EasyList and EasyPrivacy, checked every few days; engine: Ghostery’s. The scripts that get past harder ads come with Atmos, never from the lists, and the ones that can change what a site sends run only for uBlock Origin’s own lists, as its GitHub serves them.'),
       row('Block ads and trackers', 'On every site, unless you turn it off for one with the shield in the address bar',
         toggle(blocking, value => engine.setOptions({ blockAds: value }), 'Block ads and trackers')),
-      h('div', { class: 'br-settings-note', text: listState }),
+      row(h('span', { class: 'br-settings-state', text: listState }), listDetail || null, update),
       fallback ? h('div', { class: 'br-settings-note', text: fallback }) : null,
-      h('div', { class: 'br-clear-row' }, update),
-      ...(adSites.length ? adSites.map(siteRow) : [h('div', { class: 'br-settings-note', text: 'Sites where you turn blocking off show here.' })]),
-      h('div', { class: 'br-settings-note', text: 'Filter lists: uBlock Origin’s own (ads, privacy, badware risks, unbreak, quick fixes), EasyList and EasyPrivacy, checked for updates every few days. Blocking engine: Ghostery’s. The scripts it runs in pages to get past the harder ads come with Atmos, never from the lists; the ones that can change what a site sends and shows run only for uBlock Origin’s own lists, as uBlock Origin’s GitHub serves them.' })),
+      ...adSites.map(siteRow)),
     h('section', { class: 'atmos-section' },
-      h('div', { class: 'atmos-heading', text: 'Tabs' }),
-      row('Put away tabs left for', 'A put-away tab keeps its place and reloads when you go back to it', select([
+      heading('Tabs', 'A put-away tab keeps its place and reloads when you go back to it'),
+      row('Put away after', 'Tabs left unused this long are put away', select([
         { value: 0, label: 'Never' }, { value: 10, label: '10 minutes' }, { value: 30, label: '30 minutes' }, { value: 60, label: '1 hour' }, { value: 240, label: '4 hours' },
       ], settings.putAwayAfterMinutes, value => engine.setSettings({ putAwayAfterMinutes: Number(value) }), 'Put away tabs left for')),
-      row('Most tabs kept loaded', 'Past this, the tabs used least recently are put away', select([
+      row('Most kept loaded', 'Past this, the tabs used least recently are put away', select([
         { value: 0, label: 'No limit' }, { value: 5, label: '5' }, { value: 10, label: '10' }, { value: 20, label: '20' },
       ], settings.maxLoadedTabs, value => engine.setSettings({ maxLoadedTabs: Number(value) }), 'Most tabs kept loaded'))),
     h('section', { class: 'atmos-section' },
-      h('div', { class: 'atmos-heading', text: 'Site permissions' }),
+      heading('Site permissions', 'Sites ask before using your camera, microphone, location, notifications or clipboard. Your answers show here to take back, with the sites whose pop-ups you always allow.'),
       ...siteRows),
     h('section', { class: 'atmos-section' },
-      h('div', { class: 'atmos-heading', text: 'Clear browsing data' }),
+      heading('Clear browsing data'),
       h('div', { class: 'br-clear-row' }, clearHistory, clearCookies, clearCache, resetSites),
       status),
-    h('section', { class: 'atmos-section' },
-      h('div', { class: 'atmos-heading', text: 'About' }),
-      h('div', { class: 'br-settings-note', text: 'Pages open in a browser session of their own, apart from Atmos and its extensions; private tabs share another, kept only in memory. Atmos Browser has no Safe Browsing (it doesn’t warn about known dangerous sites), no saved passwords, Chrome extensions or sync, and plays no DRM-protected video (Netflix and the like).' })),
   );
 });
 

@@ -296,6 +296,18 @@ html[data-atmos-surface="settings"] body { font-size: 12px; }
 .br-site-row .br-site-what.allow { color: var(--br-positive); }
 .br-settings-note { padding: 2px 14px 10px; font-size: 10.5px; line-height: 1.55; color: var(--br-ink-4); }
 .br-clear-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px 10px; }
+.br-settings-state { color: var(--br-ink-3); }
+/* A label or heading with an explanation: it shows on hover or focus. */
+.br-tip { position: relative; cursor: default; outline: 0; }
+.br-tip:hover, .br-tip:focus-visible { color: var(--br-ink); }
+.br-tip::after {
+  content: attr(data-tip); position: absolute; z-index: 10; left: -2px; top: calc(100% + 6px);
+  width: max-content; max-width: 260px; padding: 7px 9px; border-radius: 6px;
+  background: var(--br-surface); border: 1px solid var(--br-line-2); box-shadow: 0 6px 18px rgba(0, 0, 0, .3);
+  color: var(--br-ink-2); font: normal 400 10.5px/1.5 var(--app-font-family, system-ui, sans-serif); letter-spacing: .01em; text-transform: none; white-space: normal;
+  opacity: 0; pointer-events: none; transform: translateY(-2px); transition: opacity .12s, transform .12s;
+}
+.br-tip:hover::after, .br-tip:focus-visible::after { opacity: 1; transform: none; transition-delay: .25s; }
 
 /* The shield: ads and trackers blocked on the page */
 .br-shield { position: relative; width: auto; min-width: 24px; height: 24px; padding: 0 5px; gap: 3px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }

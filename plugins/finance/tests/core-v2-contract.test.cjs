@@ -14,8 +14,7 @@ test('declares a framed extension that keeps its surfaces\' ids', () => {
   assert.equal(manifest.requires['extensions.frames'], 3);
   const { panel, sidebar, boot } = manifest.contributes;
   assert.equal(panel.legacyId, 'portfolio-tracker');
-  assert.equal(panel.shortcut, ']');
-  assert.equal(panel.shortcutToggles, true);
+  assert.equal(panel.shortcut, undefined, 'panel keys are gone (Atmos 0.19.1)');
   assert.deepEqual(sidebar.map(item => item.legacyId), ['portfolio-balance-ticker', 'portfolio-balance', 'portfolio-connections', 'portfolio-positions', 'portfolio-allocation', 'portfolio-futures']);
   for (const item of [panel, ...sidebar, boot]) assert.ok(fs.existsSync(path.join(root, item.entry)), item.entry);
   for (const item of [panel, ...sidebar]) assert.ok(fs.existsSync(path.join(root, item.icon)), item.icon);

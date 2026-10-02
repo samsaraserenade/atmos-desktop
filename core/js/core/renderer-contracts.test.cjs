@@ -315,12 +315,12 @@ test('plugin-specific player chrome does not become a Core panel convention', ()
   assert.match(guide, /(Atmos|Core) draws no header, toolbar or visual identity/);
 });
 
-test('settings gives system capabilities their own destination', () => {
+test('settings gives system capabilities their own destination; the rest are on Extensions', () => {
   const settings = fs.readFileSync(path.resolve(appDir, 'core/settings-menu.js'), 'utf8');
 
-  assert.match(settings, /\[_SYSTEM_PAGE_ID, _PLUGINS_PAGE_ID, _SERVICES_PAGE_ID\]/);
-  assert.match(settings, /category === _SYSTEM_PAGE_ID[^\n]+extension\.tier === 'system'/);
-  assert.match(settings, /category === _SERVICES_PAGE_ID[^\n]+extension\.tier !== 'system'/);
+  assert.match(settings, /_systemExtensions\(\) \{\r?\n  return _extensions\.Services\.filter\(extension => extension\.tier === 'system'\)/);
+  assert.match(settings, /\['Services', _extensions\.Services\.filter\(item => item\.tier !== 'system'\)\]/);
+  assert.doesNotMatch(settings, /_PLUGINS_PAGE_ID|_SERVICES_PAGE_ID/);
 });
 
 test('shell and panel appearance settings remain independently scoped', () => {

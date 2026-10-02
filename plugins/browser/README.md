@@ -7,7 +7,7 @@ zoom, ads and trackers blocked (like Brave's shields), with a new-tab page
 own look. Official (first-party), and since Atmos 0.18 built in: an
 installer carries it (`core/built-in-extensions.json`), Atmos opens on its
 panel, and it can be switched off but not removed (a newer signed package
-still updates it). The panel's key is `[`.
+still updates it).
 
 ## How it works
 
@@ -34,7 +34,7 @@ The plugin itself is the browser's UI and its memory:
 | `src/engine.js` | Tabs and what their pages are doing, history, bookmarks, site icons, downloads, what pages ask; the views follow its changes. |
 | `panel.js`, `src/ui/*` | The tab strip, toolbar and address bar, the new-tab page, History, the warning and error pages, prompts, find, downloads, menus. |
 | `sidebar.js`, `sidebar-bookmarks.js` | The Tabs and Bookmarks widgets. |
-| `settings.js` | Its section in Settings → Appearance (where Atmos shows extensions' settings). |
+| `settings.js` | Its settings, on a page of their own: Settings → Browser. |
 | `src/address.js` | What typed text means: an address or a search. |
 | `src/tabs.js`, `src/history.js`, `src/bookmarks.js`, `src/store.js` | The tab list, history, bookmarks, and where they're kept. |
 | `src/search-engines.json` | The search engines offered (DuckDuckGo by default). |
@@ -184,7 +184,7 @@ searches.
 
 ## Settings
 
-Settings → Appearance → Atmos Browser: the search engine; **Open links in
+Settings → Browser (a page of its own since Atmos 0.19.1; before, a section of Appearance): the search engine; **Open links in
 Atmos Browser** (on by default since Atmos 0.18: links that Atmos and its
 extensions would send to your default browser open in a new tab here
 instead); whether to ask
