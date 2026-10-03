@@ -52,7 +52,6 @@ body.task-view-open { overflow:hidden; }
   min-height:0;
   overflow:auto;
   padding:3px;
-  scrollbar-width:thin;
 }
 .task-view-card {
   min-width:0;

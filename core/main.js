@@ -698,8 +698,25 @@ function _usedBefore(userData) {
 // stopped if they stall (source-fetch.cjs).
 const _sources = createSourceFetch({ net });
 
+// Unpackaged, --github-releases=<folder> serves GitHub repositories' latest
+// releases from <folder>/<owner>/<repo>/ (end-to-end tests of community
+// sources, without GitHub).
+const _GITHUB_RELEASES = (() => {
+  const flag = app.isPackaged ? null : process.argv.find(arg => arg.startsWith('--github-releases='));
+  return flag ? path.resolve(flag.slice('--github-releases='.length)) : null;
+})();
+
 /** A download for a web source, refused past maxBytes. */
 function _fetchSourceFile(url, maxBytes) {
+  const release = _GITHUB_RELEASES && /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/releases\/latest\/download\/([^/]+)$/.exec(url);
+  if (release) {
+    const file = path.join(_GITHUB_RELEASES, release[1], release[2], release[3]);
+    if (!file.startsWith(_GITHUB_RELEASES + path.sep)) return Promise.reject(new Error('Not found'));
+    return fs.promises.stat(file).then(stat => {
+      if (stat.size > maxBytes) throw new Error(`${release[3]} is too large`);
+      return fs.promises.readFile(file);
+    });
+  }
   return _sources.fetchBuffer(url, maxBytes);
 }
 
@@ -1307,7 +1324,19 @@ function _describeTrust(entry) {
     hasMain: trust.hasMain,
     fingerprint: trust.fingerprint || null,
     approvalChanged: trust.approvalChanged === true,
+    // A community extension: whether its author signed it (and with which
+    // key), and the GitHub repository it was installed from, if any.
+    authorSignature: trust.authorSignature || null,
+    origin: entry.tier === 'third-party' ? _communityOrigin(entry) : null,
   };
+}
+
+/** The repository a community extension came from: { repo, keyId, keyChanged }, or null (added by hand). */
+function _communityOrigin(entry) {
+  const origin = _manager.communityOrigin(entry.kind, entry.id);
+  // Only while what's installed is what came from it (not a copy put over it by hand).
+  if (!origin || (origin.version && entry.version !== origin.version)) return null;
+  return { repo: origin.repo || null, keyId: origin.keyId || null, keyChanged: origin.keyChanged === true };
 }
 
 /** Runtime and frame details for the renderer's frame host. */
@@ -2122,7 +2151,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   _resolveDependencyState();
   _manager.confirmApplied((kind, id) => {
     const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
-    return entry ? { entry, loadable: _trust.get(entry)?.loadable !== false } : null;
+    const trust = entry ? _trust.get(entry) : null;
+    return entry ? {
+      entry, loadable: trust?.loadable !== false,
+      awaitingApproval: entry.tier === 'third-party' && ['pending', 'changed'].includes(trust?.status),
+    } : null;
   });
   _cleanUpRemovedData();
   console.log(`[main] checked extension integrity in ${Date.now() - trustStart}ms`);

@@ -59,10 +59,29 @@ with `atmos.location`, `"notifications"` under `browser` to show
 notifications, and so on. Atmos refuses anything undeclared, and people see
 the list before they approve the extension.
 
-## Share it
+## Publish it
 
-Copy the folder (without `node_modules`, `tests` and `.atmos-sdk`, if you
-like) into `%APPDATA%\atmos\plugins\` and restart Atmos. The footer's
+Put this folder in a GitHub repository, then for each version:
+
+1. Raise `"version"` in `extension.json`.
+2. `npm run pack` writes `dist/{{id}}-<version>.atmos` and `dist/index.json`
+   (`npm run pack -- --key <file>` signs it; `--new-key <file>` makes a key
+   the first time: keep it outside the repository, and keep a copy).
+3. Make a GitHub release and attach both files. Atmos reads the latest one.
+
+People add your repository in Atmos (Settings → Extensions → sources →
+Add a source → `github.com/you/repo`), install it from Available, and after
+a restart approve what it asks for. Every new version asks them again. A
+signed extension shows as **Signed** with your key's id, and Atmos says so
+if a later version is signed with another key or none, so sign every
+version with the same key. Unsigned works too, shown as **Unsigned**.
+
+It installs as a community extension: in its sandboxed frames, with only
+the permissions people approved. It can't have a `main.cjs`, and an id an
+official extension uses is refused.
+
+Or copy the folder (without `node_modules`, `tests` and `.atmos-sdk`, if
+you like) into `%APPDATA%\atmos\plugins\` and restart Atmos. The footer's
 Extensions button says it's waiting for approval; Review shows its
 permissions and what it shares, and it loads as soon as it's approved. Any
 change to its files asks for approval again.

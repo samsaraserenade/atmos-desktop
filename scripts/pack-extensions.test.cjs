@@ -137,3 +137,38 @@ test('an installer older than the last commit in --from is refused (built before
   assert.match(run.stderr, /older than the last commit/);
   assert.equal(w.pack('--any-installer').status, 0);
 });
+
+test('the signed index names the commit --from is checked out at (its own checkout only)', t => {
+  const w = world(t);
+  const git = (...args) => spawnSync('git', args, { cwd: w.from, encoding: 'utf8' });
+  if (git('init', '-q').status !== 0) return t.skip('no git');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'add', '.');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'release');
+  const head = git('rev-parse', 'HEAD').stdout.trim();
+  const run = w.pack('--no-installer');
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(w.index().core, { version: '1.2.3', commit: head });
+  assert.equal(checkIndexSignature(w.index(), w.trustedKeys).ok, true, 'the commit is signed with the rest');
+  // A folder inside a checkout isn't that checkout's commit.
+  const inner = path.join(w.from, 'inner');
+  fs.mkdirSync(inner);
+  fs.copyFileSync(path.join(w.from, 'package.json'), path.join(inner, 'package.json'));
+  const { coreOf } = require('./pack-extensions.cjs');
+  assert.deepEqual(coreOf(inner), { version: '1.2.3' });
+});
+
+test('an unreachable previous index stops the run before anything is written; --offline packs without comparing', t => {
+  const w = world(t);
+  const unreachable = 'https://127.0.0.1:9/';
+  const pack = (...extra) => spawnSync(process.execPath, [script, '--from', w.from, '--out', w.out, '--key', path.join(w.dir, 'key.pem'), '--untrusted', '--no-installer', '--previous', unreachable, ...extra], {
+    encoding: 'utf8', env: { ...process.env, ATMOS_SIGNING_PASSPHRASE: 'test' },
+  });
+  const stopped = pack();
+  assert.equal(stopped.status, 1);
+  assert.match(stopped.stderr, /couldn't read the previous index at https:\/\/127\.0\.0\.1:9\/.*--offline/);
+  assert.equal(fs.existsSync(w.out) && fs.readdirSync(w.out).length > 0, false, 'nothing written');
+  const offline = pack('--offline');
+  assert.equal(offline.status, 0, offline.stderr);
+  assert.match(offline.stdout, /versions not compared \(--offline\)/);
+  assert.equal(w.index().packages.length, 1);
+});

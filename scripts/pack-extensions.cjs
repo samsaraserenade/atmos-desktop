@@ -32,8 +32,10 @@
  *            official source in the tree's core/extension-sources.json). An
  *            extension whose files changed while its version didn't, or
  *            whose version went down, stops the run: existing installs would
- *            never see the change. --same-version allows it. Unreachable:
- *            a warning, and the run carries on.
+ *            never see the change. --same-version allows it. Unreachable,
+ *            it stops the run before anything is cleared or packed (versions
+ *            unchecked could ship a change no install would ever get);
+ *            --offline carries on without comparing.
  *
  *   --installer  the installer to name in the index (default: --from's
  *            dist/Atmos Setup <version>.exe, as npm run build writes it). It
@@ -48,6 +50,8 @@
  *
  * Extensions with uncommitted changes in --from (a git checkout) are
  * refused, so what is signed is what was pushed; --allow-dirty allows it.
+ * The index's "core" names --from's commit ("commit"), so a release can be
+ * traced to the exact source it was packed from.
  */
 const fs = require('fs');
 const os = require('os');
@@ -62,7 +66,7 @@ const fail = message => { console.error(`pack: ${message}`); process.exit(1); };
 const { spawnSync } = require('child_process');
 const { keyIdFor } = require('../core/js/core/extension-signing.cjs');
 const { compareVersions } = require('../core/js/core/extension-version.cjs');
-const FLAGS = { '--all': 'all', '--keep': 'keep', '--untrusted': 'untrusted', '--same-version': 'sameVersion', '--allow-dirty': 'allowDirty', '--no-installer': 'noInstaller', '--any-installer': 'anyInstaller' };
+const FLAGS = { '--all': 'all', '--keep': 'keep', '--untrusted': 'untrusted', '--same-version': 'sameVersion', '--allow-dirty': 'allowDirty', '--no-installer': 'noInstaller', '--any-installer': 'anyInstaller', '--offline': 'offline' };
 // The Windows installer electron-builder writes (package.json "build.nsis"),
 // and the name GitHub gives it as a release asset (spaces become dots).
 const installerSource = version => `Atmos Setup ${version}.exe`;
@@ -111,7 +115,7 @@ function copyBundled(root, kind, id, dest, filters) {
 
 function parseArgs(argv) {
   const args = {
-    ids: [], all: false, keep: false, untrusted: false, sameVersion: false, allowDirty: false, noInstaller: false, anyInstaller: false, previous: null, installer: null,
+    ids: [], all: false, keep: false, untrusted: false, sameVersion: false, allowDirty: false, noInstaller: false, anyInstaller: false, offline: false, previous: null, installer: null,
     key: process.env.ATMOS_SIGNING_KEY || null, out: path.join(repo, 'dist', 'packages'), from: repo,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -173,6 +177,8 @@ async function main() {
   // The installer, found (or refused) before anything is cleared or packed.
   const core = coreOf(args.from);
   const installerFrom = core ? findInstaller(args, core.version) : null;
+  // What the source published last, read (or refused) before anything is cleared.
+  const previous = await previousIndex(args);
   const privateKey = await loadSigningKey(args.key);
   const trustedKeys = loadTrustedKeys([path.join(repo, 'core', 'trusted-keys.json')]);
   const keyId = keyIdFor(crypto.createPublicKey(privateKey));
@@ -208,7 +214,7 @@ async function main() {
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
   }
-  const problems = await compareWithPrevious(args, written);
+  const problems = compareWithPrevious(previous, written);
   if (problems.length && !args.sameVersion) {
     for (const { out } of written) fs.rmSync(out, { force: true });
     fail(`${problems.join('; ')}. Existing installs only update to a higher version: bump "version" in extension.json (or --same-version). Nothing was written.`);
@@ -274,7 +280,7 @@ function uncommitted(root, selected) {
   return paths.filter(prefix => changed.some(file => file === prefix || file.startsWith(`${prefix}/`)));
 }
 
-/** The index a source published last, or null (with a warning) if it can't be read. */
+/** The index a source published last; throws if it can't be read. */
 async function readPreviousIndex(location) {
   try {
     if (/^https:\/\//i.test(location)) {
@@ -286,7 +292,29 @@ async function readPreviousIndex(location) {
     const file = path.join(location, 'index.json');
     return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { packages: [] };
   } catch (error) {
-    console.log(`pack: couldn't read the previous index at ${location} (${error.message}); versions not compared`);
+    throw new Error(`couldn't read the previous index at ${location} (${error.message})`);
+  }
+}
+
+/**
+ * { location, index } of what the previous source published (--previous, or
+ * the official source in --from's core/extension-sources.json), or null when
+ * there is none to compare with. Unreachable, it stops the run, unless
+ * --offline.
+ */
+async function previousIndex(args, { read = readPreviousIndex, stop = fail } = {}) {
+  let location = args.previous;
+  if (!location) {
+    try {
+      location = JSON.parse(fs.readFileSync(path.join(args.from, 'core', 'extension-sources.json'), 'utf8')).sources?.[0]?.location || null;
+    } catch { location = null; }
+  }
+  if (!location || (!/^https:\/\//i.test(location) && path.resolve(location) === path.resolve(args.out))) return null;
+  try {
+    return { location, index: await read(location) };
+  } catch (error) {
+    if (!args.offline) return stop(`${error.message}, so versions can't be compared with what was published. Nothing was written (--offline to pack without comparing)`);
+    console.log(`pack: ${error.message}; versions not compared (--offline)`);
     return null;
   }
 }
@@ -295,25 +323,17 @@ async function readPreviousIndex(location) {
  * Packages whose version stayed the same while their files changed, or went
  * down, compared with what the previous source published.
  */
-async function compareWithPrevious(args, written) {
-  let location = args.previous;
-  if (!location) {
-    try {
-      location = JSON.parse(fs.readFileSync(path.join(args.from, 'core', 'extension-sources.json'), 'utf8')).sources?.[0]?.location || null;
-    } catch { location = null; }
-  }
-  if (!location || (!/^https:\/\//i.test(location) && path.resolve(location) === path.resolve(args.out))) return [];
-  const previous = await readPreviousIndex(location);
+function compareWithPrevious(previous, written) {
   if (!previous) return [];
   const problems = [];
   for (const item of written) {
-    const before = (previous.packages || []).find(pkg => pkg.kind === item.kind && pkg.id === item.id);
+    const before = (previous.index.packages || []).find(pkg => pkg.kind === item.kind && pkg.id === item.id);
     if (!before) continue;
     const order = compareVersions(item.version, before.version);
     if (order < 0) problems.push(`${item.id} ${item.version} is older than the published ${before.version}`);
     else if (order === 0 && before.sha256 && before.sha256 !== item.sha256) problems.push(`${item.id} changed but is still ${item.version}`);
   }
-  if (!problems.length) console.log(`  compared with ${location}: versions ok`);
+  if (!problems.length) console.log(`  compared with ${previous.location}: versions ok`);
   return problems;
 }
 
@@ -322,11 +342,23 @@ async function compareWithPrevious(args, written) {
  * package without downloading it (kind, id, version, compatibility,
  * dependencies) and to check it once downloaded (size, SHA-256).
  */
-/** { version } of the Atmos in `root` (its package.json), or null. */
+/**
+ * { version, commit } of the Atmos in `root`: its package.json's version,
+ * and the commit it is checked out at (none outside a git checkout), or null.
+ */
 function coreOf(root) {
   try {
     const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-    return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version || '') ? { version } : null;
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version || '')) return null;
+    // Only a checkout of its own: a plain folder inside another repo (an
+    // export under .tmp, say) would otherwise be given that repo's commit.
+    const git = args => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    const top = git(['rev-parse', '--show-toplevel']);
+    const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+    const ownCheckout = top.status === 0 && same(fs.realpathSync(top.stdout.trim()), fs.realpathSync(root));
+    const head = ownCheckout ? git(['rev-parse', 'HEAD']) : null;
+    const commit = head?.status === 0 ? head.stdout.trim() : '';
+    return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commit) ? { version, commit } : { version };
   } catch {
     return null;
   }
@@ -367,6 +399,6 @@ function buildIndex(dir, privateKey, name = 'Atmos', { core = null } = {}) {
   return index;
 }
 
-module.exports = { bundleFilters, copyBundled, buildIndex, installerEntry, installerAsset };
+module.exports = { bundleFilters, copyBundled, buildIndex, installerEntry, installerAsset, coreOf, previousIndex, compareWithPrevious };
 
 if (require.main === module) main().catch(error => fail(error.message));

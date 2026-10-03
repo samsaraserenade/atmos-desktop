@@ -854,6 +854,45 @@ function _withAdded(summary, added) {
   return lines;
 }
 
+/**
+ * A community extension's signed or unsigned badge. Signed: the files are
+ * exactly what its author's key signed. It says who made it as far as that
+ * key goes, never that Atmos vouches for it.
+ */
+function _signatureBadge(extension) {
+  if (extension.tier !== 'third-party' || extension.status === 'developer') return '';
+  const signature = extension.authorSignature;
+  if (!signature) return '';
+  const signed = signature.status === 'signed';
+  const title = signed
+    ? `Signed by its author (key ${signature.keyId}): its files are exactly what that key signed`
+    : 'Not signed: Atmos can’t tell who made it, or whether an update comes from the same person';
+  return ` <span class="sm-tier-badge" data-tier="${signed ? 'signed' : 'unsigned'}" title="${escapeHtml(title)}">${signed ? 'Signed' : 'Unsigned'}</span>`;
+}
+
+/** Where a community extension came from and whether it is signed, as lines (HTML). */
+function _communityLines(extension) {
+  if (extension.tier !== 'third-party' || extension.status === 'developer') return [];
+  const lines = [];
+  const origin = extension.origin;
+  lines.push(origin?.repo
+    ? `From github.com/${escapeHtml(origin.repo)}`
+    : 'Added by hand (not from a source)');
+  const signature = extension.authorSignature;
+  if (signature?.status === 'signed') lines.push(`Signed by its author, key ${escapeHtml(signature.keyId)}`);
+  else if (signature) lines.push(`Not signed${signature.reason ? ` (${escapeHtml(signature.reason.replace(/^It is /, 'it is '))})` : ''}: Atmos can’t tell who made it, or whether an update comes from the same person`);
+  return lines;
+}
+
+/** The author's key changed with this version: said where it matters. */
+function _keyChangedHtml(extension, tag = 'div') {
+  if (!extension.origin?.keyChanged) return '';
+  const what = extension.authorSignature?.status === 'signed'
+    ? 'This version is signed with a different key than the one before it.'
+    : 'This version isn’t signed, though the one before it was.';
+  return `<${tag} class="sm-trust-note sm-trust-caution">${what} If you didn’t expect that, the repository may have changed hands.</${tag}>`;
+}
+
 /** What it can use of the other extensions it declares (their "exports"). */
 function _sharingHtml(extension) {
   const lines = extension.sharing || [];
@@ -885,6 +924,7 @@ function _packageDetailsHtml(extension) {
     lines.push(extension.source === 'installed' ? 'Signed package, checked against its signature'
       : extension.status === 'verified' ? 'Bundled with Atmos, checked' : 'Bundled with Atmos (running from source)');
   }
+  lines.push(..._communityLines(extension));
   if (required.length) lines.push(`Needs ${names(required)}`);
   if (optional.length) lines.push(`Works better with ${names(optional)}${(extension.optionalMissing || []).length ? ` (not loaded: ${extension.optionalMissing.map(escapeHtml).join(', ')})` : ''}`);
   if ((extension.usedBy || []).length) lines.push(`Used by ${names(extension.usedBy)}`);
@@ -912,9 +952,15 @@ function _extensionTrustHtml(extension) {
   if ((status === 'pending' || status === 'changed') && extension.enabled) {
     const title = status === 'pending'
       ? 'This extension asks to:'
-      : `${escapeHtml(extension.statusReason)}. Review it again. It asks to:`;
+      // Installed from a repository and changed since: an update.
+      : extension.origin?.repo
+        ? `Updated to ${escapeHtml(extension.version || 'a new version')} since you approved it${(extension.newPermissions || []).length ? ', and it now asks for more' : ''}. Review it again. It asks to:`
+        : `${escapeHtml(extension.statusReason)}. Review it again. It asks to:`;
+    const origin = _communityLines(extension);
     return `
       <div class="sm-trust-note sm-trust-review">
+        ${origin.length ? `<ul class="sm-permission-list sm-package-details">${origin.map(line => `<li>${line}</li>`).join('')}</ul>` : ''}
+        ${_keyChangedHtml(extension, 'p')}
         <div>${title}</div>
         ${_permissionList(status === 'changed' ? _withAdded(summary, extension.newPermissions) : summary, status === 'changed' ? extension.newPermissions : [])}
         ${_sharingHtml(extension)}
@@ -941,7 +987,7 @@ function _extensionTrustHtml(extension) {
   const loadedNow = _approvedThisSession.has(`${extension.kind}:${extension.id}`) && extension.active
     ? '<div class="sm-trust-note">Approved. It\u2019s running now.</div>'
     : '';
-  return `${developer}${fellBack}${loadedNow}${_sharingRiskHtml(extension)}
+  return `${developer}${fellBack}${loadedNow}${_keyChangedHtml(extension)}${_sharingRiskHtml(extension)}
     <details class="sm-permissions">
       <summary hidden>Details</summary>
       ${_packageDetailsHtml(extension)}
@@ -982,7 +1028,7 @@ function _installedCardHtml(extension, { remove = '', below = '' } = {}) {
       <div class="sm-card-main">
         <div class="sm-icon">${_extensionIconHtml(extension)}</div>
         <div class="sm-card-text">
-          <div class="sm-card-name">${escapeHtml(label)}${extension.source === 'developer' ? ' <span class="sm-tier-badge" data-tier="developer">Developer</span>' : ''}</div>
+          <div class="sm-card-name">${escapeHtml(label)}${extension.source === 'developer' ? ' <span class="sm-tier-badge" data-tier="developer">Developer</span>' : ''}${_signatureBadge(extension)}</div>
           <div class="sm-card-detail">${_cardDetail(extension)}</div>
         </div>
         <div class="sm-manager-actions">${remove}${system ? '' : _toggleHtml(extension.enabled, `Enable ${label}`)}</div>
@@ -1484,11 +1530,16 @@ function _sourceProblem(error) {
   return "Couldn't be read";
 }
 
+const _SOURCE_REPO_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 8.2v7.6"/><path d="M18 10.2c0 4-6 3-11 6"/></svg>`;
+
 function _sourceCardHtml(source) {
   const web = /^https?:/i.test(source.location);
   let title = source.name;
   let where = source.location;
-  if (web) {
+  if (source.community) {
+    title = source.repo;
+    where = `github.com/${source.repo} · latest release`;
+  } else if (web) {
     try {
       const url = new URL(source.location);
       title ||= url.hostname;
@@ -1500,11 +1551,12 @@ function _sourceCardHtml(source) {
   const state = source.ok === true ? 'ok' : source.ok === false ? 'error' : 'idle';
   const label = state === 'ok' ? `${source.packages} package${source.packages === 1 ? '' : 's'}`
     : state === 'error' ? _sourceProblem(source.error) : 'Not checked yet';
-  const origin = source.origin === 'built-in' ? 'Built in' : source.origin === 'session' ? 'This session' : '';
+  const origin = source.community ? 'Community' : source.origin === 'built-in' ? 'Built in' : source.origin === 'session' ? 'This session' : '';
+  const refused = (source.refused || []).map(item => `${escapeHtml(item.id)} (${escapeHtml(item.reason)})`);
   return `
     <div class="sm-card sm-manager-source${state === 'error' ? ' sm-trust-alert' : ''}" data-location="${escapeHtml(source.location)}">
       <div class="sm-card-main">
-        <div class="sm-icon">${web ? _SOURCE_WEB_ICON : _SOURCE_FOLDER_ICON}</div>
+        <div class="sm-icon">${source.community ? _SOURCE_REPO_ICON : web ? _SOURCE_WEB_ICON : _SOURCE_FOLDER_ICON}</div>
         <div class="sm-card-text">
           <div class="sm-card-name">${escapeHtml(title)}${origin ? ` <span class="sm-source-tag">${origin}</span>` : ''}</div>
           <div class="sm-card-detail" title="${escapeHtml(source.location)}">${escapeHtml(where)}</div>
@@ -1512,6 +1564,7 @@ function _sourceCardHtml(source) {
         <span class="sm-source-state ${state}"${state === 'error' ? ` title="${escapeHtml(source.error || '')}"` : ''}><i class="sm-source-dot ${state}"></i>${escapeHtml(label)}</span>
         ${source.origin === 'user' ? '<button type="button" class="sm-trust-secondary" data-manager-action="remove-source">Remove</button>' : ''}
       </div>
+      ${refused.length ? `<div class="sm-trust-note sm-trust-caution">Not offered: ${refused.join(', ')}.</div>` : ''}
     </div>`;
 }
 
@@ -1530,12 +1583,13 @@ function _renderSourcesList(status, sections) {
       ${_addingSource ? `
         <form class="sm-manager-add-source">
           <span class="sm-icon">${_SOURCE_ADD_ICON}</span>
-          <input type="text" placeholder="A folder, or an https:// address with an index.json" aria-label="New source">
+          <input type="text" placeholder="A GitHub repository (github.com/owner/repo), a folder, or an https:// address" aria-label="New source">
           ${_button('add-source', 'Add', { key: 'source', primary: true, busyLabel: 'Checking…' })}
           <button type="button" class="sm-trust-secondary" data-manager-action="cancel-add-source">Cancel</button>
         </form>
         ${_managerErrorHtml('source')}`
         : `<button type="button" class="sm-source-add" data-manager-action="show-add-source"><span class="sm-icon">${_SOURCE_ADD_ICON}</span>Add a source</button>`}
+      <p class="sm-source-hint">A GitHub repository adds community extensions from its latest release. They run sandboxed, load only once you approve them, and ask again after every update.</p>
     </div>`);
   _listEl.innerHTML = sections.join('');
   _wireManagerActions();
@@ -1586,7 +1640,7 @@ function _renderExtensionManagerPage() {
         key: `${item.kind}:${item.id}`,
         name: escapeHtml(item.name),
         detail: item.status === 'changed'
-          ? 'Its files changed since you approved it. It stays off until you review it again'
+          ? 'Updated or changed since you approved it. It stays off until you review it again'
           : 'Not loaded until you approve it. Review what it asks for',
         actions: _button('review', 'Review', { key: `${item.kind}:${item.id}`, primary: true }),
       }));
@@ -1613,10 +1667,11 @@ function _renderExtensionManagerPage() {
       const what = change.action === 'remove'
         ? `Remove${change.deleteData ? ', and delete its data' : ', keeping its data'}`
         : `${change.reason === 'update' ? 'Update to' : change.reason === 'dependency' ? 'Install (needed by another extension)' : change.reason === 'recommended' ? 'Install (comes with another extension)' : 'Install'} ${change.version}`;
+      const fromRepo = change.community?.repo ? ` · from ${escapeHtml(change.community.repo)}, you’ll review it after the restart` : '';
       sections.push(_managerRow({
         key,
         name: escapeHtml(change.displayName || change.id),
-        detail: `${escapeHtml(what)}${change.error ? ` · failed last time: ${escapeHtml(change.error)}` : ''}`,
+        detail: `${escapeHtml(what)}${fromRepo}${change.error ? ` · failed last time: ${escapeHtml(change.error)}` : ''}`,
         actions: _button('cancel', 'Cancel', { key }),
         extra: change.action === 'install' ? _optionalOffersHtml(key) : '',
       }));
@@ -1632,7 +1687,7 @@ function _renderExtensionManagerPage() {
       return _managerRow({
         key,
         name: escapeHtml(item.displayName || item.id),
-        detail: `${escapeHtml(item.installedVersion)} → ${escapeHtml(item.version)} · ${escapeHtml(_formatSize(item.size))}`,
+        detail: `${escapeHtml(item.installedVersion)} → ${escapeHtml(item.version)} · ${escapeHtml(_formatSize(item.size))}${item.community ? ` · ${escapeHtml(item.repo)} · asks for approval again` : ''}`,
         actions: _button('install', 'Update', { key, primary: true, busyLabel: 'Downloading…' }),
       });
     }));
@@ -1643,11 +1698,14 @@ function _renderExtensionManagerPage() {
     sections.push(`<div class="sm-manager-heading">Available</div>`);
     sections.push(_groupByKind(available, item => {
       const key = `${item.kind}:${item.id}`;
-      const replaces = item.installedTier === 'third-party' ? ' · replaces the community copy' : '';
+      // Over a copy added by hand: possibly someone else's extension with the same id.
+      const replaces = item.installedTier === 'third-party'
+        ? (item.community ? ` · replaces the copy you added by hand, which may not be from ${escapeHtml(item.repo)}` : ' · replaces the community copy')
+        : '';
       return _managerRow({
         key,
-        name: escapeHtml(item.displayName || item.id),
-        detail: `${escapeHtml(item.version)} · ${escapeHtml(_formatSize(item.size))}${item.description ? ` · ${escapeHtml(item.description)}` : ''}${replaces}`,
+        name: `${escapeHtml(item.displayName || item.id)}${item.community ? ` <span class="sm-tier-badge" data-tier="third-party" title="From ${escapeHtml(item.repo)}: a community extension, which loads only once you approve it">Community</span>` : ''}`,
+        detail: `${escapeHtml(item.version)} · ${escapeHtml(_formatSize(item.size))}${item.community ? ` · ${escapeHtml(item.repo)}` : ''}${item.description ? ` · ${escapeHtml(item.description)}` : ''}${replaces}`,
         needs: _needsHtml({ dependencies: item.dependencies }),
         actions: _button('install', 'Install', { key, primary: true, busyLabel: 'Downloading…' }),
         extra: _optionalOffersHtml(key),

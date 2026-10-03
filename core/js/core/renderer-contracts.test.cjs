@@ -394,3 +394,13 @@ test('panel appearance resolves persisted overrides independently from shell app
   assert.equal(properties.get('--default-panel-blur'), '24px');
   assert.equal(properties.get('--default-panel-opacity'), '0.76');
 });
+
+test('Atmos\'s scrollbar is Core\'s: every extension frame and Atmos\'s page get the sidebar\'s', () => {
+  const frameCss = fs.readFileSync(path.join(__dirname, '../sdk/frame.css'), 'utf8');
+  const page = fs.readFileSync(path.join(__dirname, '../../index.html'), 'utf8');
+  for (const css of [frameCss, page]) {
+    assert.match(css, /^::-webkit-scrollbar \{ width: ?var\(--atmos-scrollbar-size, 3px\)/m);
+    assert.match(css, /^::-webkit-scrollbar-button \{ display: ?none/m);
+  }
+  assert.match(frameCss, /\.atmos-scrollbar-none::-webkit-scrollbar \{ display: none/);
+});

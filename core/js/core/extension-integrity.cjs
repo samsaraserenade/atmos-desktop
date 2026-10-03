@@ -125,4 +125,4 @@ function compareFiles(actual, expected) {
   return [describe('changed', changed), describe('added', added), describe('missing', removed)].filter(Boolean).join('; ') || null;
 }
 
-module.exports = { sha256, createHasher, writeIntegrityList, readIntegrityList, compareFiles, listFiles };
+module.exports = { sha256, createHasher, writeIntegrityList, readIntegrityList, compareFiles, listFiles, IGNORED_NAMES };

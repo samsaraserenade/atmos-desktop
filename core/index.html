@@ -22,6 +22,15 @@
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 html { height:100%; width:100%; overflow:hidden; background:transparent; font-family:var(--app-font-family, 'Segoe UI',Roboto,Helvetica,sans-serif); --ink-rgb:255,255,255; --surface-rgb:22,22,24; }
+/* Atmos's scrollbar, everywhere on this page (the sidebar's, as extension
+   frames get it from /__atmos/frame.css): thin, no track, no arrows. A more
+   specific ::-webkit-scrollbar rule (Settings' list) wins, and an element
+   with scrollbar-width set keeps Chromium's standard one. */
+::-webkit-scrollbar { width:var(--atmos-scrollbar-size, 3px); height:var(--atmos-scrollbar-size, 3px); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background:transparent; }
+::-webkit-scrollbar-button { display:none; width:0; height:0; }
+::-webkit-scrollbar-thumb { background:rgba(var(--ink-rgb), var(--atmos-scrollbar-alpha, .12)); border-radius:2px; }
+::-webkit-scrollbar-thumb:hover { background:rgba(var(--ink-rgb), var(--atmos-scrollbar-hover-alpha, .24)); }
 body { height:100%; width:100%; overflow:hidden; background:rgb(var(--surface-rgb)); }
 html.custom-window-effects body { border-radius:12px; clip-path:inset(0 round 12px); }
 html.custom-window-effects body::after { content:''; position:fixed; inset:0; z-index:1590; border:1px solid rgba(var(--ink-rgb),.18); border-radius:12px; pointer-events:none; }
@@ -219,20 +228,8 @@ html[data-sidebar-shadow="hidden"] #settings-drawer.open { box-shadow: none; }
 /* Tab panels — only the active one is shown */
 .settings-panel { display: none; flex: 1; overflow-y: auto; padding: 0 0 12px; }
 .settings-panel.active { display: block; }
-.settings-panel::-webkit-scrollbar { width: 3px; }
-.settings-panel::-webkit-scrollbar-track { background: transparent; }
-.settings-panel::-webkit-scrollbar-thumb { background: rgba(var(--ink-rgb),.12); border-radius: 2px; }
 #settings-panel-main.active { display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:0; }
 #sidebar-scroll-region { flex:1 1 0; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-bottom:0; }
-#sidebar-scroll-region::-webkit-scrollbar,
-#sidebar-top-dock::-webkit-scrollbar,
-#sidebar-bottom-dock::-webkit-scrollbar { width:3px; }
-#sidebar-scroll-region::-webkit-scrollbar-track,
-#sidebar-top-dock::-webkit-scrollbar-track,
-#sidebar-bottom-dock::-webkit-scrollbar-track { background:transparent; }
-#sidebar-scroll-region::-webkit-scrollbar-thumb,
-#sidebar-top-dock::-webkit-scrollbar-thumb,
-#sidebar-bottom-dock::-webkit-scrollbar-thumb { background:rgba(var(--ink-rgb),.12); border-radius:2px; }
 #sidebar-top-dock, #sidebar-bottom-dock { flex:0 0 auto; min-height:0; max-height:60%; overflow-y:auto; overscroll-behavior:contain; background:transparent; }
 #settings-panel-main:has(#sidebar-top-dock > .fin-section:not([hidden])):has(#sidebar-bottom-dock > .fin-section:not([hidden])) > :is(#sidebar-top-dock, #sidebar-bottom-dock) { max-height:40%; }
 #sidebar-top-dock:not(:empty) { border-bottom:1px solid rgba(var(--ink-rgb),.12); box-shadow:0 10px 24px rgba(0,0,0,.18); }
@@ -526,6 +523,8 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
 .sm-tier-badge[data-tier="system"] { color:rgba(var(--ink-rgb),.8); background:rgba(var(--ink-rgb),.14); }
 .sm-tier-badge[data-tier="third-party"] { background:transparent; border:1px solid rgba(var(--ink-rgb),.14); }
 .sm-tier-badge[data-tier="developer"] { background:transparent; border:1px dashed rgba(var(--ink-rgb),.3); }
+.sm-tier-badge[data-tier="signed"] { color:var(--color-positive, #34d399); background:color-mix(in srgb, var(--color-positive, #34d399) 12%, transparent); }
+.sm-tier-badge[data-tier="unsigned"] { color:rgba(251,191,36,.95); background:rgba(251,191,36,.1); }
 .sm-extension-toolbar {
   min-height: 38px; padding: 4px 8px 10px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -660,6 +659,7 @@ html[data-app-theme="amoled"] .atmos-drawer-dock-blur { background:#000; backdro
 .sm-manager-source:last-child { border-bottom:1px solid rgba(var(--ink-rgb),.08); }
 .sm-manager-source > .sm-card-main { cursor:default; gap:12px; padding:0 12px; }
 .sm-manager-source .sm-card-detail { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sm-source-hint { margin:8px 2px 0; font-size:.62rem; line-height:1.5; color:rgba(var(--ink-rgb),.38); }
 .sm-source-tag { margin-left:6px; padding:1px 6px; border-radius:999px; font-size:.54rem; letter-spacing:.02em; color:rgba(var(--ink-rgb),.45); background:rgba(var(--ink-rgb),.06); vertical-align:1px; }
 .sm-source-state { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; font-size:.62rem; color:rgba(var(--ink-rgb),.5); }
 .sm-source-state.error { color:rgb(248,113,113); cursor:help; }

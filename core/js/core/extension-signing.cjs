@@ -21,6 +21,14 @@
  * extension-catalog.cjs and extension-trust.cjs. The private key never
  * goes near the repo (scripts/extension-keys.cjs keeps it in an encrypted
  * file elsewhere).
+ *
+ * A community author can sign with a key of their own. Their signature.json
+ * also carries the public key ("publicKey", base64 SPKI), so Atmos can check
+ * that the files are exactly what that key signed (verifyAuthorSignature).
+ * It proves who the files came from, as far as that key goes, and that an
+ * update comes from the same key as before; it grants nothing (a community
+ * extension is approved and sandboxed either way). Official keys are never
+ * taken from a package.
  */
 
 const crypto = require('crypto');
@@ -108,7 +116,7 @@ function signedFiles(dir, hasher) {
  * Sign the extension folder `dir` and write its signature.json.
  * `privateKey` is a crypto KeyObject (Ed25519).
  */
-function signExtension(dir, { kind, id, privateKey, hasher }) {
+function signExtension(dir, { kind, id, privateKey, hasher, embedPublicKey = false }) {
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'extension.json'), 'utf8'));
   const publicKey = crypto.createPublicKey(privateKey);
   const payload = {
@@ -121,6 +129,8 @@ function signExtension(dir, { kind, id, privateKey, hasher }) {
   };
   const signature = crypto.sign(null, Buffer.from(canonicalJson(payload)), privateKey).toString('base64');
   const document = { format: 1, algorithm: 'ed25519', keyId: keyIdFor(publicKey), payload, signature };
+  // A community author's key: carried in the package, as Atmos has no list of them.
+  if (embedPublicKey) document.publicKey = publicKeyDer(publicKey).toString('base64');
   fs.writeFileSync(path.join(dir, SIGNATURE_FILE), `${JSON.stringify(document, null, 1)}\n`);
   return document;
 }
@@ -193,6 +203,53 @@ function verifyExtension(dir, { kind, id, manifest, trustedKeys, hasher }) {
     : { ...rest, status: 'verified', reason: null };
 }
 
+/**
+ * A community author's signature: checked with the public key the package
+ * carries, then every file against it. Returns
+ *   { status: 'unsigned' }                    no signature.json
+ *   { status: 'signed', keyId, publisher }    the files are what that key signed
+ *   { status: 'unverifiable', keyId, reason } signed, but without its public key
+ *   { status: 'official', keyId }             signed with a key Atmos trusts
+ *                                             (left to verifyExtension)
+ *   { status: 'invalid', keyId, reason }      broken: a file, the manifest or
+ *                                             the signature doesn't match
+ */
+function verifyAuthorSignature(dir, { kind, id, manifest, hasher, trustedKeys = new Map() }) {
+  const document = readSignature(dir);
+  if (!document) return { status: 'unsigned', keyId: null };
+  if (document.invalid) return { status: 'invalid', keyId: null, reason: document.invalid };
+  const keyId = document.keyId;
+  if (trustedKeys.has(keyId)) return { status: 'official', keyId };
+  if (typeof document.publicKey !== 'string') {
+    return { status: 'unverifiable', keyId, reason: 'It is signed, but without the public key Atmos needs to check it' };
+  }
+  let key;
+  try {
+    key = crypto.createPublicKey({ key: Buffer.from(document.publicKey, 'base64'), format: 'der', type: 'spki' });
+  } catch {
+    return { status: 'invalid', keyId, reason: 'Its signature carries a key Atmos can\'t read' };
+  }
+  if (key.asymmetricKeyType !== 'ed25519') return { status: 'invalid', keyId, reason: 'Its signature carries a key that isn\'t Ed25519' };
+  if (keyIdFor(key) !== keyId) return { status: 'invalid', keyId, reason: 'Its signature names a different key than the one it carries' };
+  let ok = false;
+  try { ok = crypto.verify(null, Buffer.from(canonicalJson(document.payload)), key, Buffer.from(document.signature, 'base64')); } catch { ok = false; }
+  if (!ok) return { status: 'invalid', keyId, reason: 'Its signature does not match' };
+  const { payload } = document;
+  if (payload.kind !== kind || payload.id !== id) {
+    return { status: 'invalid', keyId, reason: `It is signed as ${payload.kind} '${payload.id}', not ${kind} '${id}'` };
+  }
+  if (manifest && (manifest.version !== payload.version || manifest.publisher !== payload.publisher)) {
+    return { status: 'invalid', keyId, reason: 'Its extension.json does not match what was signed' };
+  }
+  if (!payload.files || typeof payload.files !== 'object') return { status: 'invalid', keyId, reason: 'signature.json lists no files' };
+  const mismatch = compareFiles(signedFiles(dir, hasher), payload.files);
+  if (mismatch) return { status: 'invalid', keyId, reason: `Files differ from what was signed (${mismatch.replace('not listed in integrity.json', 'nothing listed')})` };
+  // The whole key's fingerprint, for telling one author's key from another
+  // (the 16-digit id is for showing).
+  const keyFingerprint = crypto.createHash('sha256').update(key.export({ type: 'spki', format: 'der' })).digest('hex');
+  return { status: 'signed', keyId, keyFingerprint, publisher: typeof payload.publisher === 'string' ? payload.publisher : null };
+}
+
 // ── Package indexes (sources) ────────────────────────────────────────────
 
 /**
@@ -230,4 +287,5 @@ module.exports = {
   signExtension,
   checkSignature,
   verifyExtension,
+  verifyAuthorSignature,
 };

@@ -294,7 +294,16 @@ class MarketDataService extends EventEmitter {
 
 async function activate(context) {
   const service = new MarketDataService();
-  const rendererSubscriptions = new Map();
+  const rendererSubscriptions = new Map(); // consumerId -> { handle, sender, onDestroyed }
+
+  /** Ends a frame's subscription and drops its `destroyed` listener; false if there was none. */
+  function endRendererSubscription(consumerId) {
+    const entry = rendererSubscriptions.get(consumerId);
+    if (!entry) return false;
+    rendererSubscriptions.delete(consumerId);
+    entry.sender.removeListener?.('destroyed', entry.onDestroyed);
+    return entry.handle.unsubscribe() || false;
+  }
 
   context.handle('subscribe', (event, request = {}) => {
     const requestedId = typeof request.subscriptionId === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(request.subscriptionId) ? request.subscriptionId : randomUUID();
@@ -302,16 +311,16 @@ async function activate(context) {
     const handle = service.subscribe(consumerId, request.symbol, request.options, envelope => {
       if (!event.sender.isDestroyed?.()) context.send(event.sender, 'event', { subscriptionId: requestedId, ...envelope });
     });
-    rendererSubscriptions.set(consumerId, handle);
-    event.sender.once?.('destroyed', () => { rendererSubscriptions.get(consumerId)?.unsubscribe(); rendererSubscriptions.delete(consumerId); });
+    // A frame that goes without unsubscribing: its subscription goes too.
+    // The listener is removed when it unsubscribes, so a frame that
+    // subscribes and unsubscribes again and again doesn't pile them up.
+    const sender = event.sender;
+    const onDestroyed = () => endRendererSubscription(consumerId);
+    sender.once?.('destroyed', onDestroyed);
+    rendererSubscriptions.set(consumerId, { handle, sender, onDestroyed });
     return { symbol: handle.symbol, feeds: handle.feeds, exchanges: handle.exchanges, snapshot: handle.snapshot };
   });
-  context.handle('unsubscribe', (event, subscriptionId) => {
-    const consumerId = `renderer-${event.sender.id}:${subscriptionId}`;
-    const removed = rendererSubscriptions.get(consumerId)?.unsubscribe() || false;
-    rendererSubscriptions.delete(consumerId);
-    return removed;
-  });
+  context.handle('unsubscribe', (event, subscriptionId) => endRendererSubscription(`renderer-${event.sender.id}:${subscriptionId}`));
   context.handle('status', () => service.getStatus());
   context.handle('snapshot', (_event, request = {}) => service.getSnapshot(request.symbol, request.options));
   context.handle('history', (_event, request = {}) => service.getHistory(request.symbol, request.options));

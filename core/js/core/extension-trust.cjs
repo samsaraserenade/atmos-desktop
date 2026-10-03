@@ -26,8 +26,14 @@
  *     pending     never approved — not loaded
  *     changed     files or permissions changed since approval — not loaded
  *     blocked     cannot be approved: it has main-process code (main.cjs),
- *                 asks for main-process permissions or "web", or has a
- *                 missing or invalid extension.json — not loaded
+ *                 asks for main-process permissions or "web", has a
+ *                 missing or invalid extension.json, or its author's
+ *                 signature is broken — not loaded
+ *
+ *   Each third-party result (but a developer folder's) also says whether
+ *   its author signed it (`authorSignature`: signed, with the key's id, or
+ *   unsigned), for the indicator in Settings. Signed or not, it is approved
+ *   and sandboxed the same way.
  *
  * Approval is consent plus tamper detection. Containment comes from the
  * runtime: approved third-party extensions run only in sandboxed frames
@@ -39,7 +45,7 @@ const fs = require('fs');
 const path = require('path');
 const { normalizePermissions, describePermissions, normalizeExports, permissionsAdded } = require('./extension-permissions.cjs');
 const { createHasher, readIntegrityList, compareFiles } = require('./extension-integrity.cjs');
-const { verifyExtension, SIGNATURE_FILE } = require('./extension-signing.cjs');
+const { verifyExtension, verifyAuthorSignature, SIGNATURE_FILE } = require('./extension-signing.cjs');
 const { readJson, writeJson } = require('./json-files.cjs');
 
 const LOADABLE = new Set(['verified', 'unverified', 'approved', 'developer']);
@@ -51,6 +57,27 @@ const OFFICIAL_ONLY_KEYS = ['web'];
 
 function isLoadable(status) {
   return LOADABLE.has(status);
+}
+
+/**
+ * Why a community extension can never be approved, or null: no
+ * extension.json, invalid permissions, main-process code or permissions,
+ * or permissions only official extensions have. The extension manager
+ * checks a downloaded package with this before it is staged, so nothing
+ * that would be blocked is ever offered for approval.
+ */
+function communityProblem({ manifest, dir, permissionError = null }) {
+  if (!manifest) return 'It has no extension.json, so its permissions are unknown';
+  if (manifest.invalid) return `Its extension.json is invalid: ${manifest.error}`;
+  let permissions = null;
+  try { permissions = normalizePermissions(manifest.permissions); } catch (error) { permissionError ||= error.message; }
+  if (!permissions || permissionError) return `Its permissions are invalid: ${permissionError}`;
+  if (fs.existsSync(path.join(dir, 'main.cjs'))) return 'Only official, signed extensions can run main-process code (main.cjs)';
+  const mainOnly = MAIN_PROCESS_KEYS.filter(key => (key === 'ipc' ? permissions.ipc : permissions[key].length));
+  if (mainOnly.length) return `It asks for main-process permissions (${mainOnly.join(', ')}), which only official, signed extensions can have`;
+  const officialOnly = OFFICIAL_ONLY_KEYS.filter(key => permissions[key] === true);
+  if (officialOnly.length) return `It asks for permissions (${officialOnly.join(', ')}) only official, signed extensions can have`;
+  return null;
 }
 
 /**
@@ -132,23 +159,22 @@ function createExtensionTrust({
   }
 
   function assessInstalled(entry, permissions, { developer = false } = {}) {
-    if (!entry.manifest) return { status: 'blocked', reason: 'It has no extension.json, so its permissions are unknown' };
-    if (entry.manifest.invalid) return { status: 'blocked', reason: `Its extension.json is invalid: ${entry.manifest.error}` };
-    if (!permissions) return { status: 'blocked', reason: `Its permissions are invalid: ${entry.permissionError}` };
-    if (fs.existsSync(path.join(entry.path, 'main.cjs'))) {
-      return { status: 'blocked', reason: 'Only official, signed extensions can run main-process code (main.cjs)' };
-    }
-    const mainOnly = MAIN_PROCESS_KEYS.filter(key => (key === 'ipc' ? permissions.ipc : permissions[key].length));
-    if (mainOnly.length) {
-      return { status: 'blocked', reason: `It asks for main-process permissions (${mainOnly.join(', ')}), which only official, signed extensions can have` };
-    }
-    const officialOnly = OFFICIAL_ONLY_KEYS.filter(key => permissions[key] === true);
-    if (officialOnly.length) {
-      return { status: 'blocked', reason: `It asks for permissions (${officialOnly.join(', ')}) only official, signed extensions can have` };
-    }
+    const problem = communityProblem({ manifest: entry.manifest, dir: entry.path, permissionError: permissions ? null : entry.permissionError });
+    if (problem) return { status: 'blocked', reason: problem };
     // Chosen by whoever started Atmos with --dev-extension: that is the
     // consent, and its files change all the time.
     if (developer) return { status: 'developer', reason: null };
+    // Signed by its author, or not: shown, never a reason to trust it more.
+    // A signature that doesn't match its files means they were changed.
+    const author = verifyAuthorSignature(entry.path, { kind: entry.kind, id: entry.id, manifest: entry.manifest, hasher, trustedKeys });
+    if (author.status === 'invalid') return { status: 'blocked', reason: `Its author's signature doesn't match its files: ${author.reason}`, authorSignature: { status: 'invalid', keyId: author.keyId } };
+    const authorSignature = author.status === 'signed'
+      ? { status: 'signed', keyId: author.keyId, publisher: author.publisher || null }
+      : { status: 'unsigned', keyId: author.keyId || null, reason: author.reason || null };
+    return { ...approvalOf(entry, permissions), authorSignature };
+  }
+
+  function approvalOf(entry, permissions) {
     const { digest } = hasher.hashTree(entry.path);
     const approval = approvals()[`${entry.kind}:${entry.id}`];
     if (!approval) return { status: 'pending', reason: 'Needs your approval before it can load', fingerprint: digest, newPermissions: newlyRequested(permissions, null) };
@@ -283,4 +309,4 @@ function createExtensionTrust({
   return { assess, assessAll, reassess, get, approve, revoke };
 }
 
-module.exports = { createExtensionTrust };
+module.exports = { createExtensionTrust, communityProblem };

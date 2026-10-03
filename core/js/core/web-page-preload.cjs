@@ -24,6 +24,8 @@
  *    for this page's own address (it reads it from the frame), only for
  *    Atmos Browser's pages, and within a budget per page. Nothing else goes
  *    to Core, and nothing is exposed to the page.
+ *
+ * 3. Atmos's thin scrollbar instead of Windows' (PAGE_SCROLLBAR_CSS).
  */
 function installChromeMembers() {
   const chrome = window.chrome;
@@ -200,6 +202,28 @@ function applyFilters({ ipcRenderer, webFrame }, where = globalThis.location) {
   if (start.watch === true) watchTokens({ ipcRenderer, webFrame });
 }
 
+/**
+ * Atmos's scrollbar in web pages: the sidebar's (frame.css), 3 px with no
+ * track or arrows, in a grey that shows on light and dark pages alike (a
+ * page's background isn't Atmos's theme). The bar is 8 px wide so it's easy
+ * to grab, and the thumb draws 3 px of it, 6 px under the pointer. A user
+ * stylesheet, as an extension's would be: a page that styles its own
+ * scrollbars keeps them (its rules win over these, and `scrollbar-width` or
+ * `scrollbar-color` brings back Chromium's standard bar). The page's own
+ * frame only: embedded frames of other sites keep theirs.
+ */
+const PAGE_SCROLLBAR_CSS = [
+  '::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }',
+  '::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }',
+  '::-webkit-scrollbar-button { display: none; width: 0; height: 0; }',
+  '::-webkit-scrollbar-thumb { background-color: rgba(128, 128, 128, .5); background-clip: padding-box; border: 2.5px solid transparent; border-radius: 4px; min-height: 24px; min-width: 24px; }',
+  '::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background-color: rgba(128, 128, 128, .75); border-width: 1px; }',
+].join('\n');
+
+function applyScrollbar({ webFrame }) {
+  try { webFrame.insertCSS(PAGE_SCROLLBAR_CSS, { cssOrigin: 'user' }); } catch { /* no document to style */ }
+}
+
 // In a page (required by Node for the tests, `electron` is only a path and
 // nothing runs): Chrome's members in the page's world, synchronously,
 // before its scripts; then the blocker's styles and scriptlets.
@@ -209,9 +233,10 @@ if (electron && typeof electron === 'object') {
   if (contextBridge && typeof contextBridge.executeInMainWorld === 'function') {
     try { contextBridge.executeInMainWorld({ func: installChromeMembers }); } catch { /* a page without a world to add to */ }
   }
+  if (electron.webFrame) applyScrollbar(electron);
   if (electron.ipcRenderer && electron.webFrame) {
     try { applyFilters(electron); } catch { /* the page goes on without them */ }
   }
 }
 
-if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens, applyFilters, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS };
+if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens, applyFilters, applyScrollbar, PAGE_SCROLLBAR_CSS, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS };

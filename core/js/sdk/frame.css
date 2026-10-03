@@ -22,3 +22,17 @@ html[data-atmos-surface="sidebar"] body, html[data-atmos-surface="settings"] bod
    Content decides their height. */
 html[data-atmos-surface="sidebar"], html[data-atmos-surface="sidebar"] body,
 html[data-atmos-surface="settings"], html[data-atmos-surface="settings"] body { height: auto !important; }
+
+/* Atmos's scrollbar (the sidebar's): thin, no track, no arrows, a faint
+   thumb in the theme's ink. Every frame has it unless it styles its own;
+   a more specific ::-webkit-scrollbar rule of the extension's wins, and an
+   element with `scrollbar-width` or `scrollbar-color` set gets Chromium's
+   standard scrollbar instead. Tune it per element with the variables, or
+   hide it with class="atmos-scrollbar-none". */
+::-webkit-scrollbar { width: var(--atmos-scrollbar-size, 3px); height: var(--atmos-scrollbar-size, 3px); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb { background: rgba(var(--ink-rgb), var(--atmos-scrollbar-alpha, .12)); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(var(--ink-rgb), var(--atmos-scrollbar-hover-alpha, .24)); }
+.atmos-scrollbar-none { scrollbar-width: none; }
+.atmos-scrollbar-none::-webkit-scrollbar { display: none; width: 0; height: 0; }

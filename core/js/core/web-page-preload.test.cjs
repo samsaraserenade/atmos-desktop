@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { installChromeMembers, applyFilters, collectTokens, watchTokens, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS } = require('./web-page-preload.cjs');
+const { installChromeMembers, applyFilters, applyScrollbar, PAGE_SCROLLBAR_CSS, collectTokens, watchTokens, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS } = require('./web-page-preload.cjs');
 
 // The page's location, which loadTimes() reads (Node has none).
 globalThis.location = { protocol: 'https:' };
@@ -146,3 +146,15 @@ test('a batch of tokens has a bound on its characters, the rest wait for the nex
   assert.equal(sent.reduce((sum, batch) => sum + batch.classes.length, 0), 900, 'every name sent, once');
 });
 
+
+test('pages get Atmos\'s thin scrollbar, as a user stylesheet a page\'s own styles override', () => {
+  const calls = [];
+  applyScrollbar({ webFrame: { insertCSS: (css, options) => calls.push([css, options.cssOrigin]) } });
+  assert.deepEqual(calls, [[PAGE_SCROLLBAR_CSS, 'user']]);
+  assert.match(PAGE_SCROLLBAR_CSS, /::-webkit-scrollbar \{ width: 8px; height: 8px;/);
+  assert.match(PAGE_SCROLLBAR_CSS, /::-webkit-scrollbar-button \{ display: none/);
+  // No standard scrollbar properties: they'd switch the ::-webkit-scrollbar styles off.
+  assert.doesNotMatch(PAGE_SCROLLBAR_CSS, /scrollbar-(width|color)/);
+  // A page with no document to style goes on without it.
+  assert.doesNotThrow(() => applyScrollbar({ webFrame: { insertCSS: () => { throw new Error('no document'); } } }));
+});

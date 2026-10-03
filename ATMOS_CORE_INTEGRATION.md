@@ -104,7 +104,16 @@ details.
 
 ### Share it
 
-Copy the folder (you can leave out `node_modules`, `tests` and
+**From your GitHub repository** (Atmos 0.19.3): raise `"version"`, run
+`npm run pack` (`node .atmos-sdk/pack.cjs`), and attach the two files it
+writes to `dist/` (`<id>-<version>.atmos` and `index.json`) to a GitHub
+release. Atmos reads the latest release. People add your repository on the
+Extensions page (sources → Add a source → `github.com/you/repo`), install
+it from Available and, after a restart, approve what it asks for; every
+new version asks them again. Section 7, "Publishing from GitHub", has the
+details, and signing.
+
+**By hand:** copy the folder (you can leave out `node_modules`, `tests` and
 `.atmos-sdk`) into `%APPDATA%\atmos\plugins\` on the other computer, or
 `services\` for a service, and restart Atmos. Nothing of it shows yet: the
 footer's Extensions button turns red ("Weather needs your approval"), and
@@ -113,9 +122,6 @@ Review button that takes you to its card further down, under Plugins →
 Community. The card lists its
 permissions and what it shares; **Approve** loads it at once, with no second
 restart. Any later change to its files asks for approval again (section 7).
-
-Installing from a link, and updates for community extensions, aren't
-there yet.
 
 ### The smallest extension by hand
 
@@ -1418,8 +1424,9 @@ its folder). Its `signature.json` holds its kind, id, `version`,
 `publisher` and the SHA-256 of every other file, signed with Ed25519
 (`core/js/core/extension-signing.cjs`). Atmos trusts the public keys in
 `core/trusted-keys.json`; each is official, belongs to one publisher, and can
-be marked `"revoked"`. Signatures from other keys are ignored (the extension
-is community). Community publishers signing their own packages comes later.
+be marked `"revoked"`. A signature from any other key never makes an
+extension official; a community author's own signature is shown as
+**Signed** (below, "Publishing from GitHub").
 
 ```bash
 npm run keys:create -- <file outside the repo>   # a new key, encrypted with a passphrase; added to core/trusted-keys.json
@@ -1502,6 +1509,60 @@ user data). Unpackaged, `--extension-source=<folder or url>` (or
 For development and the end-to-end checks, an unpackaged Atmos also trusts
 the keys in `--trusted-keys=<file>` (or `ATMOS_TRUSTED_KEYS`); a packaged one
 trusts only its own list.
+
+### Publishing from GitHub (community extensions)
+
+A community extension is published as a GitHub release of its own
+repository, and installed, updated and removed from Settings → Extensions
+like an official one, with community rules:
+
+```bash
+npm run pack                          # in your extension: dist/<id>-<version>.atmos and dist/index.json, unsigned
+npm run pack -- --new-key ../my.pem   # the first time you sign: makes a key outside the folder, signs with it
+npm run pack -- --key ../my.pem       # every version after
+```
+
+`pack.cjs` (in `.atmos-sdk/`, from `npm run new:extension`; MIT) zips the
+folder without dot files, `node_modules`, `tests`, `package.json`,
+`package-lock.json`, `jsconfig.json` and `dist`, and writes an `index.json`
+naming the package's size and SHA-256. The id is `package.json`'s `"name"`
+(or the folder's; `--id` to choose), `--kind service` packs a service. It
+refuses `"publisher": "atmos"` and a `main.cjs`. Attach both files to a
+release; the latest release is the one Atmos reads.
+
+- **Adding it.** `github.com/owner/repo`, `github:owner/repo` or any
+  github.com address of the repository (case doesn't matter), on the
+  sources page. Its card says
+  Community and how many packages it has; ids it can't use are listed
+  there ("Not offered: …").
+- **Before anything is staged**, the package is checked as the index says
+  (size, SHA-256) and then refused if it could never be approved
+  (`main.cjs`, main-process or `web` permissions), if its author's
+  signature doesn't match its files, if it is signed with an official key
+  or says `"publisher": "atmos"`, or if it carries a dot file, `Thumbs.db`
+  or `desktop.ini` (files neither a signature nor an approval covers). An
+  id an official source lists (or listed last time it was read), an
+  official copy has, or Atmos ships with is never taken from a repository,
+  whatever the kind, and neither is an id another installed extension has; the first install binds the
+  id to its repository (`extension-community.json` in user data), and the
+  same id from another repository is refused until it's removed.
+- **After the restart** it waits for approval, like any community
+  extension; its card says where it's from and **Signed** or **Unsigned**.
+  **Every update asks again**: an update is a change to its files.
+- **Signing** is optional and grants nothing. `signature.json` carries the
+  public key (`"publicKey"`), so Atmos checks that the files are exactly
+  what that key signed, shows the key's id, and says so when a version is
+  signed with a different key than the one before it, or no longer signed
+  ("the repository may have changed hands"); the key is remembered across
+  unsigned versions. Sign every version with the
+  same key, keep it out of the repository, and keep a copy: a lost key
+  looks like a new author. `ATMOS_SIGNING_PASSPHRASE` encrypts a new key or
+  reads an encrypted one.
+- An official package with the same id replaces a community copy and
+  frees the id. A repository's index needn't be signed.
+
+Unpackaged, `--github-releases=<folder>` serves repositories' latest
+releases from `<folder>/<owner>/<repo>/` (the end-to-end check uses it).
 
 ### Limits
 

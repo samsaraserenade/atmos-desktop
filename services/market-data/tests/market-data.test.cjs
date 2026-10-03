@@ -325,3 +325,39 @@ test('Coinbase history uses its granularity, converts seconds and reorders field
   ]);
   await assert.rejects(() => getMarketHistory('BTCUSDT', { exchange: 'coinbase', interval: '4h' }, async () => ({ ok: true, json: async () => [] })), /unavailable for coinbase/);
 });
+
+test('a frame\'s subscription: unsubscribing drops its destroyed listener, a closed frame ends it', async () => {
+  const { EventEmitter } = require('node:events');
+  const handlers = new Map();
+  let shutdown;
+  // No sockets to the exchanges from a test: the service sees no WebSocket.
+  const savedWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = undefined;
+  await activate({
+    root,
+    app: { once: (_name, fn) => { shutdown = fn; } },
+    handle: (name, handler) => handlers.set(name, handler),
+    provide() {},
+    send() {},
+  });
+  try {
+    const sender = Object.assign(new EventEmitter(), { id: 7, isDestroyed: () => false });
+    const subscribe = id => handlers.get('subscribe')({ sender }, { symbol: 'BTCUSDT', subscriptionId: id });
+    for (let i = 0; i < 5; i += 1) {
+      await subscribe('chart');
+      assert.equal(await handlers.get('unsubscribe')({ sender }, 'chart'), true);
+    }
+    assert.equal(sender.listenerCount('destroyed'), 0, 'unsubscribing removes the listener');
+    assert.equal(await handlers.get('unsubscribe')({ sender }, 'chart'), false);
+    // The same id again is refused, without a second listener.
+    await subscribe('a');
+    await assert.rejects(async () => subscribe('a'), /already subscribed/);
+    assert.equal(sender.listenerCount('destroyed'), 1);
+    sender.emit('destroyed');
+    assert.equal(sender.listenerCount('destroyed'), 0);
+    assert.equal(await handlers.get('unsubscribe')({ sender }, 'a'), false, 'a closed frame\'s subscription is gone');
+  } finally {
+    shutdown();
+    globalThis.WebSocket = savedWebSocket;
+  }
+});
