@@ -7,6 +7,9 @@ const { createExtensionPreferences } = require('./js/core/extension-preferences.
 const { createExtensionCatalog } = require('./js/core/extension-catalog.cjs');
 const { createExtensionTrust } = require('./js/core/extension-trust.cjs');
 const { loadTrustedKeys } = require('./js/core/extension-signing.cjs');
+const links = require('./js/core/extension-links.cjs');
+const { openStartupSplash } = require('./js/core/startup-splash.cjs');
+const { readBootMessages, pickBootMessage } = require('./js/core/boot-messages.cjs');
 const { resolveDependencies, dependentsOf, normalizeDependencies, refOf } = require('./js/core/extension-dependencies.cjs');
 const { createExtensionManager } = require('./js/core/extension-manager.cjs');
 const { createAtmosUpdater, spawnDetached } = require('./js/core/atmos-update.cjs');
@@ -319,6 +322,11 @@ function createWindow() {
   });
   win.__atmosTransparentWindow = transparentWindow;
   _web.setWindow(win);
+  // Its first paint is the page's boot splash, the same picture as the
+  // startup splash above it: that one can go now.
+  win.once('ready-to-show', _closeStartupSplash);
+  win.webContents.once('did-fail-load', _closeStartupSplash);
+  win.once('closed', _closeStartupSplash);
 
   if (windowState.isMaximized && !windowState.isFullScreen) win.maximize();
 
@@ -380,7 +388,7 @@ function createWindow() {
     console.log('[renderer]', message);
   });
 
-  win.loadURL('atmos-app://local/index.html');
+  win.loadURL(`atmos-app://local/index.html${_bootMessage ? `?boot=${_bootMessage.index}` : ''}`);
 }
 
 // ── Who may call ──────────────────────────────────────────────────────────────
@@ -916,8 +924,13 @@ function _isStartupDisabled(entry) {
 
 /** Switched on and trusted, before dependencies are considered. */
 function _isUsableAlone(entry) {
-  return !_isStartupDisabled(entry) && _trust?.get(entry)?.loadable !== false && !_activationFailures.has(refOf(entry));
+  return !_isStartupDisabled(entry) && _trust?.get(entry)?.loadable !== false && !_activationFailures.has(refOf(entry))
+    && !_stoppedNow.has(refOf(entry));
 }
+
+// Community extensions whose approval was removed this session: stopped at
+// once (_stopNow) and not running again until the next start.
+const _stoppedNow = new Set();
 
 // main.cjs activations that threw or ran out of time this session
 // (extension-host.cjs): ref → reason. They count as not loading, so what
@@ -933,6 +946,7 @@ function _resolveDependencyState() {
   const all = [..._catalog.list('plugins'), ..._catalog.list('services')];
   _dependencyState = resolveDependencies(all, _isUsableAlone, entry => (_isStartupDisabled(entry)
     ? 'is switched off'
+    : _stoppedNow.has(refOf(entry)) ? 'was stopped (its approval was removed)'
     : _activationFailures.has(refOf(entry)) ? 'failed to start'
       : `can't load (${_trust?.get(entry)?.status || 'unknown'})`));
   _dependents = dependentsOf(all);
@@ -1026,7 +1040,29 @@ function _managerSummary(status = _manager.status()) {
  * none of that page's business.
  */
 function _atmosWindows() {
-  return BrowserWindow.getAllWindows().filter(win => !win.isDestroyed() && !win.webContents.isDestroyed() && !_web.isWebSession(win.webContents.session));
+  return BrowserWindow.getAllWindows().filter(win => !win.isDestroyed() && !win.webContents.isDestroyed() && !win.__atmosStartupSplash
+    && !_web.isWebSession(win.webContents.session));
+}
+
+// The window on screen while Atmos starts (startup-splash.cjs): open before
+// the extension checks, closed once the Atmos window has painted its own
+// splash. --no-startup-splash leaves it out.
+// Its line is one of the boot splash's own (core/js/boot/splash.js), and
+// the page is told which (index.html?boot=N) so it goes on with the same one.
+let _startupSplash = null;
+let _bootMessage = null;
+function _openStartupSplash() {
+  if (process.argv.includes('--no-startup-splash')) return;
+  _bootMessage = pickBootMessage(readBootMessages(path.join(__dirname, 'js', 'boot', 'splash.js')));
+  _startupSplash = openStartupSplash({
+    BrowserWindow, screen, state: _loadWindowState(), defaults: DEFAULT_WINDOW_BOUNDS,
+    imagePath: path.join(__dirname, 'assets', 'Rev2.png'), icon: path.join(__dirname, 'assets', 'icon.ico'),
+    line: _bootMessage?.text,
+  });
+}
+function _closeStartupSplash() {
+  _startupSplash?.close();
+  _startupSplash = null;
 }
 
 function _broadcastManager(status = _manager.status()) {
@@ -1324,6 +1360,8 @@ function _describeTrust(entry) {
     hasMain: trust.hasMain,
     fingerprint: trust.fingerprint || null,
     approvalChanged: trust.approvalChanged === true,
+    // Its approval was removed this session, and it stopped then.
+    stoppedNow: _stoppedNow.has(refOf(entry)),
     // A community extension: whether its author signed it (and with which
     // key), and the GitHub repository it was installed from, if any.
     authorSignature: trust.authorSignature || null,
@@ -1486,7 +1524,8 @@ _page.handle('extensions:approve', async (_event, kind, id, fingerprint) => {
   const entry = _catalog.find(folder, id);
   const result = _trust.approve(folder, entry, fingerprint);
   let loaded = null;
-  try { loaded = _loadApprovedNow(folder, entry); }
+  // Stopped this session (its approval removed): it starts again at the next start.
+  try { loaded = entry && _stoppedNow.has(refOf(entry)) ? null : _loadApprovedNow(folder, entry); }
   catch (error) { console.warn(`[extensions] ${kind} '${id}' approved; it loads at the next start (${error.message})`); }
   // The page registers their surfaces and starts their background frames.
   if (loaded) {
@@ -1496,12 +1535,36 @@ _page.handle('extensions:approve', async (_event, kind, id, fingerprint) => {
   return loaded ? { ...result, restartRequired: false, loaded } : { ...result, loaded: [] };
 });
 
+/**
+ * A community extension whose approval was just removed stops now, with
+ * whatever needed it: it no longer counts as running (every channel to
+ * Core, its files and its browser permissions follow _isActive), and the
+ * page tears down its frames (extensions:stopped). Returns the refs that
+ * stopped. The reverse of _loadApprovedNow; approving it again this
+ * session takes a restart.
+ */
+function _stopNow(entry) {
+  const all = [..._catalog.list('plugins'), ..._catalog.list('services')];
+  const before = new Set(all.filter(_isActive).map(refOf));
+  if (!before.has(refOf(entry))) return [];
+  _stoppedNow.add(refOf(entry));
+  _resolveDependencyState();
+  const stopped = all.filter(item => before.has(refOf(item)) && !_isActive(item)).map(refOf);
+  _installBrowserPermissions(_activeEntries());
+  console.log(`[extensions] approval removed for ${refOf(entry)}; stopped ${stopped.join(', ')}`);
+  return stopped;
+}
+
 _page.handle('extensions:revoke', async (_event, kind, id) => {
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
   if (!entry || entry.tier !== 'third-party') throw new Error('Only community extensions have approvals');
   _trust.revoke(entry);
+  const stopped = _stopNow(entry);
+  if (stopped.length) {
+    for (const win of _atmosWindows()) win.webContents.send('extensions:stopped', stopped);
+  }
   _broadcastManager();
-  return { restartRequired: true };
+  return { restartRequired: false, stopped };
 });
 
 _page.handle('extensions:restart', () => {
@@ -1530,6 +1593,49 @@ _page.handle('extensions:restart', () => {
 // extension declares "notifications"; this checks again against its trust
 // record. A click brings Atmos forward and tells the extension's frames.
 const _shownNotifications = new Set(); // kept referenced until closed, so clicks arrive
+// A link an extension's frame asks Atmos to open (atmos-sdk.js routes link
+// clicks and window.open here; community frames can't open windows
+// themselves). Official ones open; a community one opens after a click in
+// its own frame, and otherwise asks (extension-links.cjs, the A5 fix).
+const _linkQuestions = new Set();  // "kind:id" with a question up
+const _linksBlocked = new Set();   // "kind:id" blocked until Atmos restarts
+_page.handle('extensions:open-link', async (event, kind, id, url, info) => {
+  if (!_isAppUrl(event.senderFrame?.url) || event.senderFrame !== event.sender.mainFrame) throw new Error('not allowed');
+  const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
+  if (!entry || !_isActive(entry)) return false;
+  const href = links.externalLink(url);
+  if (!href) return false;
+  const ref = `${entry.kind}:${entry.id}`;
+  const decision = links.linkDecision({
+    tier: entry.tier, focused: info?.focused === true, actedAt: _web.atmosActedAt(), now: Date.now(),
+    blocked: _linksBlocked.has(ref), asking: _linkQuestions.has(ref),
+  });
+  if (decision === 'open') { _openExternally(href); return true; }
+  if (decision === 'refuse') return false;
+  _linkQuestions.add(ref);
+  try {
+    const name = entry.manifest?.displayName || entry.id;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const question = {
+      type: 'question', buttons: ['Open', "Don't open"], defaultId: 1, cancelId: 1, noLink: true,
+      title: 'Open link?',
+      message: `${name} wants to open ${links.describeLink(href)}`,
+      detail: `${href.length > 300 ? `${href.slice(0, 300)}…` : href}\n\nThis didn't come from a click in ${name}. Open it only if you expected it.`,
+      checkboxLabel: `Block links from ${name} until Atmos restarts`,
+    };
+    const { response, checkboxChecked } = win && !win.isDestroyed() ? await dialog.showMessageBox(win, question) : await dialog.showMessageBox(question);
+    if (response === 0) {
+      // Your choice: it comes to the front, in Atmos Browser or the system's.
+      if (!_web.openLink(href, { foreground: true })) _openExternally(href);
+      return true;
+    }
+    if (checkboxChecked) _linksBlocked.add(ref);
+    return false;
+  } finally {
+    _linkQuestions.delete(ref);
+  }
+});
+
 _page.handle('extensions:notify', (event, kind, id, options) => {
   if (!_isAppUrl(event.senderFrame?.url)) throw new Error('not allowed');
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
@@ -2105,6 +2211,8 @@ async function _cookiesReadable() {
 
 if (hasInstanceLock) app.whenReady().then(async () => {
   if (!(await _cookiesReadable())) return;
+  // Something on screen at once, while extensions are checked and started.
+  _openStartupSplash();
   console.log('[main] userData:', app.getPath('userData'));
   // How the last Atmos update went (atmos-update.cjs).
   const lastUpdate = _updater.startup();

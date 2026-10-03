@@ -1,7 +1,7 @@
 {
   "apiVersion": 3,
   "tier": "first-party",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",

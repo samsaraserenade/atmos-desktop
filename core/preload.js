@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('atmosCore', {
   // never invokes a main.cjs handler.
   invokeExtensionAs: (caller, kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, String(caller), ...args),
   showExtensionNotification: (kind, id, options) => ipcRenderer.invoke('extensions:notify', kind, id, options),
+  openExtensionLink: (kind, id, url, info) => ipcRenderer.invoke('extensions:open-link', kind, id, url, info),
   // A framed extension's atmos.fetch(), made by the main process on its
   // behalf (stamped with `caller`, like invokeExtensionAs).
   extensionFetch: (caller, requestId, request) => ipcRenderer.invoke('extensions:fetch', String(caller), String(requestId), request),
@@ -63,6 +64,12 @@ contextBridge.exposeInMainWorld('atmosCore', {
     const listener = (_event, list) => callback(list);
     ipcRenderer.on('extensions:loaded', listener);
     return () => ipcRenderer.removeListener('extensions:loaded', listener);
+  },
+  // Community extensions whose approval was just removed, stopping now: ["kind:id"].
+  onExtensionsStopped: callback => {
+    const listener = (_event, refs) => callback(refs);
+    ipcRenderer.on('extensions:stopped', listener);
+    return () => ipcRenderer.removeListener('extensions:stopped', listener);
   },
   onExtensionNotificationClick: callback => {
     const listener = (_event, kind, id, tag) => callback(kind, id, tag);

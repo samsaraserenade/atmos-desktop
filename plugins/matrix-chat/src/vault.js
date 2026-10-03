@@ -58,11 +58,6 @@ function requireVault() {
   return opened;
 }
 
-/** Whether the key is protected by the OS's secure storage (false only where none exists). */
-export function isVaultProtected() {
-  return requireVault().protected;
-}
-
 /** The 32-byte key for this plugin's encryption databases. */
 export function cryptoStoreKey() {
   return requireVault().storeKey;

@@ -72,7 +72,7 @@ test('main.js registers every channel through the gate, and the window controls 
     'toggle-fullscreen', 'app:version', 'is-fullscreen', 'is-maximized', 'task-view:capture-preview', 'window-effects:get', 'window-effects:set-transparent',
     'win-minimize', 'win-maximize', 'win-close', 'set-window-click-through', 'window-resize:start', 'window-resize:update', 'window-resize:end',
     'plugins:list', 'services:list', 'extension-state:load-all', 'extension-state:save', 'extension-state:save-sync', 'extensions:set-enabled',
-    'extensions:approve', 'extensions:revoke', 'extensions:restart', 'extensions:notify', 'extensions:fetch', 'extensions:fetch-abort',
+    'extensions:approve', 'extensions:revoke', 'extensions:restart', 'extensions:notify', 'extensions:open-link', 'extensions:fetch', 'extensions:fetch-abort',
     'extensions:open-root', 'extensions:manager-status', 'extensions:install', 'location:allow-detect',
   ]) {
     assert.ok(channels.has(channel), `${channel} goes through the gate`);

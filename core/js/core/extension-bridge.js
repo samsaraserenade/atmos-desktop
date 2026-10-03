@@ -454,6 +454,16 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       return write({ text: text ?? null, image: image ?? null });
     },
 
+    // A link to open (the SDK sends link clicks and window.open here):
+    // http(s) or mailto only. Official extensions' open; a community one's
+    // opens after a click in its frame and otherwise asks (main.js).
+    'links.open': url => {
+      if (typeof url !== 'string' || !url || url.length > MAX_WEB_URL) throw new BridgeError('links.open(url): url must be text', 'TypeError');
+      if (!/^(https?:|mailto:)/i.test(url)) throw new BridgeError('links.open(url): only http(s) and mailto links open', 'TypeError');
+      if (!deps.openLink) return false;
+      return deps.openLink(url);
+    },
+
     // System notifications. Chromium refuses the Notification API inside
     // frames, so Core shows them for the frame. Needs "notifications" in
     // "permissions.browser"; Atmos's main process checks it again.

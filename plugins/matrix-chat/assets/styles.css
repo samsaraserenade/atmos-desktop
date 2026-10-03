@@ -294,33 +294,8 @@
 /* Navigation hosted by the Atmos accordion, independent of the chat pane. */
 .mx-atmos-rooms { height: 100%; min-height: 0; min-width: 0; }
 .mx-atmos-rooms .mx-room-list { flex-direction: column; }
-.mx-atmos-rooms .mx-rail {
-  width: auto; flex-direction: row; align-items: center;
-  border-right: 0; border-bottom: 1px solid var(--mx-hairline);
-}
-.mx-atmos-rooms .mx-rail-items {
-  flex-direction: row; min-width: 0; gap: 8px; padding: 8px;
-  overflow-x: auto; overflow-y: hidden;
-}
-.mx-atmos-rooms .mx-rail-item { flex-shrink: 0; }
-.mx-atmos-rooms .mx-rail-settings-btn { margin: 0 4px; }
 .mx-atmos-rooms .mx-channel-pane { min-height: 0; margin-left: 0; }
 .mx-atmos-rooms .mx-channel-rows { min-height: 0; }
-
-
-.mx-sidebar {
-  position: relative;
-  z-index: 1;
-  flex: 0 0 280px;
-  min-height: 0;
-  border-right: 1px solid var(--mx-hairline);
-  /* The sidebar and chat are separate backdrop-filter layers, so even
-     with the same blur radius their boundary can read as an abrupt change
-     in the sampled wallpaper. A small shadow softens that transition and
-     deliberately overlaps the later-painted main pane via z-index. */
-  box-shadow: 3px 0 7px rgba(0, 0, 0, 0.18);
-  overflow: hidden; /* .mx-room-list's own children handle their own scrolling */
-}
 
 .mx-main {
   flex: 1;
@@ -350,16 +325,6 @@
      edge simply covers wherever the seam would otherwise show, rather
      than exposing anything opaque underneath. */
   margin-left: -1px;
-}
-
-.mx-main-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--mx-fg-faint);
-  font-size: 12px;
-  text-align: center;
 }
 
 /* ---- Room list: server rail + channel pane ----
@@ -402,234 +367,6 @@
   text-align: center;
 }
 
-/* .mx-rail is now a column of two pieces: the scrollable .mx-rail-items
-   (every space/pseudo-space/DM icon) filling the available height, and
-   the settings button (see .mx-rail-settings-btn below) pinned below it
-   at a fixed spot at the bottom of the sidebar — rather than the rail
-   itself scrolling, which would let the settings button scroll out of
-   view along with everything else the moment there are enough spaces to
-   need it. min-height: 0 is what lets .mx-rail-items' own
-   overflow-y: auto actually engage inside this column instead of the
-   column just growing to fit all its content (same fix .mx-room-list
-   needs for its own row-direction children, just for a nested column
-   here instead). */
-.mx-rail {
-  flex-shrink: 0;
-  width: 52px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid var(--mx-hairline);
-  /* Panel background opacity (state owned by
-     settings-menu.js as getRailOpacity/setRailOpacity/
-     onRailOpacityChanged, applied here live by room-list.js's paint()
-     as --mx-rail-opacity). Set on mount and
-     kept current by a subscription, as a plain 0–1 number rather than a percentage — color-mix()'s own
-     percentage argument is built from it via calc(N * 100%) below, so
-     this and the other two panel-opacity variables (--mx-room-list-
-     opacity on .mx-channel-pane, --mx-room-view-opacity on
-     .mx-room-view, both further down) all share one "0 = fully
-     transparent, 1 = solid black" unit instead of each panel taking a
-     differently-scaled input.
-
-     Falls back to 0 (today's fully-transparent look) so this renders
-     identically to before these sliders existed until JS actually sets
-     a value. Plain #000 for now rather than
-     var(--mx-bg, #14151a) (this plugin's usual host-background guess,
-     still used as-is elsewhere in this file) — TEMPORARY, pending
-     swapping this whole background for core sidebar's own blur
-     treatment instead of a flat color. */
-  /* Panel background blur (state owned by
-     settings-menu.js as getRailBlur/setRailBlur/onRailBlurChanged,
-     applied here live by room-list.js's paint() as --mx-rail-blur, in
-     px). Same blur(Npx) saturate(180%) recipe already used by this
-     plugin's own popovers (.mx-settings-menu, #ctx-menu, the emoji
-     browser — see further down this file) and by core's own
-     #settings-drawer — not a new house style, just made adjustable and
-     per-panel instead of a fixed 30px. Falls back to 0px (no blur,
-     today's look) so this renders identically to before this slider
-     existed until JS actually sets a value, same "default = current
-     behavior" reasoning --mx-rail-opacity's own fallback follows above.
-     Only takes visible effect once the color-mix() background above is
-     non-transparent enough to sit in front of anything to actually
-     blur — an --mx-rail-opacity of 0 with a nonzero blur is a legitimate
-     (if pointless-looking) combination, not a bug. */
-}
-
-.mx-rail-items {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 0;
-  overflow-y: auto;
-  /* Scroll still works via overflow-y: auto above — this only hides the
-     visible track/thumb. Same pair used throughout for scrollable
-     panes (.mx-channel-rows, .mx-timeline). */
-  scrollbar-width: none;
-}
-
-.mx-rail-items::-webkit-scrollbar {
-  display: none;
-}
-
-/* Settings entry point (opens .mx-settings-menu — see settings-menu.js's
-   openSettingsMenu()), pinned at the bottom of the rail rather than
-   living inside .mx-rail-items so it never scrolls away. Same circular
-   footprint as a real .mx-rail-item so it reads as part of the same
-   button family, just visually quieter (muted glyph, no swatch fill,
-   no active-indicator bar) since it isn't a selectable destination the
-   way a space/DM icon is. */
-.mx-rail-settings-btn {
-  flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  margin: 0 auto 10px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--mx-fg-muted);
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.mx-rail-settings-btn:hover {
-  background: var(--mx-surface-hover);
-  color: var(--mx-fg);
-}
-
-.mx-rail-item {
-  position: relative;
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: grab;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.12s ease;
-}
-
-/* Images are natively draggable in every browser regardless of an
-   ancestor's draggable="true" — starting a drag on the avatar <img>
-   itself would hijack the gesture from .mx-rail-item's own dragstart
-   handler (room-list.js) and drag the image out instead of reordering
-   the rail. Disabling the browser's built-in image drag lets the
-   gesture fall through to the button. */
-.mx-rail-item img {
-  -webkit-user-drag: none;
-  user-select: none;
-  pointer-events: none;
-}
-
-/* Applied to the source item for the duration of its own drag
-   (room-list.js dragstart/dragend) so it reads as "lifted" rather
-   than looking like a second, stationary copy sitting next to the
-   cursor. */
-.mx-rail-item-dragging {
-  opacity: 0.35;
-}
-
-/* Applied to whichever item is currently under the pointer as a drop
-   target (room-list.js dragover/dragleave/drop) — a same accent-bar
-   language as .mx-rail-item.active::before, but full-height, so it
-   reads as "insert here" rather than borrowing the active state's
-   own indicator. */
-.mx-rail-item-drag-over::after {
-  content: '';
-  position: absolute;
-  left: -10px;
-  top: 0;
-  width: 3px;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--mx-accent);
-  opacity: 0.5;
-}
-
-/* Active indicator: a left-edge accent bar rather than a filled
-   background or a card — consistent with color being spent only on the
-   one or two active things per screen (see this file's top-of-file
-   note), not a highlighted-row treatment borrowed from a generic
-   chat-app rail. */
-.mx-rail-item::before {
-  content: '';
-  position: absolute;
-  left: -10px;
-  top: 50%;
-  width: 3px;
-  height: 0;
-  border-radius: 0 2px 2px 0;
-  background: var(--mx-accent);
-  transform: translateY(-50%);
-  transition: height 0.12s ease;
-}
-
-.mx-rail-item.active::before {
-  height: 22px;
-}
-
-.mx-rail-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-  background: hsl(var(--mx-avatar-hue, 220), 40%, 32%);
-  overflow: hidden;
-  opacity: 0.7;
-  filter: saturate(0);
-  transform: scale(1);
-  transition: opacity 0.12s ease, filter 0.12s ease, transform 0.12s ease;
-}
-
-.mx-rail-item.active .mx-rail-avatar {
-  opacity: 1;
-  filter: saturate(1);
-  transform: scale(1.15);
-}
-
-.mx-rail-avatar img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-/* The synthetic Direct-Messages rail entry has no single backing room
-   (room-list.js's entry.iconRoom is null for it), so it can't take the
-   deterministic per-room hue the other swatches use — a flat neutral
-   surface instead, same family as .mx-surface/.mx-btn rather than a
-   colored circle that would misleadingly suggest one specific room. */
-.mx-rail-avatar-generic {
-  background: var(--mx-surface-hover);
-}
-
-.mx-rail-unread-dot {
-  position: absolute;
-  top: 0;
-  right: 3px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--mx-accent);
-  border: 2px solid var(--mx-bg, #14151a);
-}
-
 .mx-channel-pane {
   flex: 1;
   min-width: 0;
@@ -646,11 +383,6 @@
   /* Room list panel blur — see .mx-rail's own comment above for the full
      reasoning; same blur(Npx) saturate(180%) approach, applied here as
      --mx-room-list-blur by room-list.js's paint(). */
-}
-
-.mx-channel-pane-header {
-  flex-shrink: 0;
-  padding: 8px 14px 6px;
 }
 
 .mx-channel-rows {
@@ -729,7 +461,6 @@
 .mx-room-join:hover { background: var(--mx-surface-hover); color: var(--mx-fg); }
 .mx-room-join:disabled { opacity: .5; cursor: default; }
 .mx-room-join-note { flex: 0 0 auto; align-self: center; color: var(--mx-fg-faint); font-size: 9.5px; }
-
 
 .mx-room-row {
   display: flex;
@@ -859,37 +590,6 @@
 }
 
 /* ---- Room view ---- */
-
-.mx-room-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--mx-hairline);
-}
-
-.mx-room-header-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.mx-room-title {
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.mx-room-subtitle {
-  font-size: 10.5px;
-  color: var(--mx-fg-faint);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 
 .mx-timeline {
   flex: 1;
@@ -1198,66 +898,6 @@
   color: inherit;
 }
 
-/* ---- Quick-react row ----
-   The emoji row + "more" button opened alongside a message's right-click
-   menu (room-view.js's openReactionPicker(), src/ui/context-menu.js) — a
-   custom widget, not a plain action list, so it's still built and styled
-   here and handed to Core's openMenu() (js/core/context-menu.js) as
-   `before`. The menu surface itself, and the Reply/Edit/Delete/... action
-   rows below the divider, are Core's own .ctx-menu-surface/.ctx-item now
-   (index.html) — this plugin (and room-list.js's "Leave" menu) used to
-   define its own .mx-reaction-picker/.mx-reaction-picker-action rules
-   hand-matched to Core's #ctx-menu; those are gone, superseded by the
-   shared classes every migrated menu in the app now renders through. */
-.mx-reaction-picker-row {
-  display: flex;
-  gap: 2px;
-}
-
-.mx-reaction-picker-divider {
-  height: 1px;
-  margin: 3px 2px;
-  background: var(--mx-hairline);
-}
-
-.mx-reaction-picker-emoji {
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: none;
-  cursor: pointer;
-  font-size: 16px;
-  border-radius: var(--mx-radius);
-  line-height: 1;
-}
-
-.mx-reaction-picker-emoji:hover {
-  background: var(--mx-surface-hover);
-}
-
-/* The "+" escape hatch to the full browser (emoji-browser.js) — same
-   footprint as the quick-react buttons it sits alongside, but muted
-   until hovered so it doesn't visually compete with the actual emoji. */
-.mx-reaction-picker-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: none;
-  cursor: pointer;
-  font-size: 13px;
-  border-radius: var(--mx-radius);
-  line-height: 1;
-  color: var(--mx-fg-muted);
-}
-
-.mx-reaction-picker-more:hover {
-  background: var(--mx-surface-hover);
-  color: var(--mx-fg);
-}
-
 /* .mx-context-menu-icon/.mx-context-menu-label used to style menuAction()'s
    button markup — removed along with menuAction() itself (menu-icons.js);
    every migrated action row's icon now renders via Core's own .ctx-ico
@@ -1305,36 +945,6 @@
   background: rgba(22,22,24,.5);
   box-shadow: none;
 }
-
-.mx-settings-section {
-  border-bottom: 1px solid var(--mx-hairline);
-}
-.mx-settings-section > summary {
-  position: relative;
-  padding: 9px 26px 9px 9px;
-  list-style: none;
-  color: var(--mx-fg-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  cursor: pointer;
-  user-select: none;
-}
-.mx-settings-section > summary::-webkit-details-marker { display: none; }
-.mx-settings-section > summary::after {
-  content: '›';
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--mx-fg-faint);
-  font-size: 16px;
-  transition: transform .14s ease;
-}
-.mx-settings-section[open] > summary { color: var(--mx-fg); }
-.mx-settings-section[open] > summary::after { transform: translateY(-50%) rotate(90deg); }
-.mx-settings-section-body { padding: 0 2px 7px; }
 
 /* Account switcher — one small avatar per state.matrixSessions entry
    (see client.js's "Multi-account support" section), plus a dashed "+"
@@ -1566,20 +1176,6 @@
 }
 .mx-settings-avatar-edit:hover > span,
 .mx-settings-avatar-edit:focus-visible > span { opacity: 1; }
-
-.mx-settings-profile-form {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 0 8px 4px;
-}
-.mx-settings-profile-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--mx-fg-muted);
-  font-size: 10px;
-}
 .mx-settings-profile-name {
   width: 100%;
   min-width: 0;
@@ -1637,32 +1233,12 @@
   text-overflow: ellipsis;
 }
 
-.mx-settings-account-id,
-.mx-settings-account-hs {
+.mx-settings-account-id {
   font-size: 11px;
   color: var(--mx-fg-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.mx-settings-divider {
-  height: 1px;
-  margin: 4px 4px;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.mx-settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 8px;
-}
-
-.mx-settings-label {
-  font-size: 12px;
-  color: var(--mx-fg);
 }
 
 /* ---- rev/ commands in the message bar (ui/command-bar.js) ----
@@ -1736,19 +1312,9 @@
   border: 0; border-radius: 0; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
   box-shadow: none; padding: 0; width: auto; max-width: none;
 }
-.mx-atmos-account .mx-settings-section { padding: 0 0 8px; border-bottom: 0; }
-.mx-atmos-account .mx-settings-section + .mx-settings-section { border-top: 1px solid var(--mx-hairline); }
-.mx-atmos-account .mx-settings-section > summary { padding: 10px 0 6px; color: var(--mx-fg-faint); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; cursor: default; }
-.mx-atmos-account .mx-settings-section:first-child > summary { display: none; }
-.mx-atmos-account .mx-settings-section > summary::after { display: none; }
-.mx-atmos-account .mx-settings-section-body { padding: 0 0 2px; }
 .mx-atmos-account .mx-settings-account { padding: 8px 0 6px; }
-.mx-atmos-account .mx-settings-row { padding: 5px 0; }
 .mx-atmos-account .mx-settings-switcher { gap: 6px; padding: 2px 0 4px; }
-.mx-atmos-account .mx-settings-device-verification { gap: 6px; padding: 2px 0 6px; }
-.mx-atmos-account .mx-settings-recovery-form { padding: 2px 0 6px; }
 .mx-atmos-account .mx-settings-logout { margin: 6px 0 0; padding-left: 0; }
-
 
 /* ---- Who sent this (trust-service.js) ----
    A line under a message whose sender can't be confirmed, and a notice
@@ -1825,96 +1391,10 @@
   user-select: all; overflow-wrap: anywhere;
 }
 
-/* Pill switch — deliberately not a checkbox: everything else in this
-   settings menu (and the reaction-picker's own action rows) reads as a
-   dark, near-native menu, and a browser-default checkbox would look
-   foreign dropped into it. .active (on when showUsernames is true, see
-   settings-menu.js) slides the knob right and swaps the track to
-   --mx-accent, same on/active color language .mx-rail-item.active and
-   .mx-reaction-pill-mine already use elsewhere in this plugin. */
-.mx-settings-toggle {
-  position: relative;
-  flex-shrink: 0;
-  width: 30px;
-  height: 17px;
-  padding: 0;
-  border: none;
-  border-radius: 999px;
-  background: var(--mx-surface-hover);
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.mx-settings-toggle::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--mx-fg-muted);
-  transition: left 0.15s ease, background 0.15s ease;
-}
-
-.mx-settings-toggle.active {
-  background: var(--mx-accent-strong);
-}
-
-.mx-settings-toggle.active::after {
-  left: 15px;
-  background: #fff;
-}
-
 /* Chat scale used to have a row + custom slider here. The control moved
    to its own sidebar section, so its
    styling lives there now; ui/settings-menu.js still owns the
    preference itself. */
-
-/* Recovery-key entry — a collapsed toggle button that reveals a small
-   inline form (input + submit + status line) in place, rather than a
-   separate popover/modal. Sits between the preference rows and Log out:
-   not a preference (nothing here persists beyond the one restore call)
-   and not destructive, so it gets its own visual language rather than
-   borrowing .mx-settings-row/.mx-settings-logout wholesale. */
-.mx-settings-recovery-toggle {
-  display: block;
-  width: 100%;
-  padding: 7px 8px;
-  border: none;
-  border-radius: calc(var(--mx-radius) - 2px);
-  background: transparent;
-  color: var(--mx-fg-muted);
-  font-size: 12px;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.mx-settings-recovery-toggle:hover {
-  background: var(--mx-surface-hover);
-  color: var(--mx-fg);
-}
-
-.mx-settings-device-verification {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 3px 8px 10px;
-}
-
-.mx-settings-device-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.mx-settings-device-title { color: var(--mx-fg); font-size: 12.5px; font-weight: 650; }
-.mx-settings-device-id { margin-top: 2px; color: var(--mx-fg-faint); font: 10px/1.3 var(--mx-mono); word-break: break-all; }
-.mx-settings-device-copy,
-.mx-settings-sas-copy { color: var(--mx-fg-faint); font-size: 11px; line-height: 1.4; }
 
 .mx-settings-device-badge {
   flex: none;
@@ -1927,22 +1407,6 @@
 }
 
 .mx-settings-device-badge.verified { border-color: color-mix(in srgb, var(--mx-positive) 40%, transparent); color: var(--mx-positive); background: color-mix(in srgb, var(--mx-positive) 10%, transparent); }
-.mx-settings-device-verify,
-.mx-settings-sas-actions button {
-  align-self: flex-start;
-  padding: 6px 11px;
-  border: 1px solid var(--mx-accent-strong);
-  border-radius: var(--mx-radius);
-  background: var(--mx-accent-soft);
-  color: var(--mx-fg);
-  font: 600 11.5px/1.2 var(--app-font, inherit);
-  cursor: pointer;
-}
-.mx-settings-device-verify:disabled,
-.mx-settings-sas-actions button:disabled { opacity: .45; cursor: default; }
-.mx-settings-device-status { min-height: 15px; color: var(--mx-fg-muted); font-size: 11px; line-height: 1.35; }
-.mx-settings-device-status:empty { display: none; }
-.mx-settings-device-status-error { color: var(--mx-danger); }
 
 .mx-settings-sas {
   padding: 10px;
@@ -1950,110 +1414,13 @@
   border-radius: var(--mx-radius);
   background: var(--mx-surface);
 }
-.mx-settings-sas-title { color: var(--mx-fg); font-size: 12px; font-weight: 650; }
 .mx-settings-sas-emoji { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin: 10px 0; }
 .mx-settings-sas-item { min-width: 0; text-align: center; }
 .mx-settings-sas-item span { display: block; font-size: 22px; line-height: 1.2; }
 .mx-settings-sas-item small { display: block; margin-top: 3px; overflow: hidden; color: var(--mx-fg-faint); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.mx-settings-sas-actions { display: flex; gap: 6px; }
-.mx-settings-sas-actions .mx-settings-sas-mismatch { border-color: var(--mx-hairline-strong); background: transparent; color: var(--mx-fg-muted); }
-.mx-settings-security-divider { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; color: var(--mx-fg-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
-.mx-settings-security-divider::before,
-.mx-settings-security-divider::after { content: ''; height: 1px; flex: 1; background: var(--mx-hairline); }
-
-.mx-settings-security-divider,
-.mx-settings-recovery-form {
-  display: none;
-}
-
-.mx-settings-security-verified .mx-settings-device-copy,
-.mx-settings-security-verified .mx-settings-device-verify,
-.mx-settings-security-verified .mx-settings-device-status,
-.mx-settings-security-verified .mx-settings-sas,
-.mx-settings-security-verified .mx-settings-security-divider,
-.mx-settings-security-verified .mx-settings-recovery-form {
-  display: none;
-}
-
-.mx-settings-recovery-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 2px 8px 8px;
-}
-
-.mx-settings-recovery-hint {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--mx-fg-faint);
-}
-
-/* Same look as .mx-field input (login.js's own inputs) — kept as its
-   own rule rather than sharing that class since this lives outside a
-   .mx-field wrapper (no separate <label> row here, just the hint text
-   above). */
-.mx-settings-recovery-input {
-  padding: 7px 9px;
-  border-radius: var(--mx-radius);
-  border: 1px solid var(--mx-hairline-strong);
-  background: var(--mx-surface);
-  color: inherit;
-  font-size: 12.5px;
-  font-family: var(--mx-mono);
-}
-
-.mx-settings-recovery-input:focus {
-  outline: none;
-  border-color: var(--mx-accent-strong);
-}
-
-.mx-settings-recovery-input:disabled {
-  opacity: 0.5;
-}
 
 .mx-settings-recovery-file-input {
   display: none;
-}
-
-.mx-settings-recovery-submit {
-  align-self: flex-start;
-  padding: 6px 12px;
-  border-radius: var(--mx-radius);
-  border: 1px solid var(--mx-accent-strong);
-  background: var(--mx-accent-soft);
-  color: var(--mx-fg);
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.1s ease;
-}
-
-.mx-settings-recovery-submit:hover {
-  background: rgba(125, 157, 255, 0.26);
-}
-
-.mx-settings-recovery-submit:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* Neutral by default (covers the "Restoring…" in-progress state and
-   the success message alike) — only the failure case gets .mx-error's
-   --mx-danger color, via the modifier class settings-menu.js adds
-   alongside it. Empty :empty rule keeps the form's own gap from adding
-   visible space before any status text actually exists. */
-.mx-settings-recovery-status {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--mx-fg-muted);
-}
-
-.mx-settings-recovery-status:empty {
-  display: none;
-}
-
-.mx-settings-recovery-status.mx-settings-recovery-status-error {
-  color: var(--mx-danger);
 }
 
 /* Log out — the one destructive action in this menu, styled apart from

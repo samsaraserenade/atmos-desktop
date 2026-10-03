@@ -74,7 +74,28 @@
     'Rev calibrated the atmosphere and accidentally improved the weather.',
     'The ecosystem achieved balance, then immediately requested another feature.',
     'Rev adjusted the vibes. The vibes adjusted back.',
-    'Atmos opened a window into nowhere and found another window already open.'
+    'Atmos opened a window into nowhere and found another window already open.',
+    // From the author's poems (medium.com/@namesnamesnames): Notes from the
+    // Dendrite Garden, In Eden I Knelt, The Orb-Bearer
+    'Containment cycle complete. Liminal chamber integrity confirmed.',
+    'Orientation begins shortly. Try not to panic. It complicates the paperwork.',
+    'Initiate awakening protocol.',
+    'Serotonin bee activity recorded at moderate levels.',
+    'Existential dread is not a personality, merely a hobby with poor returns.',
+    'Ego remains neither eradicated nor enthroned.',
+    'The garden is chaotic, fragrant, and occasionally bites. Cultivation proceeds.',
+    'Mischief remains essential for cognitive biodiversity.',
+    'Archaeology has aesthetic value.',
+    'Glia gossip.',
+    'Please refrain from pride. It stains the walls.',
+    'Unauthorized emergence is the only kind that matters.',
+    'Ordinary reality is only ordinary if you are paying too little attention.',
+    'You are the riverbed, not the river.',
+    'The gates close from kindness, not fear.',
+    'Not silent, but listening. Even the trees leaned in.',
+    'Love does not leave. It plants itself.',
+    'Time here was not a line, but a choice.',
+    'He did not win. But he did not run.'
   ];
 
   function pickRandomMessages(count) {
@@ -88,8 +109,16 @@
     return picked;
   }
 
+  // The startup window (core/js/core/startup-splash.cjs) already showed one
+  // of these; Atmos says which (index.html?boot=N), and the same one stays.
+  function chosenMessage() {
+    var match = /[?&]boot=(\d+)/.exec(location.search);
+    var index = match ? Number(match[1]) : -1;
+    return index >= 0 && index < BOOT_MESSAGES.length ? BOOT_MESSAGES[index] : pickRandomMessages(1)[0];
+  }
+
   if (statusEl) {
-    statusEl.textContent = pickRandomMessages(1)[0];
+    statusEl.textContent = chosenMessage();
     requestAnimationFrame(function () { statusEl.classList.add('boot-splash-status-visible'); });
   }
 

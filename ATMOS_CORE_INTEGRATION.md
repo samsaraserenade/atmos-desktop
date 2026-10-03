@@ -712,7 +712,12 @@ script them. `atmos.state` is kept in a file of its own
 - Navigate itself away from its origin, navigate Atmos, open windows or
   dialogs (`alert`, `confirm`, `prompt`: use your own interface), or embed
   frames. Links and `window.open()` to the web open in Atmos Browser (or
-  in the user's default browser, when they turned that off).
+  in the user's default browser, when they turned that off): the SDK hands
+  them to Atmos. A **community** extension's link opens straight away only
+  after a click or key in its own frame; one from a timer, a background
+  frame or a tap makes Atmos ask the user first ("Weather wants to open
+  example.com"), and the user can block its links until a restart. Open
+  links from a click handler, not on load or on a schedule (Atmos 0.19.4).
 - Listen for keys pressed outside it.
 - Use browser permissions it didn't declare (and the user didn't approve).
 - Draw outside its surface or catch input outside it. Only Atmos draws
@@ -1343,9 +1348,13 @@ safe for any of them, and say what it gives. Settings shows the user:
   from it and from frames, open in the default browser, or an `http(s)`
   link in Atmos Browser instead while "Open links in Atmos Browser" is on
   (by default from Atmos 0.18): in front just after a click in Atmos,
-  otherwise in a tab behind; other schemes are refused. A frame's pop-ups go the same way
-  (its sandbox allows them only so they reach this handler, which never
-  opens a window). A frame navigates only within its origin and can't make
+  otherwise in a tab behind; other schemes are refused. Official frames'
+  pop-ups go the same way (their sandbox allows them only so they reach
+  this handler, which never opens a window). Community frames have no
+  `allow-popups` at all: the SDK sends their link clicks and `window.open()`
+  to Atmos (`links.open`), which opens one after a click or key in that
+  frame and otherwise asks, Don't open being the default
+  (`core/js/core/extension-links.cjs`). A frame navigates only within its origin and can't make
   a `<webview>`: the only ones in the window are Core's, for web pages (next
   item).
 - **Web pages** (Atmos 0.17). Only Core's web layer, in the Atmos page,

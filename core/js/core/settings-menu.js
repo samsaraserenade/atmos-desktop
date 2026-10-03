@@ -826,6 +826,9 @@ const _UNTRUSTED = new Set(['pending', 'changed', 'blocked', 'tampered', 'incomp
 
 /** Whether a restart would load or unload this extension. */
 function _needsRestart(extension) {
+  // Its approval removed this session: it stopped then, so nothing waits
+  // for a restart, unless it was approved again since.
+  if (extension.stoppedNow) return !extension.approvalChanged;
   if (extension.approvalChanged || extension.developerRestart) return true;
   const wouldLoad = extension.enabled && !_UNTRUSTED.has(extension.status) && !(extension.dependencyProblems || []).length;
   return wouldLoad !== extension.active;
@@ -935,6 +938,14 @@ function _packageDetailsHtml(extension) {
 function _extensionTrustHtml(extension) {
   const summary = extension.permissionSummary || [];
   const status = extension.status;
+  // Its approval was removed this session: it stopped then (main.js _stopNow).
+  if (extension.stoppedNow) {
+    return extension.approvalChanged
+      ? `<div class="sm-trust-note">Approval removed. It has stopped, and it stays off until you approve it again.
+      <button type="button" class="sm-trust-secondary" data-trust-action="approve">Approve again</button></div>`
+      : `<div class="sm-trust-note">Approved again. It starts when Atmos restarts.
+      <button type="button" class="sm-trust-secondary" data-trust-action="restart">Restart now</button></div>`;
+  }
   if (extension.approvalChanged) {
     return `<div class="sm-trust-note">${status === 'approved' ? 'Approval removed.' : 'Approved.'} Restart Atmos to apply.
       <button type="button" class="sm-trust-secondary" data-trust-action="restart">Restart now</button></div>`;
@@ -1064,10 +1075,14 @@ function _wireInstalledCards() {
             await _refreshExtensions();
             return;
           }
+          // Stopped this session: it starts at the next start; the card says so.
+          if (extension.stoppedNow) { await _refreshExtensions(); return; }
           extension.approvalChanged = true;
         } else if (action === 'revoke') {
-          await window.atmosCore?.revokeExtensionApproval?.(kind, id);
+          const result = await window.atmosCore?.revokeExtensionApproval?.(kind, id);
           extension.approvalChanged = true;
+          // Stopped at once (main.js _stopNow), with anything that needed it.
+          if (result?.stopped?.length) { await _refreshExtensions(); return; }
         } else if (action === 'keep-disabled') {
           await window.atmosCore?.setExtensionEnabled?.(kind, id, false);
           extension.enabled = false;

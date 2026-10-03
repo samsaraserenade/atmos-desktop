@@ -20,7 +20,7 @@ import { openMenu, closeOpenMenu, openMenuOwner } from './context-menu.js';
 import {
   registerPanelPlugin, activatePanelPlugin, isPanelPluginRegistered, listPanelPlugins, ensureDefaultPanelPlugin, restorePanelWorkspace,
 } from './panel-registry.js';
-import { registerSection } from './sidebar-registry.js';
+import { registerSection, unregisterSection } from './sidebar-registry.js';
 import { registerSettingsPanel } from './settings-registry.js';
 import { registerBootHook, runBootHooks } from './boot-registry.js';
 import { onAppearanceChange, appearanceState, getAppFont } from './appearance.js';
@@ -36,6 +36,10 @@ import { webFor } from './web-layer.js';
 // to Atmos's window-open handler, which never opens a window: it hands
 // http(s) and mailto links to the system browser and drops the rest.
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups';
+// A community extension's frames can't open windows themselves: their links
+// and window.open reach Atmos through the SDK (links.open), which asks you
+// first unless you just clicked in that frame (main.js, extension-links.cjs).
+const COMMUNITY_SANDBOX = 'allow-scripts allow-same-origin allow-forms';
 const APPEARANCE_VARS = [
   '--ink-rgb', '--surface-rgb', '--app-font-family',
   '--color-positive', '--color-negative', '--color-neutral',
@@ -52,6 +56,7 @@ const SERVICE_WAIT_MS = 15000;
 const _exposed = new Map();        // "kind:id" -> { methods, call, owner }
 const _serviceWaiters = new Map(); // "kind:id" -> [resolve]
 const _withBootFrame = new Set();  // "kind:id" of framed extensions that have a boot.js
+const _stopped = new Set();        // "kind:id" stopped this session: its approval was removed (stopExtensions)
 // Methods exposed by boot frames. Callers that arrive before a boot frame
 // has started wait for it (awaitService) instead of failing.
 const _services = {
@@ -239,6 +244,13 @@ window.atmosCore?.onExtensionsLoaded?.(list => {
   loadApprovedExtensions(Array.isArray(list) ? list : [])
     .then(count => console.log(`[extension-frames] ${count} approved extension${count === 1 ? '' : 's'} loaded`))
     .catch(error => console.error('[extension-frames] approved extensions failed to load:', error));
+});
+
+// Community extensions whose approval was just removed (main.js _stopNow).
+window.atmosCore?.onExtensionsStopped?.(refs => {
+  import('./extension-list.js').then(module => module.forgetInstalledLists()).catch(() => {});
+  const count = stopExtensions(Array.isArray(refs) ? refs : []);
+  console.log(`[extension-frames] ${count} extension${count === 1 ? '' : 's'} stopped`);
 });
 
 // A click on a notification a frame showed goes to every frame of its extension.
@@ -562,7 +574,7 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
   const { origin, base, allow } = extension.frame;
   const iframe = document.createElement('iframe');
   iframe.className = `atmos-extension-frame atmos-extension-frame-${surface.type}`;
-  iframe.setAttribute('sandbox', SANDBOX);
+  iframe.setAttribute('sandbox', extension.tier === 'third-party' ? COMMUNITY_SANDBOX : SANDBOX);
   iframe.setAttribute('allow', allow);
   iframe.setAttribute('referrerpolicy', 'no-referrer');
   iframe.title = `${surface.label || extension.id}`;
@@ -618,6 +630,13 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
     notify(options) {
       if (!window.atmosCore?.showExtensionNotification) return Promise.resolve(false);
       return window.atmosCore.showExtensionNotification(extension.kind, extension.id, options);
+    },
+    // A link it asks Atmos to open. Whether this frame has the focus (where
+    // your last click or key went) is what lets a community one open
+    // without asking; main.js checks the timing.
+    openLink(url) {
+      if (!window.atmosCore?.openExtensionLink) return Promise.resolve(false);
+      return window.atmosCore.openExtensionLink(extension.kind, extension.id, url, { focused: document.activeElement === iframe });
     },
     // A panel in a drawer (full workspace) or shown pinned open (tile, window).
     drawer: drawer ? {
@@ -713,6 +732,26 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
   _frames.get(key(extension)).add(record);
   container.appendChild(iframe);
 
+  function dispose() {
+    containerWatch?.disconnect();
+    stopPanelVars?.();
+    window.removeEventListener('message', onMessage);
+    record.bridge?.dispose();
+    record.port?.close();
+    _frames.get(key(extension))?.delete(record);
+    iframe.remove();
+    if (glassLayer) {
+      glassLayer.remove();
+      container.classList.remove('atmos-frame-glass-host');
+    }
+  }
+  // Its extension stopped (stopExtensions): the frame goes, and a panel or
+  // settings page says why where it was.
+  record.stop = () => {
+    dispose();
+    if (surface.type === 'panel' || surface.type === 'settings') _stoppedNote(extension, container);
+  };
+
   return {
     element: iframe,
     ready,
@@ -724,20 +763,19 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
       change: value => record.bridge?.post({ topic: 'surfaceMenu', payload: { id: item.id, value } }),
       tickInLabel: true,
     })),
-    dispose() {
-      containerWatch?.disconnect();
-      stopPanelVars?.();
-      window.removeEventListener('message', onMessage);
-      record.bridge?.dispose();
-      record.port?.close();
-      _frames.get(key(extension))?.delete(record);
-      iframe.remove();
-      if (glassLayer) {
-        glassLayer.remove();
-        container.classList.remove('atmos-frame-glass-host');
-      }
-    },
+    dispose,
   };
+}
+
+/** Where a stopped extension's panel or settings page was. */
+function _stoppedNote(extension, container) {
+  if (!container || container.querySelector(':scope > .atmos-extension-stopped')) return;
+  const note = document.createElement('div');
+  note.className = 'atmos-extension-stopped';
+  const name = document.createElement('strong');
+  name.textContent = extension.manifest?.displayName || extension.id;
+  note.append(name, document.createTextNode(' stopped: you removed its approval. It\u2019s gone at the next start, unless you approve it again.'));
+  container.appendChild(note);
 }
 
 /** Draw a framed panel's glass regions (already checked by the bridge). */
@@ -918,6 +956,7 @@ function _registerContribution(extension, surface) {
       // A panel with Core-drawn glass ("glass": true) follows them too.
       panelAppearance: !!surface.drawer || !!surface.glass,
       mount(surfaceEl, context) {
+        if (_stopped.has(key(extension))) { _stoppedNote(extension, surfaceEl); return; }
         const presentation = context?.presentation ?? null;
         if (surface.drawer && presentation === 'full') {
           context?.onCleanup?.(_mountDrawer(extension, surface, surfaceEl));
@@ -941,6 +980,7 @@ function _registerContribution(extension, surface) {
       ...(Array.isArray(surface.showIn) && surface.showIn.length ? { showIn: surface.showIn } : {}),
       contextMenuItems: () => [...mounted.values()].at(-1)?.menuItems() ?? [],
       mount(bodyEl) {
+        if (_stopped.has(key(extension))) return;
         mounted.set(bodyEl, _createFrame(extension, { ...surface, type: 'sidebar' }, bodyEl));
       },
       unmount(bodyEl) {
@@ -955,6 +995,7 @@ function _registerContribution(extension, surface) {
       category: surface.category || undefined,
       order: surface.order,
       mount(bodyEl, context) {
+        if (_stopped.has(key(extension))) { _stoppedNote(extension, bodyEl); return; }
         const frame = _createFrame(extension, { ...surface, type: 'settings' }, bodyEl);
         context?.onCleanup?.(frame.dispose);
       },
@@ -964,6 +1005,7 @@ function _registerContribution(extension, surface) {
     registerBootHook(`${extension.kind}:${extension.id}`, {
       order: surface.order,
       async run() {
+        if (_stopped.has(key(extension))) return;
         if (!_hiddenHost) {
           _hiddenHost = document.createElement('div');
           _hiddenHost.id = 'atmos-extension-boot-frames';
@@ -1048,6 +1090,30 @@ function _registerFramed({ plugins = [], services = [] }) {
     }
   }
   return framed.length;
+}
+
+/**
+ * Community extensions whose approval was just removed (the main process's
+ * _stopNow decided which, and stopped serving their files): every frame of
+ * theirs goes now (panel, widgets, settings page, background frame), their
+ * widgets leave the sidebar, what they offered other extensions is
+ * withdrawn, and a panel or settings page left showing says they stopped.
+ * Resolves how many stopped.
+ */
+export function stopExtensions(refs = []) {
+  let count = 0;
+  for (const ref of refs) {
+    const extension = _framed.get(ref);
+    if (!extension || _stopped.has(ref)) continue;
+    _stopped.add(ref);
+    count += 1;
+    for (const record of [...(_frames.get(ref) || [])]) record.stop?.();
+    _exposed.delete(ref);
+    for (const surface of extension.frame?.contributions || []) {
+      if (surface.surface === 'sidebar') unregisterSection(surface.id);
+    }
+  }
+  return count;
 }
 
 /** For tests and diagnostics: the frames currently open, by extension. */

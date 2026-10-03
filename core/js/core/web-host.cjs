@@ -1378,12 +1378,13 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
    * It comes to the front only just after a click or key in Atmos (one link
    * each); otherwise it waits in a tab behind, so an extension can't raise
    * the browser, and a page in your browsing session, whenever it likes.
-   * Returns whether it took the link.
+   * Returns whether it took the link. `foreground`: you chose to open it
+   * (an extension's link you said Open to), so it comes to the front.
    */
-  function openLink(url) {
+  function openLink(url, { foreground = false } = {}) {
     if (!settings.options().openLinks || !linkListener || !policy.isLoadable(url) || url === 'about:blank') return false;
     if (!isWebExtension(linkListener)) { linkListener = null; return false; }
-    send(null, 'open-link', { url, background: !activations.take('atmos', 'link') });
+    send(null, 'open-link', { url, background: !(foreground || activations.take('atmos', 'link')) });
     return true;
   }
 
@@ -1422,6 +1423,8 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     openLink,
     openExternal,
     routeShell,
+    /** When the Atmos window last had a click or key (its page or a frame in it), in ms. */
+    atmosActedAt: () => activations.lastAt('atmos'),
     forgetExtensionData,
     closePages,
     setWindow(win) {

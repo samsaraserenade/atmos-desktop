@@ -481,3 +481,20 @@ test('web pages: official extensions declaring "web" only; tab ids, commands and
     assert.match(reply.error.message, /may not show web pages/);
   }
 });
+
+test('links.open: http(s) and mailto only, handed to Core (which decides whether to ask)', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const opened = [];
+  const { request } = harness(createExtensionBridge, {
+    extension: { tier: 'third-party' },
+    deps: { openLink: async url => { opened.push(url); return true; } },
+  });
+  assert.equal((await request('links.open', 'https://example.com/a')).result, true);
+  assert.equal((await request('links.open', 'mailto:me@example.com')).result, true);
+  for (const bad of ['javascript:alert(1)', 'file:///etc/passwd', 'atmos-ext://plugin-x/', '', 42]) {
+    assert.equal((await request('links.open', bad)).error.name, 'TypeError', String(bad));
+  }
+  assert.deepEqual(opened, ['https://example.com/a', 'mailto:me@example.com']);
+  const noCore = harness(createExtensionBridge, {});
+  assert.equal((await noCore.request('links.open', 'https://example.com/')).result, false);
+});

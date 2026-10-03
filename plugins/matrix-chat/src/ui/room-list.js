@@ -381,27 +381,6 @@ function unjoinedRowsHtml(group) {
     ${state.error ? `<div class="mx-empty">${escapeHtml(state.error)}</div>` : ''}`;
 }
 
-function railItemHtml(entry, isActive) {
-  // The synthetic Direct-Messages entry has no single backing room to
-  // derive an initial/hue from (entry.iconRoom is null — see
-  // buildEntries), so it gets a fixed icon in a neutral swatch instead.
-  // hydrateAvatars() skips it for the same reason: there's no room to
-  // fetch a photo for.
-  const avatarInner = entry.iconRoom
-    ? (() => {
-        const { initial, hue } = initialAndHue(entry.iconRoom);
-        return `<span class="mx-rail-avatar" data-avatar-source="${escapeHtml(avatarMxcUrl(entry.iconRoom, false) || '')}" style="--mx-avatar-hue: ${hue}">${escapeHtml(initial)}</span>`;
-      })()
-    : `<span class="mx-rail-avatar mx-rail-avatar-generic"><img src="${DM_ICON_URL}" alt="" draggable="false"></span>`;
-  const unread = entryUnreadCount(entry);
-  return `
-    <button type="button" class="mx-rail-item${isActive ? ' active' : ''}" data-id="${escapeHtml(entry.id)}" title="${escapeHtml(entry.name)}" draggable="true">
-      ${avatarInner}
-      ${unread > 0 ? '<span class="mx-rail-unread-dot"></span>' : ''}
-    </button>
-  `;
-}
-
 function channelRowHtml(room, { showAvatar = true, isDM = false, isActive = false } = {}) {
   const { body, ts } = lastMessage(room);
   const name = escapeHtml(labelForRoom(room, isDM));
@@ -511,11 +490,11 @@ function requestRowHtml(room) {
   </div>`;
 }
 
-// Hydrates every avatar under contentEl — rail icons and channel rows
-// alike — with its real photo once getAvatarUrl() resolves.
+// Hydrates every channel row's avatar under contentEl with its real
+// photo once getAvatarUrl() resolves.
 // Fire-and-forget per element, same as the original flat list: a slow
 // or failed fetch for one never blocks the others. Looked up by
-// data-id (rail items) / data-room-id (channel rows) against a flat
+// data-room-id against a flat
 // id->Room map built fresh from entries each call, since which channel
 // rows are even in the DOM changes with the current selection.
 function hydrateAvatars(contentEl, entries) {
@@ -530,19 +509,6 @@ function hydrateAvatars(contentEl, entries) {
     for (const room of entry.requests || []) roomById.set(room.roomId, room);
   }
 
-  contentEl.querySelectorAll('.mx-rail-item').forEach((btn) => {
-    const room = roomById.get(btn.dataset.id);
-    const avatarEl = btn.querySelector('.mx-rail-avatar');
-    if (!room || !avatarEl) return;
-    const source = avatarEl.dataset.avatarSource;
-    getAvatarUrl(room).then((url) => {
-      if (!url || !avatarEl.isConnected || avatarEl.dataset.avatarSource !== source) return;
-      if (avatarEl.firstElementChild?.getAttribute('src') === url) return;
-      avatarEl.innerHTML = `<img src="${url}" alt="" draggable="false">`;
-      avatarEl.style.background = 'transparent';
-    });
-  });
-
   // Needed here (not just in buildEntries) so this loop knows which
   // rows are actual DMs and should resolve the other member's avatar
   // instead of the room's own — see avatarMxcUrl/getAvatarUrl above.
@@ -556,7 +522,7 @@ function hydrateAvatars(contentEl, entries) {
       if (!url || !avatarEl.isConnected || avatarEl.dataset.avatarSource !== source) return;
       if (avatarEl.firstElementChild?.getAttribute('src') === url) return;
       avatarEl.innerHTML = `<img src="${url}" alt="">`;
-      avatarEl.style.background = 'transparent'; // see .mx-rail-avatar note above
+      avatarEl.style.background = 'transparent';
     });
   });
 

@@ -86,6 +86,4 @@ export const { matrixState, save } = engine.state;
 export const currentView = () => engine.view.get();
 export const showRoom = roomId => engine.view.showRoom(roomId);
 export const showNone = () => engine.view.showNone();
-/** Ask the panel to act: { action: 'command', text, parentSpaceId } puts text in its message bar. */
-export const askPanel = request => engine.view.ask(request);
 export const takePanelRequest = () => engine.view.takeRequest();

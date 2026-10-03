@@ -44,7 +44,7 @@ export function buildRoomEntries(rooms, directRoomIds) {
   // one shared synthetic entry — see this file's header comment) and
   // everything else (each gets its own pseudo-space rail icon, same as
   // a real space). directEntry's iconRoom is deliberately null: there's
-  // no single room it represents, so railItemHtml/hydrateAvatars render
+  // no single room it represents, so the room list renders
   // a fixed generic glyph instead of a per-room hue swatch for it.
   // Omitted entirely (not rendered as an empty pane) when there are no
   // DMs at all, same "don't show a slot with nothing behind it"

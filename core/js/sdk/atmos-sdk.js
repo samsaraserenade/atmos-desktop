@@ -301,6 +301,40 @@ function armDrawer() {
   }, { passive: true });
 }
 
+/**
+ * Links leave through Atmos: a click on a link to an http(s) or mailto
+ * address, and window.open with one, become links.open, so Atmos opens
+ * them (in Atmos Browser or the system browser). A community extension's
+ * frames can't open windows themselves; a link that didn't come from a
+ * click in this frame asks the user first. A handler that already called
+ * preventDefault() keeps the click.
+ */
+function routeLinks() {
+  const external = value => {
+    try {
+      const url = new URL(String(value), location.href);
+      return url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:' ? url.href : null;
+    } catch { return null; }
+  };
+  const onClick = event => {
+    if (event.defaultPrevented || event.button > 1) return;
+    const link = event.target?.closest?.('a[href]');
+    const url = link && !link.hasAttribute('download') ? external(link.href) : null;
+    if (!url) return;
+    event.preventDefault();
+    ask('links.open', url).catch(() => {});
+  };
+  document.addEventListener('click', onClick);
+  document.addEventListener('auxclick', onClick);
+  const open = window.open;
+  window.open = function (url, ...rest) {
+    const target = url == null ? null : external(url);
+    if (!target) return open.call(window, url, ...rest);
+    ask('links.open', target).catch(() => {});
+    return null;
+  };
+}
+
 /** Internal: called by /__atmos/frame.js before the entry file loads. */
 export function __connect() {
   return new Promise(resolve => {
@@ -322,6 +356,7 @@ export function __connect() {
       }
       if (surface.type === 'sidebar' || surface.type === 'settings') watchSize(surface.type);
       forwardKeys();
+      routeLinks();
       if (surface.drawer) {
         drawerState = Object.freeze({ ...surface.drawer });
         if (!drawerState.locked) { armDrawer(); setDrawerVisible(drawerState.visible); }
