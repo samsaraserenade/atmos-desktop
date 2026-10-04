@@ -28,22 +28,17 @@ Write-Host "goes straight to your private server over SSH; nothing is written he
 Write-Host "Leave anything blank to keep that source disabled."
 Write-Host ""
 
+# sources.sh keeps them encrypted on the server (systemd-creds) and restarts
+# the collector with them.
 $remote = @"
 set -eu
-temporary=/etc/.atmos-portfolio-sources.json.new
-umask 077
-python3 /opt/atmos-portfolio/collectors.py configure --output "`$temporary"
-python3 -m json.tool "`$temporary" >/dev/null
-chown root:atmos-portfolio "`$temporary"
-chmod 0640 "`$temporary"
-mv -f "`$temporary" /etc/atmos-portfolio-sources.json
-systemctl restart atmos-portfolio-collector.service
+/opt/atmos-portfolio/sources.sh configure
 systemctl is-active atmos-portfolio-collector.service
 "@
 
 # -t: the prompts need the server's terminal.
 & ssh -t -i $SshKeyPath -o BatchMode=yes -o ConnectTimeout=10 "root@$Server" $remote
-if ($LASTEXITCODE -ne 0) { throw "The configuration or collector start failed (the server needs portfolio server 0.8 or later: run upgrade.sh first)." }
+if ($LASTEXITCODE -ne 0) { throw "The configuration or collector start failed (the server needs portfolio server 0.9 or later: run upgrade.sh first)." }
 
 Write-Host ""
 Write-Host "Configuration saved on the server and collector started."

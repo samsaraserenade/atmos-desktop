@@ -167,7 +167,15 @@ test('permissions: denied unless the user allowed the site; fullscreen and clipb
     assert.equal(decide(name, {}, allowAll), 'allow', name);
     assert.equal(decide(name, {}, () => 'block'), 'deny', name);
   }
-  for (const name of ['midi', 'midiSysex', 'hid', 'serial', 'usb', 'display-capture', 'idle-detection', 'openExternal', 'pointerLock', 'keyboardLock', 'storage-access', 'window-management', 'unknown']) {
+  // Pointer lock: a tab's, just after a click or key in it, with no prompt; never a pop-up's.
+  assert.equal(policy.permissionDecision('pointerLock', {}, none, { origin, tab: true, activated: true }), 'allow');
+  assert.equal(policy.permissionDecision('pointerLock', {}, allowAll, { origin, tab: true, activated: false }), 'deny');
+  assert.equal(policy.permissionDecision('pointerLock', {}, none, { origin, tab: true }), 'deny');
+  assert.equal(policy.permissionDecision('pointerLock', {}, allowAll, { origin, tab: false, activated: true }), 'deny');
+  assert.equal(policy.permissionCheck('pointerLock', {}, none, { origin, tab: true }), true);
+  assert.equal(policy.permissionCheck('pointerLock', {}, none, { origin, tab: false }), false);
+  assert.deepEqual(policy.permissionNames('pointerLock'), []);
+  for (const name of ['midi', 'midiSysex', 'hid', 'serial', 'usb', 'display-capture', 'idle-detection', 'openExternal', 'keyboardLock', 'storage-access', 'window-management', 'unknown']) {
     assert.equal(decide(name, {}, allowAll), 'deny', name);
     assert.equal(policy.permissionCheck(name, {}, allowAll, { origin }), false, name);
   }

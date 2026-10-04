@@ -41,7 +41,8 @@ PY
   systemctl start atmos-portfolio.service atmos-portfolio-collector.service
 }
 trap 'rollback' ERR
-install -o root -g root -m 0755 server.py collectors.py /opt/atmos-portfolio/
+install -o root -g root -m 0755 server.py collectors.py sources.sh /opt/atmos-portfolio/
+install -o root -g root -m 0644 README.md /opt/atmos-portfolio/README.md
 rm -rf /opt/atmos-portfolio/connectors
 cp -R connectors /opt/atmos-portfolio/connectors
 find /opt/atmos-portfolio/connectors -name __pycache__ -prune -exec rm -rf {} +
@@ -57,3 +58,17 @@ sleep 5
 systemctl is-active atmos-portfolio.service atmos-portfolio-collector.service
 trap - ERR
 echo "Upgrade installed. Backup: $backup"
+# From 0.9: the sources encrypted at rest (systemd-creds), once the new
+# collector, which reads them from systemd, is known to run.
+/opt/atmos-portfolio/sources.sh setup || echo "Sources not changed: see sources.sh in /opt/atmos-portfolio/README.md." >&2
+if grep -q '^ATMOS_PORTFOLIO_TOKEN=.' /etc/atmos-portfolio.env; then
+  cat <<'NOTE'
+
+Your devices still use the shared token (ATMOS_PORTFOLIO_TOKEN), which keeps
+working. To give each device its own token, which you can revoke on its own:
+  sudo python3 /opt/atmos-portfolio/server.py device add laptop
+paste that code into Finance on the laptop, do the same for each device, then
+delete the ATMOS_PORTFOLIO_TOKEN line from /etc/atmos-portfolio.env and
+  sudo systemctl restart atmos-portfolio
+NOTE
+fi

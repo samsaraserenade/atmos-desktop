@@ -117,6 +117,19 @@ function handler(requests, info) {
           window.readClipboard=()=>navigator.clipboard.readText().then(()=>__results.clipboard='granted',e=>__results.clipboard='denied:'+e.name);
           window.state=async name=>(await navigator.permissions.query({name})).state;</script>`));
         return;
+      case '/pointer-lock':
+        // A game's mouse look: the page takes the mouse when clicked (or tries to as it loads, ?onload).
+        html(doc('Pointer lock', `<style>html,body{margin:0;height:100%;background:#7c3aed}</style>
+          <script>window.__lock={events:[],keys:[],moves:0};
+          const tryLock=why=>{try{const p=document.body.requestPointerLock();Promise.resolve(p).then(()=>__lock.events.push(why+':ok'),e=>__lock.events.push(why+':'+e.name));}catch(e){__lock.events.push(why+':'+e.name);}};
+          document.addEventListener('pointerlockchange',()=>__lock.events.push('change:'+!!document.pointerLockElement));
+          document.addEventListener('pointerlockerror',()=>__lock.events.push('error'));
+          document.addEventListener('keydown',e=>__lock.keys.push(e.key));
+          document.addEventListener('mousemove',e=>{if(document.pointerLockElement)__lock.moves+=Math.abs(e.movementX)+Math.abs(e.movementY);});
+          document.addEventListener('mousedown',()=>tryLock('click'));
+          window.lockLater=ms=>setTimeout(()=>tryLock('later'),ms);
+          if(location.search.includes('onload'))addEventListener('load',()=>tryLock('load'));</script>`));
+        return;
       case '/fullscreen':
         html(doc('Fullscreen', `<style>html,body{margin:0;height:100%;background:#16a34a}#box{width:100%;height:100%;background:#ea580c}</style>
           <div id="box"></div>`));

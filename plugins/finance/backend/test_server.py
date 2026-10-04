@@ -256,8 +256,34 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.get("/v1/info", token="x" * 40)[0], 401)
         status, body = self.get("/v1/info")
         self.assertEqual(status, 200)
-        self.assertEqual(body, {"name": "atmos-portfolio", "version": server.VERSION, "apiVersion": 1, "sources": 2, "lastUpdate": 5000,
+        self.assertEqual(body, {"name": "atmos-portfolio", "version": server.VERSION, "apiVersion": 1,
+                                "device": "shared token", "sources": 2, "lastUpdate": 5000,
                                 "retention": {"holdingsRawDays": 30, "holdingsHourlyDays": 365}})
+
+    def test_each_device_has_its_own_token_and_can_be_revoked(self):
+        _, laptop = server.add_device(self.db, "laptop")
+        _, phone = server.add_device(self.db, "phone")
+        self.assertEqual(self.get("/v1/info", token=laptop)[1]["device"], "laptop")
+        self.assertEqual(self.get("/v1/portfolio", token=phone)[0], 200)
+        self.assertTrue(server.revoke_device(self.db, "laptop"))
+        self.assertEqual(self.get("/v1/info", token=laptop)[0], 401)
+        self.assertEqual(self.get("/v1/info", token=phone)[1]["device"], "phone")
+
+    def test_without_the_shared_token_only_devices_get_in(self):
+        self.httpd.api_token = ""
+        _, token = server.add_device(self.db, "laptop")
+        self.assertEqual(self.get("/v1/info")[0], 401)
+        self.assertEqual(self.get("/v1/info", token="")[0], 401)
+        self.assertEqual(self.get("/v1/info", token=token)[0], 200)
+
+    def test_only_a_bearer_header_is_read(self):
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+        _, token = server.add_device(self.db, "laptop")
+        for header in (token, f"Basic {token}", f"bearer {token}", f"Bearer  {token}"):
+            with self.assertRaises(HTTPError, msg=header) as caught:
+                urlopen(Request(self.base + "/v1/info", headers={"Authorization": header}), timeout=5)
+            self.assertEqual(caught.exception.code, 401)
 
     def test_bad_times_are_a_400_not_a_dropped_connection(self):
         status, body = self.get("/v1/history?from=yesterday")
@@ -305,11 +331,101 @@ class PairingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.default_url({"ATMOS_PORTFOLIO_HOST": "0.0.0.0"})
 
-    def test_pairing_command_reads_the_env_file(self):
+    def run_cli(self, temp, *words, check=True):
         import subprocess, sys
+        env_file = Path(temp) / "atmos.env"
+        if not env_file.exists():
+            env_file.write_text("ATMOS_PORTFOLIO_HOST=100.86.0.9\nATMOS_PORTFOLIO_PORT=8787\n")
+        return subprocess.run([sys.executable, str(Path(server.__file__)), *words,
+                               "--env-file", str(env_file), "--db", str(Path(temp) / "p.sqlite3")],
+                              capture_output=True, text=True, check=check)
+
+    def test_pairing_adds_a_device_with_a_token_of_its_own(self):
         with tempfile.TemporaryDirectory() as temp:
-            env_file = Path(temp) / "atmos.env"
-            env_file.write_text(f"ATMOS_PORTFOLIO_HOST=100.86.0.9\nATMOS_PORTFOLIO_PORT=8787\nATMOS_PORTFOLIO_TOKEN={self.TOKEN}\n")
-            result = subprocess.run([sys.executable, str(Path(server.__file__)), "pairing", "--env-file", str(env_file)],
-                                    capture_output=True, text=True, check=True)
-        self.assertEqual(self.decode(result.stdout.strip()), {"url": "http://100.86.0.9:8787", "token": self.TOKEN})
+            first = self.decode(self.run_cli(temp, "pairing").stdout.strip())
+            second = self.decode(self.run_cli(temp, "pairing", "--name", "phone").stdout.strip())
+            db = str(Path(temp) / "p.sqlite3")
+            self.assertEqual(first["url"], "http://100.86.0.9:8787")
+            self.assertNotEqual(first["token"], second["token"])
+            self.assertGreaterEqual(len(first["token"]), 64)
+            self.assertEqual(server.device_for_token(db, first["token"]), "device 1")
+            self.assertEqual(server.device_for_token(db, second["token"]), "phone")
+
+    def test_device_commands(self):
+        with tempfile.TemporaryDirectory() as temp:
+            code = self.decode(self.run_cli(temp, "device", "add", "work", "laptop").stdout.strip())
+            db = str(Path(temp) / "p.sqlite3")
+            self.assertEqual(server.device_for_token(db, code["token"]), "work laptop")
+            self.assertIn("work laptop", self.run_cli(temp, "device", "list").stdout)
+            self.assertNotEqual(self.run_cli(temp, "device", "add", "Work Laptop", check=False).returncode, 0)
+            self.run_cli(temp, "device", "revoke", "work", "laptop")
+            self.assertIsNone(server.device_for_token(db, code["token"]))
+            self.assertNotEqual(self.run_cli(temp, "device", "revoke", "work", "laptop", check=False).returncode, 0)
+            self.assertNotEqual(self.run_cli(temp, "device", "rename", check=False).returncode, 0)
+
+    def test_device_list_mentions_a_shared_token_still_set(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "atmos.env").write_text(f"ATMOS_PORTFOLIO_HOST=127.0.0.1\nATMOS_PORTFOLIO_TOKEN={self.TOKEN}\n")
+            listing = self.run_cli(temp, "device", "list").stdout
+            self.assertIn("No devices paired", listing)
+            self.assertIn("ATMOS_PORTFOLIO_TOKEN is set", listing)
+            self.assertNotIn(self.TOKEN, listing)
+
+    def test_db_given_on_the_command_line_wins_over_the_env_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            other = Path(temp) / "env-db.sqlite3"
+            (Path(temp) / "atmos.env").write_text(f"ATMOS_PORTFOLIO_HOST=127.0.0.1\nATMOS_PORTFOLIO_DB={other}\n")
+            self.run_cli(temp, "device", "add", "laptop")  # run_cli passes --db p.sqlite3
+            self.assertEqual(len(server.list_devices(str(Path(temp) / "p.sqlite3"))), 1)
+            self.assertFalse(other.exists())
+
+    def test_a_refused_address_adds_no_device(self):
+        with tempfile.TemporaryDirectory() as temp:
+            result = self.run_cli(temp, "device", "add", "laptop", "--url", "http://192.168.1.4:8787", check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(server.list_devices(str(Path(temp) / "p.sqlite3")), [])
+
+
+class DeviceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.db = str(Path(self.temp.name) / "d.sqlite3")
+        server.migrate(self.db)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_only_a_hash_of_the_token_is_stored(self):
+        _, token = server.add_device(self.db, "laptop")
+        with sqlite3.connect(self.db) as db:
+            dump = "\n".join(db.iterdump())
+        self.assertNotIn(token, dump)
+
+    def test_names_are_checked_and_unique_whatever_the_case(self):
+        server.add_device(self.db, "  my   laptop ")
+        self.assertEqual(server.list_devices(self.db)[0]["name"], "my laptop")
+        for bad in ("", "-dash", "x" * 49, "a/b", "shared token", "MY LAPTOP"):
+            with self.assertRaises(ValueError, msg=bad):
+                server.add_device(self.db, bad)
+
+    def test_last_used_is_written_at_most_once_a_minute(self):
+        _, token = server.add_device(self.db, "laptop", now_ms=1)
+        self.assertIsNone(server.list_devices(self.db)[0]["lastUsed"])
+        server.device_for_token(self.db, token, now_ms=100_000)
+        server.device_for_token(self.db, token, now_ms=130_000)
+        self.assertEqual(server.list_devices(self.db)[0]["lastUsed"], 100_000)
+        server.device_for_token(self.db, token, now_ms=160_000)
+        self.assertEqual(server.list_devices(self.db)[0]["lastUsed"], 160_000)
+
+    def test_unknown_and_oversized_tokens_are_nobody(self):
+        server.add_device(self.db, "laptop")
+        self.assertIsNone(server.device_for_token(self.db, "nope"))
+        self.assertIsNone(server.device_for_token(self.db, ""))
+        self.assertIsNone(server.device_for_token(self.db, "x" * 10_000))
+
+    def test_an_older_database_gains_the_devices_table(self):
+        with sqlite3.connect(self.db) as db:
+            db.execute("DROP TABLE devices")
+        server.migrate(self.db)
+        server.add_device(self.db, "laptop")
+        self.assertEqual(len(server.list_devices(self.db)), 1)

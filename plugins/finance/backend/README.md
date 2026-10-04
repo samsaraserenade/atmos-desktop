@@ -79,8 +79,8 @@ signed perpetual notional (shorts are negative) netted against Spot assets.
 The existing `spot` and `perp` history columns stay separate, while holdings
 history retains the metadata needed for historical allocation analysis.
 
-The v1 routes require a bearer token. By default the service listens on
-127.0.0.1 only; see "Pairing Finance with this server" for Tailscale or
+The v1 routes require a bearer token: each paired device has its own (see
+"Paired devices"). By default the service listens on 127.0.0.1 only; see "Pairing Finance with this server" for Tailscale or
 HTTPS. Keep it off the public internet.
 
 Tests: `python3 -m unittest discover -s . -p 'test_*.py'` in this folder
@@ -169,22 +169,58 @@ completed curves, non-SOL quote pairs, and unrelated unpriced mints are left
 untouched. Curve reads are batched and briefly cached, and require no new API
 key or web service.
 
-Provider configuration lives only at `/etc/atmos-portfolio-sources.json`, owned
-by root and readable by the dedicated service group. The collector never logs
-secrets or provider response bodies. `sources.example.json` has every source
-disabled and no credentials.
+### Where the sources are kept
 
-To enter it with masked prompts, run `sudo python3
-/opt/atmos-portfolio/collectors.py configure --output FILE` on the server. It
-asks for every source, and after each one you use, offers another account of
-the same kind: name it ("Work") and it becomes `binance:work`, labelled Work.
-It replaces FILE keeping its owner and permissions (a new file is readable
-only by its owner); without `--output` it prints the configuration. It
-writes the whole configuration each time, so enter every source again, or
-edit the file by hand to change one. From Windows, `configure-sources.ps1` does that over SSH, with the server
-and SSH key given by `-Server` and `-SshKeyPath` or by `deploy.local.json`
-beside it (gitignored; copy `deploy.example.json`), then installs the file and
-restarts the collector. Nothing is written on your PC.
+The sources (API keys and wallet addresses) are encrypted at rest. With
+systemd 250 or later (Ubuntu 24.04, Debian 12) they live in
+`/etc/atmos-portfolio/sources.cred`, encrypted by `systemd-creds` with this
+machine's host key (`/var/lib/systemd/credential.secret`, root only). Not
+with its TPM: a firmware or Secure Boot update can change what the TPM
+measures and lock a TPM-bound file for good. When the collector starts,
+systemd decrypts them into the service's private credentials folder, in
+memory (`LoadCredentialEncrypted=`, in a drop-in beside the unit), and the
+service's own user can't read the encrypted file. On systemd 247 to 249
+(Ubuntu 22.04) they stay in `/etc/atmos-portfolio-sources.json`, readable
+by root only, and reach the collector the same way; before 247 the file
+stays readable by the service's group, as before 0.9. `install.sh` and
+`upgrade.sh` set this up (`sources.sh setup`), encrypting a plain file they
+find and removing it once the collector is running with the encrypted copy
+(if it doesn't stay up, everything is put back).
+
+On a server upgraded from before 0.9, `shred` can't promise the old plain
+file is unrecoverable from the disk (journaling filesystems and SSDs keep
+old blocks). If that matters, rotate the API keys it held: `sources.sh edit`
+with new read-only keys.
+
+Root on the server can still decrypt them: that's what lets the collector
+run unattended. What it guards against is the file leaving the machine on
+its own, in a backup of `/etc`, a copy or a support bundle: it only opens
+with this machine's host key. A whole-disk image carries the key too. The collector never logs secrets or provider response bodies.
+`sources.example.json` has every source disabled and no credentials.
+
+Everything goes through `sources.sh` on the server:
+
+```sh
+sudo /opt/atmos-portfolio/sources.sh configure   # every source, masked prompts
+sudo /opt/atmos-portfolio/sources.sh edit        # change them in $EDITOR
+sudo /opt/atmos-portfolio/sources.sh show [FILE] # print them, or write FILE (mode 600)
+sudo /opt/atmos-portfolio/sources.sh seal FILE   # replace them with FILE's
+```
+
+Each checks the result, stores it and restarts the collector with it, and
+keeps the previous sources if the collector doesn't stay up; `edit` and
+`configure` work on a copy in a private folder in `/run` (memory), removed
+afterwards with anything the editor left there.
+`configure` asks for every source, and after each one you use, offers another
+account of the same kind: name it ("Work") and it becomes `binance:work`,
+labelled Work. It writes the whole configuration each time, so use `edit` to
+change one source. To move to another server, `show FILE` on the old one,
+`seal FILE` on the new one, and delete the file on both.
+
+From Windows, `configure-sources.ps1` runs `sources.sh configure` over SSH,
+with the server and SSH key given by `-Server` and `-SshKeyPath` or by
+`deploy.local.json` beside it (gitignored; copy `deploy.example.json`).
+Nothing is written on your PC.
 
 ## Atmos client mode
 
@@ -208,11 +244,11 @@ An alternative to `install.sh` and systemd, for a server that already runs
 Docker. From this folder:
 
 ```sh
-cp .env.example .env                  # then set ATMOS_PORTFOLIO_TOKEN and ATMOS_PORTFOLIO_PUBLIC_URL
+cp .env.example .env                  # then set ATMOS_PORTFOLIO_PUBLIC_URL
 cp sources.example.json sources.json  # then enable your sources
 sudo chown 10001:10001 sources.json && sudo chmod 600 sources.json
 docker compose up -d --build
-docker compose exec api python /app/server.py pairing
+docker compose exec api python /app/server.py device add laptop
 ```
 
 - Two containers from one image: `api` (the HTTP API) and `collector`, sharing
@@ -220,7 +256,9 @@ docker compose exec api python /app/server.py pairing
   filesystem with no capabilities, and the same memory and CPU limits as the
   systemd units.
 - `sources.json` is mounted read-only and has to be readable by uid 10001
-  (the `chown` above). It holds any API keys, so keep it `600`.
+  (the `chown` above). It holds any API keys, so keep it `600`. With Docker
+  it is not encrypted at rest (there is no systemd to decrypt it); keep it
+  out of backups that leave the server, or run the systemd install instead.
 - The API is published on `127.0.0.1:8787` only. For Tailscale, set
   `ATMOS_PORTFOLIO_BIND` in `.env` to the server's 100.x.y.z address and
   `ATMOS_PORTFOLIO_PUBLIC_URL=http://100.x.y.z:8787`. For HTTPS, leave the
@@ -249,13 +287,15 @@ To restore, stop both services and put the copy in place of
 ## Pairing Finance with this server
 
 ```sh
-sudo python3 /opt/atmos-portfolio/server.py pairing
+sudo python3 /opt/atmos-portfolio/server.py device add laptop
 ```
 
-prints a pairing code (`atmos-finance:…`) from `/etc/atmos-portfolio.env`:
-the address Finance should use and the token. It contains the token, so paste
-it only into Atmos (Portfolio Connections → Pairing code → Connect) and don't
-keep it anywhere else. `install.sh` prints one at the end.
+pairs a device called "laptop" and prints its pairing code
+(`atmos-finance:…`): the address Finance should use and that device's own
+token. Paste it only into Atmos on that device (Portfolio Connections →
+Pairing code → Connect) and don't keep it anywhere else. `install.sh` pairs
+a first device and prints its code at the end (`sudo ./install.sh laptop`
+names it). `server.py pairing [--name NAME]` does the same as `device add`.
 
 Finance accepts `https://` addresses, or plain `http://` only on a Tailscale
 address or the same computer. The address comes from, in order: `--url`,
@@ -268,11 +308,29 @@ address or the same computer. The address comes from, in order: `--url`,
   (for example Caddy: `portfolio.example.com { reverse_proxy 127.0.0.1:8787 }`)
   in front, and set `ATMOS_PORTFOLIO_PUBLIC_URL=https://portfolio.example.com`.
 
-To change the token, edit `ATMOS_PORTFOLIO_TOKEN` (at least 32 characters),
-restart `atmos-portfolio`, and pair Finance again.
+### Paired devices
+
+```sh
+sudo python3 /opt/atmos-portfolio/server.py device list            # names, when paired, last used
+sudo python3 /opt/atmos-portfolio/server.py device revoke laptop   # its next request is refused
+```
+
+Each device has its own random token. The server keeps only a SHA-256 hash
+of it, so a lost pairing code can't be shown again: revoke the device and add
+it again. Revoking takes effect at once, without a restart, and leaves the
+other devices alone. Run with `sudo`, these commands act as the service's
+user, so the database stays its own. With Docker: `docker compose exec api
+python /app/server.py device …`.
+
+Before 0.9 every device shared one token, `ATMOS_PORTFOLIO_TOKEN` in
+`/etc/atmos-portfolio.env` (or `.env`). It is still accepted while it's set
+(`device list` says so). To move off it: `device add` each device and paste
+its new code into Finance there, then delete the `ATMOS_PORTFOLIO_TOKEN`
+line and restart `atmos-portfolio`.
 
 `GET /v1/info` (token required) is what Finance's Test button calls: the
-server's name, version, API version, number of sources and last update.
+server's name, version, API version, the device asking, number of sources
+and last update.
 `GET /health` needs no token and says only that the service is up, and its version.
 
 ## Licence

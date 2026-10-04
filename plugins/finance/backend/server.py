@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import hmac
 import ipaddress
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import time
@@ -18,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 API_VERSION = 1
 PAIRING_PREFIX = "atmos-finance:"
 DEFAULT_DB = "/var/lib/atmos-portfolio/portfolio.sqlite3"
@@ -36,6 +38,13 @@ DAY_MS = 86_400_000
 DEFAULT_RAW_DAYS = 30
 DEFAULT_HOURLY_DAYS = 365
 PRUNE_INTERVAL_SECONDS = 6 * 3600
+# Paired devices: each has its own token, kept here only as a SHA-256 hash
+# (the tokens are random, so a plain hash is enough), and can be revoked on
+# its own. last_used_ms is written at most once a minute per device.
+DEVICE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,47}$")
+LAST_USED_EVERY_MS = 60_000
+MAX_TOKEN_CHARS = 256
+SHARED_TOKEN_DEVICE = "shared token"
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -181,6 +190,17 @@ def migrate(db_path: str) -> None:
                 """
             )
         db.execute("CREATE INDEX IF NOT EXISTS holdings_history_lookup ON holdings_history(source_id, symbol, ts_ms)")
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS devices (
+              id INTEGER PRIMARY KEY,
+              name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+              token_sha256 TEXT NOT NULL UNIQUE,
+              created_ms INTEGER NOT NULL,
+              last_used_ms INTEGER
+            )
+            """
+        )
 
 
 MAX_HOLDING_META_JSON_CHARS = 2000
@@ -502,14 +522,15 @@ def db_stats(db_path: str) -> dict:
             "databaseBytes": sum(path.stat().st_size for path in files if path.exists())}
 
 
-def info(db_path: str) -> dict:
-    """What Finance's "Test connection" shows: which server, how many sources, how fresh."""
+def info(db_path: str, device: str | None = None) -> dict:
+    """What Finance's "Test connection" shows: which server, how many sources,
+    how fresh, and which paired device is asking."""
     with connect(db_path) as db:
         sources = db.execute("SELECT COUNT(*) FROM source_status").fetchone()[0]
         last = db.execute("SELECT MAX(ts_ms) FROM portfolio_samples").fetchone()[0]
     retention = retention_settings()
     return {"name": "atmos-portfolio", "version": VERSION, "apiVersion": API_VERSION,
-            "sources": sources, "lastUpdate": last,
+            "device": device, "sources": sources, "lastUpdate": last,
             "retention": {"holdingsRawDays": retention["rawDays"], "holdingsHourlyDays": retention["hourlyDays"]}
             if retention["enabled"] else None}
 
@@ -602,6 +623,62 @@ def backup(db_path: str, out_path: str) -> dict:
     return {"backup": str(out), "bytes": out.stat().st_size}
 
 
+def _token_sha256(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def add_device(db_path: str, name: str, now_ms: int | None = None) -> tuple[dict, str]:
+    """A new paired device and its token. The token is returned once and
+    only its hash is stored: lose the pairing code and you add the device again."""
+    name = " ".join(str(name or "").split())
+    if not DEVICE_NAME.match(name):
+        raise ValueError("a device name is 1 to 48 letters, digits, spaces, dots, dashes or underscores")
+    if name.lower() == SHARED_TOKEN_DEVICE:
+        raise ValueError(f"{name!r} is reserved")
+    token = secrets.token_urlsafe(48)
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    try:
+        with connect(db_path) as db:
+            cursor = db.execute("INSERT INTO devices (name, token_sha256, created_ms) VALUES (?, ?, ?)",
+                                (name, _token_sha256(token), now_ms))
+            device_id = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        raise ValueError(f"a device called {name!r} is already paired; revoke it first or choose another name") from None
+    return {"id": device_id, "name": name, "created": now_ms, "lastUsed": None}, token
+
+
+def list_devices(db_path: str) -> list[dict]:
+    with connect(db_path) as db:
+        rows = db.execute("SELECT id, name, created_ms, last_used_ms FROM devices ORDER BY created_ms, id").fetchall()
+    return [{"id": row["id"], "name": row["name"], "created": row["created_ms"], "lastUsed": row["last_used_ms"]}
+            for row in rows]
+
+
+def revoke_device(db_path: str, name: str) -> bool:
+    """Forget a device's token. Its next request is refused; nothing else changes."""
+    with connect(db_path) as db:
+        return db.execute("DELETE FROM devices WHERE name = ?", (" ".join(str(name or "").split()),)).rowcount > 0
+
+
+def device_for_token(db_path: str, token: str, now_ms: int | None = None) -> str | None:
+    """The name of the device this token belongs to, or None."""
+    if not token or len(token) > MAX_TOKEN_CHARS:
+        return None
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    with connect(db_path) as db:
+        row = db.execute("SELECT id, name, last_used_ms FROM devices WHERE token_sha256 = ?",
+                         (_token_sha256(token),)).fetchone()
+        if row is None:
+            return None
+        if row["last_used_ms"] is None or now_ms - row["last_used_ms"] >= LAST_USED_EVERY_MS:
+            try:
+                db.execute("PRAGMA busy_timeout=200")  # never hold a request up for it
+                db.execute("UPDATE devices SET last_used_ms = ? WHERE id = ?", (now_ms, row["id"]))
+            except sqlite3.OperationalError:
+                pass  # busy: last used is a convenience, never a reason to refuse
+        return row["name"]
+
+
 def _is_private_http_host(hostname: str) -> bool:
     if hostname in ("localhost",):
         return True
@@ -628,7 +705,7 @@ def public_url(url: str) -> str:
 
 def pairing_code(url: str, token: str) -> str:
     """The code Finance's Portfolio Connections widget takes: atmos-finance: +
-    base64url JSON {url, token}. It contains the token: treat it like one."""
+    base64url JSON {url, token}. It contains a device's token: treat it like one."""
     if len(token) < 32:
         raise ValueError("the server token is missing or too short")
     body = json.dumps({"url": public_url(url), "token": token}, separators=(",", ":")).encode()
@@ -687,10 +764,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def authorized(self) -> bool:
-        expected = self.server.api_token
+    def authorized(self) -> str | None:
+        """The paired device making this request, or None. The shared token
+        (ATMOS_PORTFOLIO_TOKEN, from before 0.9) is still accepted while it's set."""
         supplied = self.headers.get("Authorization", "")
-        return bool(expected) and hmac.compare_digest(supplied, "Bearer " + expected)
+        if not supplied.startswith("Bearer "):
+            return None
+        token = supplied[len("Bearer "):]
+        shared = getattr(self.server, "api_token", "") or ""
+        if shared and hmac.compare_digest(token.encode("utf-8", "replace"), shared.encode("utf-8")):
+            return SHARED_TOKEN_DEVICE
+        return device_for_token(self.server.db_path, token)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -698,7 +782,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             # Unauthenticated, so it says only that the service is up.
             self.send_json(HTTPStatus.OK, {"status": "ok", "version": VERSION})
             return
-        if not self.authorized():
+        try:
+            self.device = self.authorized()
+        except sqlite3.Error:
+            self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "busy, try again"})
+            return
+        if not self.device:
             self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
             return
         try:
@@ -708,7 +797,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def route(self, parsed) -> None:
         if parsed.path == "/v1/info":
-            self.send_json(HTTPStatus.OK, info(self.server.db_path))
+            self.send_json(HTTPStatus.OK, info(self.server.db_path, self.device))
             return
         if parsed.path == "/v1/portfolio":
             self.send_json(HTTPStatus.OK, latest(self.server.db_path))
@@ -767,33 +856,104 @@ def serve(db_path: str) -> None:
     migrate(db_path)
     host = os.environ.get("ATMOS_PORTFOLIO_HOST", "127.0.0.1")
     port = int(os.environ.get("ATMOS_PORTFOLIO_PORT", "8787"))
-    token = os.environ.get("ATMOS_PORTFOLIO_TOKEN", "")
-    if len(token) < 32:
-        raise SystemExit("ATMOS_PORTFOLIO_TOKEN must contain at least 32 characters")
+    # The shared token from before 0.9 is optional: devices paired with
+    # `server.py device add` each have their own.
+    token = os.environ.get("ATMOS_PORTFOLIO_TOKEN", "").strip()
+    if token and len(token) < 32:
+        raise SystemExit("ATMOS_PORTFOLIO_TOKEN must contain at least 32 characters (or remove it)")
     server = ThreadingHTTPServer((host, port), ApiHandler)
     server.db_path = db_path
     server.api_token = token
     server.serve_forever()
 
 
+def _run_as_database_owner(db_path: str) -> None:
+    """Run as root (sudo), become the user who owns the database first, so
+    SQLite's -wal and -shm files are never left owned by root, where the
+    service couldn't write them."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    path = Path(db_path)
+    owner = (path if path.exists() else path.parent).stat()
+    if owner.st_uid == 0:
+        return
+    os.setgroups([])
+    os.setgid(owner.st_gid)
+    os.setuid(owner.st_uid)
+
+
+def _when(ms: int | None) -> str:
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(ms / 1000)) if ms else "never"
+
+
+def _settings(env_file: str) -> dict[str, str]:
+    settings = dict(os.environ)
+    if Path(env_file).exists():
+        settings.update(read_env_file(env_file))
+    return settings
+
+
+def _pair(db_path: str, name: str, url: str | None, settings: dict[str, str]) -> None:
+    address = public_url(url or default_url(settings))  # checked before a device is added
+    device, token = add_device(db_path, name)
+    print(f"Pairing code for {device['name']} (Finance: Portfolio Connections > Pairing code).\n"
+          "It works until you revoke the device; paste it only into Atmos.", file=sys.stderr)
+    print(pairing_code(address, token))
+
+
+def device_command(db_path: str, words: list[str], url: str | None, settings: dict[str, str]) -> None:
+    action, name = (words[0] if words else ""), " ".join(words[1:])
+    if action == "add" and name:
+        _pair(db_path, name, url, settings)
+    elif action == "list" and not name:
+        devices = list_devices(db_path)
+        for device in devices:
+            print(f"{device['name']:<24} paired {_when(device['created'])}, last used {_when(device['lastUsed'])}")
+        if not devices:
+            print("No devices paired. Add one with: server.py device add NAME")
+        if settings.get("ATMOS_PORTFOLIO_TOKEN", "").strip():
+            print(f"{'(shared token)':<24} ATMOS_PORTFOLIO_TOKEN is set: any device holding it can read. "
+                  "Pair each device on its own, then remove it.")
+    elif action == "revoke" and name:
+        if not revoke_device(db_path, name):
+            raise SystemExit(f"device: no device called {name!r} (see: server.py device list)")
+        print(f"Revoked {name}. Its next request is refused.")
+    else:
+        raise SystemExit("device: use `device add NAME`, `device list` or `device revoke NAME`")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("init", "serve", "ingest", "status", "integrity", "pairing", "prune", "backup"))
-    parser.add_argument("--db", default=os.environ.get("ATMOS_PORTFOLIO_DB", DEFAULT_DB))
+    parser.add_argument("command", choices=("init", "serve", "ingest", "status", "integrity", "pairing", "device", "prune", "backup"))
+    parser.add_argument("words", nargs="*", help="device: add NAME, list, or revoke NAME")
+    parser.add_argument("--db", default=None, help="default: ATMOS_PORTFOLIO_DB, or " + DEFAULT_DB)
     parser.add_argument("--file", help="JSON frame; omit to read stdin")
-    parser.add_argument("--url", help="pairing: the address Finance should use (default: ATMOS_PORTFOLIO_PUBLIC_URL, or the bind address)")
-    parser.add_argument("--env-file", default="/etc/atmos-portfolio.env", help="pairing: where the token and address are configured")
+    parser.add_argument("--name", help="pairing: the new device's name (default: device N)")
+    parser.add_argument("--url", help="pairing, device add: the address Finance should use (default: ATMOS_PORTFOLIO_PUBLIC_URL, or the bind address)")
+    parser.add_argument("--env-file", default="/etc/atmos-portfolio.env", help="where the address (and any shared token) are configured")
     parser.add_argument("--vacuum", action="store_true", help="prune: also give freed space back to the filesystem")
     parser.add_argument("--out", help="backup: the file to write (must not exist)")
     args = parser.parse_args()
-    if args.command == "pairing":
-        settings = dict(os.environ)
-        if Path(args.env_file).exists():
-            settings.update(read_env_file(args.env_file))
+    db_given = args.db is not None
+    if not db_given:
+        args.db = os.environ.get("ATMOS_PORTFOLIO_DB", DEFAULT_DB)
+    if args.words and args.command != "device":
+        parser.error(f"{args.command} takes no further words")
+    if args.command in ("pairing", "device"):
+        settings = _settings(args.env_file)
+        db_path = args.db if db_given else settings.get("ATMOS_PORTFOLIO_DB") or args.db
+        _run_as_database_owner(db_path)
+        migrate(db_path)
         try:
-            print(pairing_code(args.url or default_url(settings), settings.get("ATMOS_PORTFOLIO_TOKEN", "")))
+            if args.command == "pairing":
+                # Each pairing code is a new device with a token of its own.
+                taken = {device["name"].lower() for device in list_devices(db_path)}
+                name = args.name or next(f"device {n}" for n in range(1, len(taken) + 2) if f"device {n}" not in taken)
+                _pair(db_path, name, args.url, settings)
+            else:
+                device_command(db_path, args.words, args.url, settings)
         except ValueError as error:
-            raise SystemExit(f"pairing: {error}")
+            raise SystemExit(f"{args.command}: {error}")
         return
     migrate(args.db)
     if args.command == "serve":
@@ -803,10 +963,7 @@ def main() -> None:
         frame = ingest(args.db, raw)
         print(json.dumps({"timestamp": frame["ts_ms"], "sources": len(frame["sources"])}))
     elif args.command == "prune":
-        settings = dict(os.environ)
-        if Path(args.env_file).exists():
-            settings.update(read_env_file(args.env_file))
-        print(json.dumps(prune(args.db, settings=retention_settings(settings), vacuum=args.vacuum)))
+        print(json.dumps(prune(args.db, settings=retention_settings(_settings(args.env_file)), vacuum=args.vacuum)))
     elif args.command == "backup":
         if not args.out:
             raise SystemExit("backup: pass --out FILE")

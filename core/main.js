@@ -15,13 +15,17 @@ const { createExtensionManager } = require('./js/core/extension-manager.cjs');
 const { createAtmosUpdater, spawnDetached } = require('./js/core/atmos-update.cjs');
 const { createSourceFetch } = require('./js/core/source-fetch.cjs');
 const { createExtensionStateStore } = require('./js/core/extension-state.cjs');
-const { BASELINE_BROWSER, reachOf, reaches, exportDetails, describeExports, sharingRisk } = require('./js/core/extension-permissions.cjs');
+const { BASELINE_BROWSER, exportDetails, describeExports, sharingRisk } = require('./js/core/extension-permissions.cjs');
 const { createLocationGate } = require('./js/core/location-gate.cjs');
 const { createExtensionFetch } = require('./js/core/extension-fetch.cjs');
 const frames = require('./js/core/extension-frames.cjs');
 const { resolveContainedPath } = require('./js/core/path-security.cjs');
 const { createWebHost } = require('./js/core/web-host.cjs');
 const { fromAtmosPage, pageOnly } = require('./js/core/ipc-gate.cjs');
+const { mimeFor: _mimeFor } = require('./js/core/protocol-files.cjs');
+const { createInvokeAuthorizer } = require('./js/core/invoke-authorizer.cjs');
+const { APP_ORIGIN: _APP_ORIGIN, isAppUrl: _isAppUrl, originOf: _originOf, mayOpenExternally, guardContents } = require('./js/core/app-navigation.cjs');
+const { createFrameAccess, createAtmosExtHandler } = require('./js/core/atmos-ext-protocol.cjs');
 
 let _extensionPreferences = null;
 let _startupDisabled = { plugin: new Set(), service: new Set() };
@@ -69,66 +73,7 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-// Extension → MIME lookup shared by every atmos-* protocol (the app shell,
-// plugins, and services). Chromium silently refuses some assets served as
-// application/octet-stream — notably stylesheets injected with
-// `new URL('./x.css', import.meta.url)` — so every served type belongs here.
-// Text types carry an explicit charset because the protocol handlers return
-// raw bytes with no other encoding hint.
-const _MIME_BY_EXT = {
-  '.html':  'text/html; charset=utf-8',
-  '.js':    'text/javascript; charset=utf-8',
-  '.mjs':   'text/javascript; charset=utf-8',
-  '.cjs':   'text/javascript; charset=utf-8',
-  '.css':   'text/css; charset=utf-8',
-  '.json':  'application/json; charset=utf-8',
-  '.txt':   'text/plain; charset=utf-8',
-  '.png':   'image/png',
-  '.jpg':   'image/jpeg',
-  '.jpeg':  'image/jpeg',
-  '.svg':   'image/svg+xml',
-  '.gif':   'image/gif',
-  '.webp':  'image/webp',
-  '.avif':  'image/avif',
-  '.ico':   'image/x-icon',
-  '.woff':  'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf':   'font/ttf',
-  '.otf':   'font/otf',
-  '.mp3':   'audio/mpeg',
-  '.wav':   'audio/wav',
-  '.ogg':   'audio/ogg',
-  '.mp4':   'video/mp4',
-  '.webm':  'video/webm',
-  '.wasm':  'application/wasm',
-};
-
-function _mimeFor(filename) {
-  return _MIME_BY_EXT[path.extname(filename).toLowerCase()] || 'application/octet-stream';
-}
-
-/** Reads a regular file for a protocol response, or returns null when the
- *  path is missing or is not a file. */
-/**
- * A file's bytes, or null. With `root`, only a file that really is inside
- * it: a symbolic link (or junction) pointing out of an extension's folder
- * would otherwise serve whatever it points at, and links aren't part of
- * the fingerprint a community extension is approved on.
- */
-async function _readServableFile(filePath, root = null) {
-  try {
-    if (root) {
-      const [real, realRoot] = await Promise.all([fs.promises.realpath(filePath), fs.promises.realpath(root)]);
-      const inside = path.relative(realRoot, real);
-      if (!inside || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) return null;
-    }
-    const stat = await fs.promises.stat(filePath);
-    return stat.isFile() ? await fs.promises.readFile(filePath) : null;
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-    throw error;
-  }
-}
+// What the atmos-* protocols serve from disk: protocol-files.cjs.
 
 /**
  * The Atmos page's Content-Security-Policy. The page holds the preload
@@ -1254,15 +1199,18 @@ function _entryOf(targetRef) {
   return kind === 'plugin' || kind === 'service' ? _catalog.find(`${kind}s`, id) : null;
 }
 
+// Who may call main.cjs IPC handlers, and what each extension may use of
+// another's: invoke-authorizer.cjs.
+const _invokes = createInvokeAuthorizer({
+  fromAtmosPage: event => _fromAtmosPage(event),
+  entryOf: ref => _entryOf(ref),
+  isActive: entry => _isActive(entry),
+  trustOf: entry => _trust?.get(entry) || null,
+});
+
 /** What `entry` may use of the extension `targetRef`: { ipc, events, methods }, or null for itself. */
 function _reachOf(entry, targetRef) {
-  const target = _entryOf(targetRef);
-  const empty = { ipc: [], events: [], methods: [] };
-  if (!target) return empty;
-  return reachOf(
-    { kind: entry.kind, id: entry.id, tier: entry.tier, invokes: _trust?.get(entry)?.permissions.invokes || [] },
-    { kind: target.kind, id: target.id, exports: _trust?.get(target)?.exports },
-  ) || null;
+  return _invokes.reachOf(entry, targetRef);
 }
 
 /** For each extension a framed one declares: what it may use of it. */
@@ -1309,23 +1257,9 @@ function _describeSharing(entry) {
   return lines;
 }
 
-/**
- * Checked by extension-host.cjs before every main.cjs IPC handler runs. Only
- * the Atmos page (never a frame) can call, and only on behalf of a framed
- * extension (`caller`, stamped by Core's bridge): the page's own code never
- * invokes a main.cjs handler. Returns a refusal, or null.
- */
-function _authorizeInvoke(event, caller, { kind, id, name }) {
-  if (!_fromAtmosPage(event)) return 'Not allowed';
-  if (typeof caller !== 'string') return 'Not allowed';
-  const target = `${kind}:${id}`;
-  if (caller === target) return null;
-  const entry = _entryOf(caller);
-  if (!entry || !_isActive(entry)) return `${caller} is not running`;
-  if (!(_trust?.get(entry)?.permissions.invokes || []).includes(target)) return `${caller} is not permitted to invoke ${target}`;
-  const reach = _reachOf(entry, target);
-  if (!reaches(reach.ipc, name)) return `${target} doesn't share its '${name}' handler with ${entry.tier === 'third-party' ? 'community' : 'other'} extensions`;
-  return null;
+/** Checked by extension-host.cjs before every main.cjs IPC handler runs (invoke-authorizer.cjs). */
+function _authorizeInvoke(event, caller, target) {
+  return _invokes.authorize(event, caller, target);
 }
 
 /**
@@ -1712,19 +1646,6 @@ _page.handle('extensions:open-root', async (_event, kind) => {
 });
 
 // ── Framed extensions (atmos-ext://) ─────────────────────────────────────────
-const _SDK_DIR = path.join(__dirname, 'js', 'sdk');
-// ui.css: Atmos's Settings rows and controls, for frames that opt in (SDK 1.1).
-const _SDK_FILES = { '/__atmos/sdk.js': 'atmos-sdk.js', '/__atmos/frame.js': 'frame.js', '/__atmos/frame.css': 'frame.css', '/__atmos/ui.css': 'ui.css' };
-
-function _originOf(url) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    return null;
-  }
-}
-
 function _activeEntries() {
   return [..._catalog.list('plugins'), ..._catalog.list('services')].filter(_isActive);
 }
@@ -1733,130 +1654,30 @@ function _framedEntries() {
   return _activeEntries().filter(entry => frames.resolveRuntime(entry) === 'frame');
 }
 
-/** Active services whose files other extensions' frames may import. */
-function _libraryService(id) {
-  const entry = _catalog.find('services', id);
-  return entry && _isActive(entry) && entry.manifest?.library === true ? entry : null;
-}
-
-/** Origins of the libraries a framed extension declared (invokes service:<id>). */
-function _libraryOriginsFor(entry) {
-  const origins = new Set();
-  for (const target of _trust.get(entry)?.permissions.invokes || []) {
-    const [kind, id] = target.split(':');
-    const library = kind === 'service' ? _libraryService(id) : null;
-    if (library) origins.add(frames.frameOrigin(library));
-  }
-  origins.delete(frames.frameOrigin(entry));
-  return [...origins];
-}
-
-/**
- * atmos-resource:// providers a framed extension may load: those it
- * registers itself ("resources"). Another extension's are never shared
- * (that went with SDK 1.0).
- */
-function _resourceProvidersFor(entry) {
-  return [...new Set(_trust.get(entry)?.permissions.resources || [])];
-}
-
-/** Whether a frame origin may fetch() a resource provider's responses. */
-function _originMayUseResource(origin, provider) {
-  return _framedEntries().some(entry => frames.frameOrigin(entry) === origin && _resourceProvidersFor(entry).includes(provider));
-}
-
-/** Whether a frame origin belongs to an extension that declared this library. */
-function _originMayUseLibrary(origin, library) {
-  return _framedEntries().some(entry => frames.frameOrigin(entry) === origin
-    && (_trust.get(entry)?.permissions.invokes || []).includes(`service:${library.id}`));
-}
+// Which frame origins may use a library's modules or a resource provider:
+// atmos-ext-protocol.cjs (createFrameAccess).
+const _frameAccess = createFrameAccess({
+  framedEntries: () => _framedEntries(),
+  trustOf: entry => _trust.get(entry),
+  findService: id => _catalog.find('services', id),
+  isActive: entry => _isActive(entry),
+});
+function _resourceProvidersFor(entry) { return _frameAccess.resourceProvidersFor(entry); }
+function _originMayUseResource(origin, provider) { return _frameAccess.originMayUseResource(origin, provider); }
 
 function _registerAtmosExtProtocol() {
-  protocol.handle('atmos-ext', async request => {
-    try {
-      const url = new URL(request.url);
-      const host = url.hostname;
-      const owners = _framedEntries().filter(entry => frames.frameHost(entry) === host);
-      const rel = decodeURIComponent(url.pathname);
-      const noStore = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
-
-      if (rel === '/__atmos/frame.html') {
-        const [kind, id] = (url.searchParams.get('ext') || '').split(':');
-        const entry = owners.find(candidate => candidate.kind === kind && candidate.id === id);
-        if (!entry) return new Response('Forbidden', { status: 403 });
-        const csp = frames.frameCsp({
-          permissions: _trust.get(entry)?.permissions,
-          inlineScriptHashes: [frames.IMPORT_MAP_HASH],
-          libraryOrigins: _libraryOriginsFor(entry),
-          resourceProviders: _resourceProvidersFor(entry),
-        });
-        return new Response(frames.frameDocument(), {
-          headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': csp },
-        });
-      }
-      // Core's pages that copy an extension's storage into its own origin,
-      // or delete it, served only to the move or removal running now (see
-      // _moveToOwnOrigins, _clearRemovedStorage).
-      if (_moveInProgress && (rel === '/__atmos/move.html' || rel === '/__atmos/move.js')) {
-        // export: the shared origin, or the origin whose storage is being deleted (it reads and deletes).
-        const role = host === frames.FIRST_PARTY_HOST || (_moveInProgress.removeHost && host === _moveInProgress.removeHost) ? 'export'
-          : _moveInProgress.host && host === _moveInProgress.host ? 'import' : null;
-        if (role && rel === '/__atmos/move.html') {
-          return new Response(frames.moveDocument(role), {
-            headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': frames.moveCsp(role) },
-          });
-        }
-        if (role) {
-          return new Response(await fs.promises.readFile(path.join(__dirname, 'js', 'core', 'extension-origin-move.js')), {
-            headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.js'] },
-          });
-        }
-      }
-      // An empty document in the shared first-party origin, for Core's own
-      // one-time storage cleanup (see _cleanUpSharedOriginStorage).
-      if (rel === '/__atmos/blank.html' && host === frames.FIRST_PARTY_HOST) {
-        return new Response('<!doctype html><title></title>', {
-          headers: { ...noStore, 'Content-Type': _MIME_BY_EXT['.html'], 'Content-Security-Policy': "default-src 'none'" },
-        });
-      }
-      if (_SDK_FILES[rel]) {
-        if (!owners.length) return new Response('Not found', { status: 404 });
-        const filePath = path.join(_SDK_DIR, _SDK_FILES[rel]);
-        return new Response(await fs.promises.readFile(filePath), {
-          headers: { ...noStore, 'Content-Type': _mimeFor(filePath) },
-        });
-      }
-
-      const match = rel.match(/^\/(plugins|services)\/([a-z0-9][a-z0-9-]*)\/(.+)$/);
-      const file = match ? frames.safeRelative(match[3]) : null;
-      if (!file) return new Response('Not found', { status: 404 });
-      const kind = match[1] === 'plugins' ? 'plugin' : 'service';
-      let entry = owners.find(candidate => candidate.kind === kind && candidate.id === match[2]);
-      const headers = { 'X-Content-Type-Options': 'nosniff' };
-      if (!entry && kind === 'service') {
-        // Another extension's frame importing a library service's modules.
-        const library = _libraryService(match[2]);
-        if (library && frames.frameHost(library) === host) {
-          entry = library;
-          const origin = request.headers.get('origin');
-          if (origin && _originMayUseLibrary(origin, library)) {
-            headers['Access-Control-Allow-Origin'] = origin;
-            headers.Vary = 'Origin';
-          }
-        }
-      }
-      if (!entry) return new Response('Not found', { status: 404 });
-      const filePath = resolveContainedPath(entry.path, file);
-      const buf = filePath ? await _readServableFile(filePath, entry.path) : null;
-      if (!buf) return new Response('Not found', { status: 404 });
-      // A developer folder changes under Atmos: never serve a stale copy.
-      if (entry.source === 'developer') headers['Cache-Control'] = 'no-store';
-      return new Response(buf, { headers: { ...headers, 'Content-Type': _mimeFor(filePath) } });
-    } catch (e) {
-      console.error('[main] atmos-ext protocol error:', e.message);
-      return new Response('Error', { status: 500 });
-    }
+  const handler = createAtmosExtHandler({
+    framedEntries: _framedEntries,
+    trustOf: entry => _trust.get(entry),
+    libraryService: _frameAccess.libraryService,
+    libraryOriginsFor: _frameAccess.libraryOriginsFor,
+    resourceProvidersFor: _frameAccess.resourceProvidersFor,
+    originMayUseLibrary: _frameAccess.originMayUseLibrary,
+    moveInProgress: () => _moveInProgress,
+    sdkDir: path.join(__dirname, 'js', 'sdk'),
+    originMoveScript: path.join(__dirname, 'js', 'core', 'extension-origin-move.js'),
   });
+  protocol.handle('atmos-ext', request => handler.handle(request));
 }
 
 // ── Developer folders (--dev-extension) ─────────────────────────────────────
@@ -1922,21 +1743,16 @@ function _watchDeveloperFolders() {
 // in <webview>s that only Core's web layer in the Atmos page attaches, in
 // two sessions of their own (never Atmos's), under the browser's policy
 // instead of this one: web-policy.cjs, unit-tested.
-const _APP_ORIGIN = 'atmos-app://local';
-const _EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+// The guard itself (what may navigate where): app-navigation.cjs.
 
 // shell.openExternal goes through Atmos Browser first (see _web.routeShell).
 function _openExternally(url) {
   try {
-    if (_EXTERNAL_PROTOCOLS.has(new URL(url).protocol)) shell.openExternal(url);
+    if (mayOpenExternally(url)) shell.openExternal(url);
     else console.warn('[main] refused to open', url);
   } catch {
     console.warn('[main] refused to open', url);
   }
-}
-
-function _isAppUrl(url) {
-  return typeof url === 'string' && (url === _APP_ORIGIN || url.startsWith(`${_APP_ORIGIN}/`));
 }
 
 /** An active official extension declaring "web": true ("plugin:<id>"). */
@@ -1978,32 +1794,9 @@ app.on('web-contents-created', (_, contents) => {
   if (contents.getType() === 'devtools') return;
   // A page in Atmos Browser: the browser's policy, not the one below.
   if (_web.isWebSession(contents.session)) { _web.applyPolicy(contents); return; }
-  contents.setWindowOpenHandler(({ url }) => {
-    _openExternally(url);
-    return { action: 'deny' };
-  });
-  contents.on('will-navigate', (event, url) => {
-    if (_isAppUrl(url)) return;
-    event.preventDefault();
-    _openExternally(url);
-  });
-  // Refused everywhere except the Atmos page's own web layer, and there
-  // only in the browser's sessions, starting blank, with fixed preferences.
-  contents.on('will-attach-webview', (event, webPreferences, params) => _web.attachWebview(contents, event, webPreferences, params));
-  // Frames only ever show extension documents. Core creates them; an
-  // extension frame may reload or move within its own origin, never to the
-  // web, to another extension's origin, or to Atmos itself.
-  contents.on('will-frame-navigate', details => {
-    if (details.isMainFrame) return;
-    const target = _originOf(details.url);
-    const initiator = details.initiator;
-    const fromCore = !initiator || initiator === contents.mainFrame;
-    const allowed = details.url.startsWith('atmos-ext://')
-      && (fromCore || (initiator.origin && initiator.origin === target));
-    if (!allowed) {
-      details.preventDefault();
-      console.warn('[main] blocked frame navigation to', details.url);
-    }
+  guardContents(contents, {
+    openExternally: _openExternally,
+    attachWebview: (...args) => _web.attachWebview(...args),
   });
 });
 

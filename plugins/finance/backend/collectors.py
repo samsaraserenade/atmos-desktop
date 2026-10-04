@@ -2,9 +2,10 @@
 """Runs the Atmos portfolio backend's connectors (connectors/) on a schedule
 and stores what they find (server.py).
 
-Only the Python standard library is used. Secrets are loaded from a protected
-JSON file and are never included in logs, exceptions, database rows, or API
-responses.
+Only the Python standard library is used. Secrets are never included in
+logs, exceptions, database rows, or API responses. Under systemd they arrive
+as the service's "sources" credential (see sources.sh: encrypted at rest,
+decrypted by systemd into memory); otherwise from ATMOS_PORTFOLIO_SOURCES.
 
     collectors.py                       collect every poll_seconds (the service)
     collectors.py --once                collect once
@@ -33,6 +34,17 @@ from connectors.shared import CollectorError
 
 DEFAULT_CONFIG = "/etc/atmos-portfolio-sources.json"
 DEFAULT_POLL_SECONDS = 60
+CREDENTIAL_NAME = "sources"
+
+
+def sources_path(env: dict[str, str] | None = None) -> str:
+    """The service's credential (systemd's LoadCredential[Encrypted]=sources:…)
+    when it has one, else ATMOS_PORTFOLIO_SOURCES (Docker, or by hand)."""
+    env = os.environ if env is None else env
+    credentials = env.get("CREDENTIALS_DIRECTORY")
+    if credentials and (Path(credentials) / CREDENTIAL_NAME).is_file():
+        return str(Path(credentials) / CREDENTIAL_NAME)
+    return env.get("ATMOS_PORTFOLIO_SOURCES", DEFAULT_CONFIG)
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -197,7 +209,7 @@ def main() -> None:
         print_status(db_path)
     else:
         run(
-            os.environ.get("ATMOS_PORTFOLIO_SOURCES", DEFAULT_CONFIG),
+            sources_path(),
             db_path,
             "--once" in sys.argv,
         )

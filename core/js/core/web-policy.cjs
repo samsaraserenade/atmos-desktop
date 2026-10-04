@@ -24,7 +24,8 @@
  *                 (mailto:, magnet:…) only after asking, and a few that run
  *                 programs on Windows never
  *   permissions   denied unless the user allowed that site (the page's,
- *                 whichever of its frames asks); fullscreen (a tab's only)
+ *                 whichever of its frames asks); fullscreen (a tab's only),
+ *                 pointer lock (a tab's, just after a click or key in it)
  *                 and writing the clipboard need no prompt (as in Chrome)
  *   activation    a pop-up only just after a click or key in the page, one
  *                 each; a download on its own once a page load, more after
@@ -234,7 +235,7 @@ function requestContext({ type, url, frame = null, contentsUrl = '', referrer = 
 /** What a site may ask the user for; everything else is refused. */
 const PROMPTED = Object.freeze(['camera', 'microphone', 'geolocation', 'notifications', 'clipboard-read']);
 /** What needs no prompt, as in Chrome. */
-const FREE = new Set(['fullscreen', 'clipboard-sanitized-write']);
+const FREE = new Set(['fullscreen', 'clipboard-sanitized-write', 'pointerLock']);
 
 /**
  * The user-facing permissions a Chromium permission request stands for:
@@ -280,9 +281,16 @@ function permissionSite(permission, { requestingUrl = '', topUrl = '' } = {}) {
  * `tab`: whether a tab asks. Only a tab goes fullscreen: Core names the
  * site over it and takes it back with Escape (web-layer.js), which it
  * can't do over a pop-up window.
+ * Pointer lock (a game hiding the cursor to steer with the mouse) is a
+ * tab's too, and only within USER_ACTIVATION_MS of a click or key in that
+ * page (`activated`), as Chrome has it: Chromium leaves that check to the
+ * browser, so without it a page could take the mouse as it loads. Escape
+ * gives it back (Chromium's own, the page doesn't get the key), and Core
+ * says so over the page.
  */
-function permissionDecision(permission, details, setting, { origin, tab = true } = {}) {
+function permissionDecision(permission, details, setting, { origin, tab = true, activated = false } = {}) {
   if (permission === 'fullscreen' && !tab) return 'deny';
+  if (permission === 'pointerLock' && !(tab && activated)) return 'deny';
   const names = permissionNames(permission, details);
   if (names === null) return 'deny';
   if (!names.length) return 'allow';
@@ -295,7 +303,7 @@ function permissionDecision(permission, details, setting, { origin, tab = true }
 
 /** A synchronous check (navigator.permissions, Notification.permission): only what the user allowed. */
 function permissionCheck(permission, details, setting, { origin, tab = true } = {}) {
-  if (permission === 'fullscreen' && !tab) return false;
+  if ((permission === 'fullscreen' || permission === 'pointerLock') && !tab) return false;
   const names = permissionNames(permission, details);
   if (names === null) return false;
   if (!names.length) return true;

@@ -1130,6 +1130,44 @@ setTimeout(() => {
     const afterFullscreen = pixel(640, 500);
     check('after fullscreen the page is drawn as it was', near(afterFullscreen, hex('1d4ed8')), afterFullscreen);
 
+    // ── Pointer lock ──────────────────────────────────────────────────────
+    // A game hides the cursor and steers with the mouse: allowed with no
+    // prompt as in Chrome, but only just after a click or key in the page,
+    // with Atmos's notice naming the site, and Escape gives the mouse back.
+    step('pointer lock');
+    await wait(5200); // past the last click's activation in this tab
+    await go(`${A}/pointer-lock?onload=1`);
+    await wait(1500);
+    const lockState = async () => JSON.parse(await inPage(`${A}/pointer-lock`, 'JSON.stringify({ locked: !!document.pointerLockElement, ...__lock })'));
+    const onLoad = await lockState();
+    check('a page can\'t take the mouse as it loads, before any click', !onLoad.locked && onLoad.events.some(e => e.startsWith('load:') && e !== 'load:ok') && !onLoad.events.includes('change:true'), onLoad);
+    const lockBox = await layerBox();
+    await x.click(lockBox.x + 400, lockBox.y + 300);
+    const locked = await until(async () => (await lockState()).locked, { timeout: 5000 });
+    const lockNotice = await page.evaluate(() => document.getElementById('atmos-web-fullscreen-notice')?.textContent || null);
+    check('a click in the page lets it take the mouse (pointer lock), no prompt', locked, await lockState());
+    check('…with a notice naming the site and Esc', !!lockNotice && lockNotice.includes(new URL(A).host) && /cursor/.test(lockNotice) && /Esc/.test(lockNotice), lockNotice);
+    grab('10b-pointer-lock');
+    await x.move(lockBox.x + 600, lockBox.y + 450);
+    await x.move(lockBox.x + 200, lockBox.y + 150);
+    await wait(300);
+    const moved = await lockState();
+    check('…and gets the mouse\'s movement while it has it', moved.moves > 0, { moves: moved.moves });
+    await x.key('Escape');
+    const released = await until(async () => !(await lockState()).locked, { timeout: 5000 });
+    const afterEscape = await lockState();
+    check('Escape gives the mouse back (the page doesn\'t get the key)', released && !afterEscape.keys.includes('Escape'), afterEscape);
+    await wait(1500); // Chromium refuses a lock just after Escape gave it back (as Chrome does)
+    await x.click(lockBox.x + 400, lockBox.y + 300);
+    const relocked = await until(async () => (await lockState()).locked, { timeout: 5000 });
+    await x.key('Escape');
+    await until(async () => !(await lockState()).locked, { timeout: 5000 });
+    // Asked for long after the last click: refused.
+    await inPage(`${A}/pointer-lock`, 'lockLater(6000)');
+    await wait(7000);
+    const late = await lockState();
+    check('…again after another click, but not from a timer long after it', relocked && !late.locked && late.events.some(e => e.startsWith('later:') && e !== 'later:ok'), late);
+
     // ── Closing pages ─────────────────────────────────────────────────────
     // A tab closes as Chrome closes one: its page's last events run first,
     // where sites save what they keep (Discord writes its sign-in back then).

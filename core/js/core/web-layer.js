@@ -299,14 +299,23 @@ function siteOf(url) {
  * A page that goes fullscreen covers everything, Atmos included, so it could
  * draw something that looks like Atmos or a sign-in screen: Core says which
  * site it is and how to leave, over the page, for a few seconds (as Chrome
- * does). Plain text, never markup.
+ * does). Plain text, never markup. A page that takes the mouse (pointer
+ * lock) gets the same: the cursor is gone, and Esc brings it back.
  */
 let _noticeTimer = null;
 function fullscreenNotice(site) {
+  pageNotice(site === null ? null : `${site || 'This page'} is full screen · Press Esc to exit`);
+}
+function pointerLockNotice(site, element) {
+  // Over the page itself (it may be in a tile, or under the browser's own bar), unless it fills the window.
+  const box = document.fullscreenElement ? null : element?.getBoundingClientRect();
+  pageNotice(`${site || 'This page'} has hidden your cursor · Press Esc to show it`, box?.width ? box : null);
+}
+function pageNotice(text, box = null) {
   let notice = document.getElementById('atmos-web-fullscreen-notice');
   clearTimeout(_noticeTimer);
   const remove = () => { try { notice?.hidePopover(); } catch { /* not shown */ } notice?.remove(); };
-  if (site === null) { remove(); return; }
+  if (text === null) { remove(); return; }
   if (!notice) {
     notice = document.createElement('div');
     notice.id = 'atmos-web-fullscreen-notice';
@@ -319,7 +328,9 @@ function fullscreenNotice(site) {
       + 'background:rgba(22,22,24,.92);color:#fff;font:13px/1.35 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.45);transition:opacity .3s';
     document.body.append(notice);
   }
-  notice.textContent = `${site || 'This page'} is full screen · Press Esc to exit`;
+  notice.textContent = text;
+  notice.style.left = box ? `${Math.round(box.left + box.width / 2)}px` : '50%';
+  notice.style.top = box ? `${Math.round(box.top + 16)}px` : '28px';
   notice.style.opacity = '1';
   raiseNotice();
   // The page may reach the top layer after this (its frame's fullscreen
@@ -398,6 +409,7 @@ api?.onEvent((guestId, type, payload) => {
     place(owner);
     fullscreenNotice(payload.on ? siteOf(tab.state.url) : null);
   }
+  if (type === 'pointer-lock') pointerLockNotice(siteOf(tab.state.url), tab.element);
   emit(owner, { type, tabId, ...payload, ...(type === 'state' ? { tab: publicTab(tab) } : {}) });
 });
 

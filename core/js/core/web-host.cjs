@@ -966,8 +966,13 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       ses.setPermissionRequestHandler((contents, permission, callback, details) => {
         const topUrl = contents?.getURL?.() || '';
         const origin = policy.permissionSite(permission, { requestingUrl: details?.requestingUrl || topUrl, topUrl });
-        const decision = policy.permissionDecision(permission, details || {}, settingFor(origin), { origin, tab: isTab(contents) });
-        if (decision === 'allow') return callback(true);
+        const activated = !!contents && Date.now() - activations.lastAt(contents.id) < policy.USER_ACTIVATION_MS;
+        const decision = policy.permissionDecision(permission, details || {}, settingFor(origin), { origin, tab: isTab(contents), activated });
+        if (decision === 'allow') {
+          // The cursor is about to go: say whose page took it and how to get it back.
+          if (permission === 'pointerLock') send(contents.id, 'pointer-lock', {});
+          return callback(true);
+        }
         // Only a tab asks: a pop-up has no browser around it to ask in.
         if (decision === 'deny' || !isTab(contents)) return callback(false);
         askPermission(contents, origin, policy.permissionNames(permission, details || {}), callback);

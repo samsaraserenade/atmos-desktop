@@ -43,17 +43,17 @@ sudo bash install.sh
 ```
 
 This creates an `atmos-portfolio` system user, installs the API and the
-collector as two sandboxed systemd services, writes a random token to
-`/etc/atmos-portfolio.env`, and copies an empty sources file to
-`/etc/atmos-portfolio-sources.json`. The API starts listening on
-`127.0.0.1:8787`, and the script prints a pairing code at the end (you'll
-make another after step 4).
+collector as two sandboxed systemd services, writes its settings to
+`/etc/atmos-portfolio.env`, and starts the sources with every one off,
+encrypted with `systemd-creds` (systemd 250+, so Ubuntu 24.04 or Debian 12;
+on Ubuntu 22.04 the file is readable by root only instead). The API starts
+listening on `127.0.0.1:8787`, and the script pairs a first device and
+prints its code at the end (you'll make another after step 4).
 
 ### B. Docker Compose
 
 ```sh
 cp .env.example .env
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into ATMOS_PORTFOLIO_TOKEN in .env
 cp sources.example.json sources.json
 sudo chown 10001:10001 sources.json && sudo chmod 600 sources.json
 ```
@@ -63,9 +63,10 @@ are set. The details are under "Running with Docker" in `README.md`.
 
 ## 3. Tell it what to track
 
-Edit the sources file: `sudoedit /etc/atmos-portfolio-sources.json` with
-systemd, or `sources.json` with Docker. Set `"enabled": true` on the sources
-you use and fill them in:
+Edit the sources: `sudo /opt/atmos-portfolio/sources.sh edit` with systemd
+(it opens a copy in memory, then encrypts it again and restarts the
+collector), or `sources.json` with Docker. Set `"enabled": true` on the
+sources you use and fill them in:
 
 | Source | Fill in |
 |---|---|
@@ -78,22 +79,21 @@ you use and fill them in:
 
 `poll_seconds` (default 60, minimum 30) sets how often it collects. Wallet
 sources only need public addresses. Binance is the only source that needs a
-secret, and the file is readable only by root and the service.
+secret. With systemd, the sources are encrypted on disk and only the
+collector gets them, in memory; with Docker, `sources.json` is plain text
+readable only by the container's user.
 
-Or let the server ask: `sudo python3 /opt/atmos-portfolio/collectors.py
-configure --output /etc/atmos-portfolio-sources.json` prompts for each
-source with masked input (blank keeps a source disabled). On Windows,
-`configure-sources.ps1` runs that over SSH, so no secrets land on your PC.
+Or let the server ask: `sudo /opt/atmos-portfolio/sources.sh configure`
+prompts for each source with masked input (blank keeps a source disabled).
+On Windows, `configure-sources.ps1` runs that over SSH, so no secrets land
+on your PC.
 After each source you use it offers another account of the same kind (a
 work Binance account, a second set of wallets); in the file these are
 sources like `"binance:work": { "type": "binance", ... }` (see "The
 configuration" in `README.md`).
 
-Then start or restart the collector:
-
-```sh
-sudo systemctl restart atmos-portfolio-collector   # systemd
-```
+With systemd, `sources.sh` restarts the collector with them. With Docker,
+they're read at the next poll.
 
 ## 4. Make it reachable from Atmos
 
@@ -131,7 +131,7 @@ connect.
    `ATMOS_PORTFOLIO_PUBLIC_URL=https://portfolio.example.com` in
    `/etc/atmos-portfolio.env` (or `.env` with Docker).
 
-Every `/v1` request needs the token, and `/health` says only that the
+Every `/v1` request needs a paired device's token, and `/health` says only that the
 server is up, and its version. Don't publish port 8787 itself.
 
 Docker users can now start it: `docker compose up -d --build`.
@@ -139,13 +139,14 @@ Docker users can now start it: `docker compose up -d --build`.
 ## 5. Pair Finance
 
 ```sh
-sudo python3 /opt/atmos-portfolio/server.py pairing          # systemd
-docker compose exec api python /app/server.py pairing         # Docker
+sudo python3 /opt/atmos-portfolio/server.py device add laptop      # systemd
+docker compose exec api python /app/server.py device add laptop     # Docker
 ```
 
-This prints a code starting `atmos-finance:`. It contains the token, so
-paste it only into Atmos: **Portfolio Connections → Pairing code → Test →
-Connect**. Finance stores it sealed with your system's secure storage.
+This pairs a device called "laptop" and prints its code, starting
+`atmos-finance:`. The code holds that device's own token, so paste it only
+into Atmos on that device: **Portfolio Connections → Pairing code → Test →
+Connect**. Pair each computer (or phone) separately. Finance stores it sealed with your system's secure storage.
 Within a minute of the first collection, your balance appears.
 
 ## Looking after it
@@ -163,8 +164,15 @@ Within a minute of the first collection, your balance appears.
 - **Disk use:** itemized history is thinned as it ages (every poll for 30 days,
   hourly to a year, daily after), which keeps the database small with no
   effect on Finance's charts. See "Retention" in `README.md`.
-- **Changing the token:** edit `ATMOS_PORTFOLIO_TOKEN`, restart
-  `atmos-portfolio`, and pair Finance again.
+- **Devices:** `server.py device list` shows the paired devices and when
+  each last connected; `server.py device revoke laptop` locks one out at
+  once (a lost laptop, an old phone) without touching the others. Pair it
+  again with `device add`.
+- **Moving servers:** encrypted sources only open on the machine that wrote
+  them. `sudo /opt/atmos-portfolio/sources.sh show sources.json` on the
+  old server (readable by you only), copy it over,
+  `sudo /opt/atmos-portfolio/sources.sh seal sources.json` on the new one,
+  then delete `sources.json` on both.
 
 ## If something's wrong
 
@@ -172,6 +180,6 @@ Within a minute of the first collection, your balance appears.
 |---|---|
 | "use https://, or http:// only on a Tailscale address…" | The address in the code is plain `http://` on a public IP. Use Tailscale or HTTPS (step 4). |
 | Test can't reach the server | Tailscale running on both machines? `curl http://ADDRESS:8787/health` from the Atmos computer. With Caddy: `curl https://NAME/health`. |
-| "unauthorized" | The token changed. Make a new pairing code. |
+| "unauthorized" | The device was revoked, or paired with the shared token that was since removed. `device add` it again. |
 | Connected, but no balance | No source enabled, or the collector isn't running: `collectors.py --status` and the collector's logs. |
 | One source shows errors | Its addresses or key are wrong, or its provider is down. Other sources are unaffected. |

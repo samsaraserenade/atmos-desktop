@@ -1,6 +1,7 @@
 # Atmos portfolio server with Docker Compose. See "Running with Docker" in
-# README.md: copy .env.example to .env (set the token), put your sources in
-# sources.json (readable by uid 10001), then `docker compose up -d`.
+# README.md: copy .env.example to .env (set the address), put your sources in
+# sources.json (readable by uid 10001), `docker compose up -d`, then pair a
+# device: `docker compose exec api python /app/server.py device add laptop`.
 name: atmos-portfolio
 
 x-hardening: &hardening
