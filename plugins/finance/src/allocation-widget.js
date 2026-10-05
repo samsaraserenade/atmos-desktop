@@ -1,4 +1,4 @@
-import { privateFormat } from './privacy.js';
+import { isPrivate, MASK, onPrivacyChange, privateFormat } from './privacy.js';
 import { portfolioState } from '../persist.js';
 import { save, onLocalStateChange } from './host/persist.js';
 import { getAllPortfolios, onPortfolioUpdate } from './registry.js';
@@ -72,11 +72,13 @@ export function mountAllocationWidget(body, context) {
         const empty = document.createElement('div'); empty.className = 'finance-allocation-empty'; empty.textContent = 'No directional exposure yet'; rows.append(empty); return;
       }
       for (const entry of result.entries) {
+        // Private mode hides which coins you hold, not only how much.
+        const name = isPrivate() ? MASK : entry.label;
         const row = document.createElement('div'); row.className = `finance-allocation-row finance-exposure-row ${entry.value < 0 ? 'is-short' : 'is-long'}`;
-        row.title = `${entry.label}: ${entry.value < 0 ? '−' : '+'}${symbol}${amountFormat.format(Math.abs(entry.value))} net exposure`;
+        row.title = `${name}: ${entry.value < 0 ? '−' : '+'}${symbol}${amountFormat.format(Math.abs(entry.value))} net exposure`;
         const axis = document.createElement('span'); axis.className = 'finance-exposure-axis';
         const bar = document.createElement('span'); bar.className = 'finance-allocation-bar'; bar.style.width = `${Math.min(50, entry.share * 50)}%`;
-        const label = document.createElement('span'); label.className = 'finance-allocation-label'; label.textContent = entry.label;
+        const label = document.createElement('span'); label.className = 'finance-allocation-label'; label.textContent = name;
         const value = document.createElement('span'); value.className = 'finance-allocation-value'; value.textContent = `${entry.value < 0 ? '−' : '+'}${symbol}${amountFormat.format(Math.abs(entry.value))}`;
         row.append(axis, bar, label, value); rows.append(row);
       }
@@ -96,10 +98,14 @@ export function mountAllocationWidget(body, context) {
     for (const entry of result.entries) {
       const row = document.createElement('div');
       row.className = 'finance-allocation-row';
-      row.title = `${entry.label}: ${symbol}${amountFormat.format(entry.value)} (${percentFormat.format(entry.share * 100)}%)`;
+      // Private mode: a wallet's address is masked (anyone can look up what
+      // it holds); exchanges, chains and dApps stay, as the Connections
+      // widget names your sources.
+      const hidden = isPrivate() && dimension === 'wallet';
+      row.title = `${hidden ? MASK : entry.label}: ${symbol}${amountFormat.format(entry.value)} (${percentFormat.format(entry.share * 100)}%)`;
       const label = document.createElement('span');
       label.className = 'finance-allocation-label';
-      label.textContent = dimension === 'wallet' ? shortWallet(entry.label) : entry.label;
+      label.textContent = hidden ? MASK : dimension === 'wallet' ? shortWallet(entry.label) : entry.label;
       const value = document.createElement('span');
       value.className = 'finance-allocation-value';
       value.textContent = `${percentFormat.format(entry.share * 100)}%`;
@@ -123,6 +129,7 @@ export function mountAllocationWidget(body, context) {
     save(); render();
   });
   context.onCleanup(onPortfolioUpdate(render));
+  context.onCleanup(onPrivacyChange(render));
   context.onCleanup(onLocalStateChange(render)); // "Group by" changes from the header menu
   render();
 }

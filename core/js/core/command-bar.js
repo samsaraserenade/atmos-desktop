@@ -16,7 +16,8 @@
  * requestExtensionCommand): what's typed after its name goes to it alone,
  * and what it sends back is cleaned and shown as text. ↑↓ choose, Enter
  * runs (or completes a command that needs more), Tab completes, Esc clears
- * and then closes.
+ * and then closes. Shift+Enter runs an extension's command and goes to its
+ * panel; Alt+Enter runs it where you are (runExtensionCommand).
  *
  * A frame can open the bar with text (rev/ typed in a field of its own),
  * and keys typed there before the bar had the keyboard follow while nothing
@@ -38,7 +39,10 @@ import { sidebarState } from './sidebar-state.js';
 import { closeSidebar, openSidebar } from './sidebar-shell.js';
 import { appearanceState } from './appearance.js';
 import { escapeHtml } from './escape-html.js';
-import { commandBarTarget, extensionCommandSources, giveKeyboardBack, requestExtensionCommand } from './extension-frame-host.js';
+import {
+  commandBarTarget, extensionCommandSources, extensionHasPanel, giveKeyboardBack, requestExtensionCommand, runExtensionCommand,
+  showExtensionPanel,
+} from './extension-frame-host.js';
 
 const BAR_HEIGHT = 54;
 const FLASH_MS = 3200;
@@ -86,6 +90,7 @@ let presetSource = null; // whose presets they are: they apply to its commands o
 let preferred = null;    // { name, source }: what the text means when two extensions share a name
 let currentAsk = null;   // the extension command being typed: { source, name, args }
 let enterWhenFresh = false; // Enter came before the answer for what's typed: run its first row then
+let enterGo;                // …with the key it was: true Shift+Enter (and go there), false Alt+Enter (stay here)
 
 const settingsMenu = () => import('./settings-menu.js');
 
@@ -228,6 +233,16 @@ function sharedStart(a, b) {
   return a.slice(0, index);
 }
 
+/** The keys line: Shift+Enter and Alt+Enter when the row chosen runs an extension's command that has a panel. */
+function footText() {
+  const source = rows[activeIndex]?.enter?.run?.source;
+  const where = source && extensionHasPanel(source) ? ' · Shift+Enter go there · Alt+Enter stay here' : '';
+  return `↑↓ choose · Enter run${where} · Tab complete · Esc ${input.value ? 'clear' : 'close'}`;
+}
+
+/** What a key or click with Shift or Alt asks of an extension's command: go there, stay here, or as it does. */
+const goFrom = event => (event?.shiftKey ? true : event?.altKey ? false : undefined);
+
 const optionValue = option => (Object.hasOwn(userOptions, option.id) ? userOptions[option.id] : option.value);
 
 function optionsHtml() {
@@ -325,7 +340,7 @@ function paint() {
               ${row.action ? `<span class="command-bar-item-action">${busy && index === activeIndex ? '…' : escapeHtml(row.action)}</span>` : ''}
             </button>`)).join('')}
     </div>
-    <div class="command-bar-foot">↑↓ choose · Enter run · Tab complete · Esc ${input.value ? 'clear' : 'close'}</div>`;
+    <div class="command-bar-foot">${footText()}</div>`;
   input.setAttribute('aria-expanded', 'true');
   position();
   listEl.querySelector('.command-bar-item.active')?.scrollIntoView({ block: 'nearest' });
@@ -366,7 +381,7 @@ function scheduleFetch(ask, { force = false } = {}) {
       enterWhenFresh = false;
       if (activeIndex === -1 || choiceLost) return;
       if (rows[activeIndex]?.danger) hold();
-      else choose(activeIndex, 'enter');
+      else choose(activeIndex, 'enter', enterGo);
     }
   }, force ? 60 : quick ? 0 : 120);
 }
@@ -386,16 +401,16 @@ function fill(text) {
   paint();
 }
 
-/** Enter, in the bar or an option's field. */
-function enter() {
+/** Enter, in the bar or an option's field; `go` from Shift or Alt with it (goFrom). */
+function enter(go) {
   // The list still answers what was typed before (or nothing yet): Enter
   // runs the answer for what's typed, once it's in. (Never a later answer:
   // one that only refreshes the list never runs anything.)
-  if (awaitingAnswer()) { enterWhenFresh = true; return; }
+  if (awaitingAnswer()) { enterWhenFresh = true; enterGo = go; return; }
   if (activeIndex === -1) return;
   // A destructive row runs once it has been seen (not on a double Enter).
   if (!seenLongEnough(rows[activeIndex])) { hold(); return; }
-  choose(activeIndex, 'enter');
+  choose(activeIndex, 'enter', go);
 }
 
 /** A destructive row chosen too soon: say so, rather than nothing (while it's the one chosen). */
@@ -404,7 +419,7 @@ function hold(how = 'enter') {
   paint();
 }
 
-function choose(index, key) {
+function choose(index, key, go) {
   const row = rows[index];
   const step = key === 'tab' ? row?.tab : row?.enter;
   if (!step || busy) return;
@@ -413,12 +428,12 @@ function choose(index, key) {
     fill(step.complete);
     return;
   }
-  if (step.run?.source) runExtension(step.run, index);
+  if (step.run?.source) runExtension(step.run, index, go);
   else if (step.run) run(step.run);
 }
 
 /** One of an extension's commands, in its frame; what it answers decides what the bar does next. */
-async function runExtension({ command, source, args, value }, index) {
+async function runExtension({ command, source, args, value }, index, go) {
   const mine = session;
   activeIndex = index;
   chosenKey = rowKey(rows[index]);
@@ -427,7 +442,7 @@ async function runExtension({ command, source, args, value }, index) {
   paint();
   let reply;
   try {
-    reply = cleanResult(await requestExtensionCommand(source, command, 'run', { args: args || '', value: value ?? null, options: { ...userOptions } }));
+    reply = cleanResult(await runExtensionCommand(source, command, { args: args || '', value: value ?? null, options: { ...userOptions } }, { go }));
   } catch (error) {
     // Closed meanwhile (and maybe opened again): what it says is for a bar that's gone.
     if (!open || session !== mine) return;
@@ -460,6 +475,14 @@ async function runExtension({ command, source, args, value }, index) {
   }
   const where = barRect();
   const back = previousFocus;
+  if (go === true) {
+    // Shift+Enter: done, so to its panel (the keyboard isn't given back to
+    // the one the bar was over: that's going away).
+    closeBar({ restoreFocus: false });
+    showExtensionPanel(source);
+    if (reply.done) flash(reply.done, where, FLASH_MS);
+    return;
+  }
   closeBar();
   if (reply.done) flash(reply.done, where, back?.tagName === 'IFRAME' ? FLASH_OVER_FRAME_MS : FLASH_MS);
 }
@@ -524,7 +547,7 @@ function onKeydown(event) {
   const handled = () => { event.preventDefault(); event.stopPropagation(); };
   if (event.key === 'ArrowDown') { handled(); move(1); }
   else if (event.key === 'ArrowUp') { handled(); move(-1); }
-  else if (event.key === 'Enter') { handled(); enter(); }
+  else if (event.key === 'Enter') { handled(); enter(goFrom(event)); }
   else if (event.key === 'Tab') {
     handled();
     // Completes what the row says to type; a row with nothing to complete, Tab moves on (Shift+Tab back).
@@ -557,7 +580,7 @@ function onListClick(event) {
     activeIndex = index;
     chosenKey = rowKey(rows[index]);
     if (!seenLongEnough(rows[index])) { hold('click'); return; }
-    choose(index, 'enter');
+    choose(index, 'enter', goFrom(event));
   }
 }
 
@@ -581,7 +604,7 @@ function onOptionInput(event) {
 /** In an option's own field: Enter runs what's chosen, Esc goes back to the bar. */
 function onOptionKeydown(event) {
   if (!event.target.dataset?.option || event.target.tagName !== 'INPUT') return;
-  if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); enter(); }
+  if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); enter(goFrom(event)); }
   else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); input.focus(); }
 }
 

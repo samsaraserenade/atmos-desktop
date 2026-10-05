@@ -393,12 +393,6 @@ const _deps = {
   awaitService: _awaitService,
   libraryBase: id => _libraryBases.get(id) || null,
   closeMenus: () => closeOpenMenu(),
-  showPanel(extension) {
-    const panel = extension.frame.contributions.find(item => item.surface === 'panel');
-    if (!panel || !isPanelPluginRegistered(panel.id)) return false;
-    activatePanelPlugin(panel.id);
-    return true;
-  },
   // atmos.fetch(): made by the main process for the frame (the bridge has
   // checked the host; the main process checks everything again).
   fetch: (caller, requestId, request) => window.atmosCore.extensionFetch(caller, requestId, request),
@@ -608,6 +602,8 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
 
   const deps = {
     ..._deps,
+    // atmos.panel.show(): not while this frame runs a command "here" (Alt+Enter).
+    showPanel: target => _showPanel(target, record),
     // Only a frame the user is interacting with may drive Atmos's UI.
     dispatchKey(init) {
       if (document.activeElement === iframe) _dispatchKey(init);
@@ -1281,6 +1277,67 @@ export function extensionCommandSources(focused = null) {
   return out.sort((a, b) => a.rank - b.rank);
 }
 
+// Frames whose atmos.panel.show() does nothing while they run a command
+// "here" (Alt+Enter in the command bar): frame record -> how many such runs.
+// Only that frame's: a widget of the same extension clicked meanwhile still
+// opens its panel.
+const _panelHolds = new Map();
+// A frame that didn't answer in time may still be at it: held this much longer.
+const HOLD_AFTER_TIMEOUT_MS = 15_000;
+
+/** Show an extension's panel (atmos.panel.show()); false if it has none. Not while `record` runs a command "here". */
+function _showPanel(extension, record = null) {
+  const panel = extension?.frame?.contributions?.find(item => item.surface === 'panel');
+  if (!panel || !isPanelPluginRegistered(panel.id)) return false;
+  if (!(record && _panelHolds.get(record))) activatePanelPlugin(panel.id);
+  return true;
+}
+
+/** Show an extension's panel for the command bar (Shift+Enter, once the command is done and the bar closed). */
+export function showExtensionPanel(ref) {
+  const extension = _framed.get(ref);
+  return extension ? _showPanel(extension) : false;
+}
+
+/** Whether an extension has a panel to go to (the command bar offers Shift+Enter for its commands). */
+export function extensionHasPanel(ref) {
+  return !!_framed.get(ref)?.frame?.contributions?.some(item => item.surface === 'panel');
+}
+
+/** The frame that runs or lists an extension's command: a panel or widget showing, else its background frame, else any. */
+function _commandFrame(ref, name) {
+  const records = [..._frames.get(ref) || []].filter(record => record.bridge && record.commands.has(name));
+  const order = record => (_showing(record) ? (record.type === 'panel' ? 0 : record.type === 'sidebar' ? 1 : 2) : record.type === 'boot' ? 2 : 3);
+  return records.sort((a, b) => order(a) - order(b))[0] || null;
+}
+
+/**
+ * Run one of an extension's commands as the command bar's key said. With
+ * `go` false (Alt+Enter), the frame running it can't show its panel while
+ * it runs; true (Shift+Enter) the bar shows the panel itself once it's done
+ * (showExtensionPanel). The command hears `go` either way; left out, a
+ * plain Enter.
+ */
+export async function runExtensionCommand(ref, name, input, { go } = {}) {
+  const record = go === false ? _commandFrame(ref, name) : null;
+  if (record) _panelHolds.set(record, (_panelHolds.get(record) || 0) + 1);
+  let late = false;
+  try {
+    return await requestExtensionCommand(ref, name, 'run', go === undefined ? input : { ...input, go });
+  } catch (error) {
+    late = error?.name === 'TimeoutError';
+    throw error;
+  } finally {
+    if (record) {
+      const release = () => {
+        const left = (_panelHolds.get(record) || 1) - 1;
+        if (left) _panelHolds.set(record, left); else _panelHolds.delete(record);
+      };
+      if (late) setTimeout(release, HOLD_AFTER_TIMEOUT_MS); else release();
+    }
+  }
+}
+
 /**
  * Ask the extension to run one of its commands, or what to list for it
  * ('run' | 'suggest'). The frame that handles it: a panel or widget
@@ -1288,9 +1345,7 @@ export function extensionCommandSources(focused = null) {
  * (the extension isn't running, or handles it only in a surface that's away).
  */
 export function requestExtensionCommand(ref, name, action, input, { timeout = action === 'suggest' ? 2000 : 15000 } = {}) {
-  const records = [..._frames.get(ref) || []].filter(record => record.bridge && record.commands.has(name));
-  const order = record => (_showing(record) ? (record.type === 'panel' ? 0 : record.type === 'sidebar' ? 1 : 2) : record.type === 'boot' ? 2 : 3);
-  const record = records.sort((a, b) => order(a) - order(b))[0];
+  const record = _commandFrame(ref, name);
   if (!record) {
     const what = _commandLabel(ref);
     return Promise.reject(new Error(_framed.has(ref) && !_stopped.has(ref) && !_incompatible.has(ref) ? `Open ${what} to use rev/${name}.` : `${what} isn't running.`));

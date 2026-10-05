@@ -9,9 +9,9 @@
  * After a command's name, "/" and a space are the same: rev/switch/finance.
  *
  * Commands are Atmos's own (CORE_COMMANDS) and those extensions declare in
- * "contributes.commands" (SDK 1.3), listed by what's showing: the panel the
- * bar is for, other panels, widgets, then Atmos's own; an extension with
- * nothing showing only once its command's name is typed.
+ * "contributes.commands" (SDK 1.3), all listed, by what's showing: the
+ * panel the bar is for, other panels, widgets, Atmos's own, then
+ * extensions with nothing showing (by name), each under a heading.
  */
 export const PREFIX = 'rev/';
 
@@ -100,7 +100,8 @@ function targetMatches(query, targets) {
  */
 export function commandList(sources = []) {
   const of = source => (source.commands || []).map(command => ({ ...command, source: source.extension, sourceLabel: source.label, rank: source.rank }));
-  const sorted = [...sources].sort((a, b) => a.rank - b.rank);
+  // By what's showing; extensions equally far away by name.
+  const sorted = [...sources].sort((a, b) => a.rank - b.rank || String(a.label).localeCompare(String(b.label)));
   return [
     ...sorted.filter(source => source.rank < CORE_RANK).flatMap(of),
     ...CORE_COMMANDS.map(command => ({ ...command, source: null, sourceLabel: null, rank: CORE_RANK })),
@@ -132,6 +133,22 @@ function pageRow(page) {
     enter: runs('settings', page.id),
     tab: completes(`${PREFIX}settings ${page.label}`),
   };
+}
+
+/**
+ * Every command, under a heading for each extension (Atmos's under
+ * "Atmos"), when they come from more than one; rows under a heading don't
+ * repeat whose they are.
+ */
+function grouped(commands) {
+  const groups = [];
+  for (const item of commands) {
+    const key = item.source || '';
+    if (groups.at(-1)?.key !== key) groups.push({ key, label: item.sourceLabel || 'Atmos', items: [] });
+    groups.at(-1).items.push(item);
+  }
+  if (groups.length < 2) return commands.map(commandRow);
+  return groups.flatMap(group => [{ heading: group.label }, ...group.items.map(item => ({ ...commandRow(item), source: '' }))]);
 }
 
 /** A command as a row while its name is being typed. */
@@ -184,8 +201,9 @@ export function suggest(text, { panels = [], activePanel = null, pages = SETTING
   const parsed = parseCommand(text, preferring(commands, prefer));
   const result = rows => ({ parsed, rows, ask: null, options: [] });
   if (parsed.typingName) {
-    // Nothing typed yet: what's showing and Atmos's own, ranked.
-    if (!parsed.name) return result(commands.filter(item => item.rank <= CORE_RANK).map(commandRow));
+    // Nothing typed yet: every command, by what's showing (the panel the
+    // bar is for first), each extension's under its name.
+    if (!parsed.name) return result(grouped(commands));
     // A name: Atmos's commands; a panel or a page of Settings whose name
     // starts so (rev/finance, rev/appearance); an extension's command called
     // that; a panel or page with a word that starts so (rev/play's Music,

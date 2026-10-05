@@ -1,4 +1,6 @@
-import { masked } from './privacy.js';
+import { isPrivate, MASK, masked, onPrivacyChange } from './privacy.js';
+import { isPortfolioSection, sectionCoin } from './chart-sections.js';
+import { coinHistory, useCoinHistory } from './coin-history.js';
 import { chartAxisOptions } from './chart-axes.js';
 import { bindChartResetMeasurement } from './chart-reset.js';
 import { splitPortfolio } from './portfolio-sections.js';
@@ -38,9 +40,11 @@ let history = totalHistory;
 // totalHistory is the VPS history, point for point, converted at the current
 // rates. False while it holds this computer's own samples (no VPS).
 let mirrorsVps = false;
+// What the main chart shows (src/chart-sections.js); chosen in the picker.
 let section = 'total';
-let sectionButtons = [];
 let remoteSections = [];
+let releaseCoin = null;
+const sectionListeners = new Set();
 
 function currentSplit() {
   let spot = 0, perp = 0;
@@ -55,6 +59,8 @@ function currentSplit() {
 
 export function portfolioSectionHistory(selected) {
   if (selected === 'total') return totalHistory;
+  const coin = sectionCoin(selected);
+  if (coin) return coinHistory(coin).points.map(chartPointFromVps);
   const points = new Map(remoteSections.map(point => [point.t, point]));
   for (const point of totalHistory) if (point[selected] != null) points.set(point.t, point);
   return [...points.values()].filter(point => Number.isFinite(point[selected]))
@@ -84,30 +90,75 @@ export function mountPortfolioSection(host, context, selected = 'total', stateKe
     if (!presentationOnly) displayedData = portfolioSectionHistory(selected);
     const data = displayedData;
     view.batch(() => {
-      view.setOptions({ ...presentationOptions(), lineColor: lineColorForTrend(data, getPriceColors?.() || { up: '#34d399', down: '#f87171' }, point => point.v) });
+      view.setOptions(presentationOptions(selected, data));
       if (append) view.appendMany(appended);
       else if (!presentationOnly) view.setData(data, { preserveViewport: true });
     });
   };
   extraPortfolioViews.add(refresh);
   context.onCleanup(() => { extraPortfolioViews.delete(refresh); view.destroy(); });
+  const coin = sectionCoin(selected);
+  if (coin) context.onCleanup(useCoinHistory(coin, () => refresh()));
   refresh();
 }
 
 function selectSectionHistory() {
-  if (section === 'total') { history = totalHistory; return; }
-  const points = new Map(remoteSections.map(point => [point.t, point]));
-  for (const point of totalHistory) if (point[section] != null) points.set(point.t, point);
-  history = [...points.values()].filter(point => Number.isFinite(point[section]))
-    .sort((a, b) => a.t - b.t).map(point => ({ ...point, g: point[section], v: convertFromGbp(point[section]) }));
+  history = portfolioSectionHistory(section);
 }
 
-function syncSectionButtons() {
-  for (const button of sectionButtons) {
-    const active = button.dataset.portfolioSection === section;
-    button.classList.toggle('is-active', active);
-    button.setAttribute('aria-pressed', String(active));
+/** What the main chart shows: 'total', 'spot', 'perp' or 'coin:SOL'. */
+export const getPortfolioSection = () => section;
+
+/** fn() after the main chart changed what it shows. */
+export function onPortfolioSectionChange(fn) {
+  sectionListeners.add(fn);
+  return () => sectionListeners.delete(fn);
+}
+
+/** What the picker calls a section: "Portfolio", "Portfolio · Spot", "Portfolio · SOL" (masked in private mode). */
+export function portfolioSectionLabel(value) {
+  const coin = sectionCoin(value);
+  if (coin) return `Portfolio · ${isPrivate() ? MASK : coin}`;
+  return value === 'spot' ? 'Portfolio · Spot' : value === 'perp' ? 'Portfolio · Perp' : 'Portfolio';
+}
+
+/**
+ * What a section is worth now, in the display currency, as the picker
+ * lists it: the live total, or Spot's or Perp's share of it. Null while
+ * unknown. (A coin's: coin-history.js coinValue.)
+ */
+export function latestSectionValue(selected) {
+  const total = getTotal();
+  if (!total.ready || !(total.liveCount > 0)) return null;
+  if (selected === 'total') return Number.isFinite(total.value) ? total.value : null;
+  const split = currentSplit();
+  return split[selected] == null ? null : convertFromGbp(split[selected]);
+}
+
+/** Show a section on the main chart (the picker, rev/portfolio). Saved, so it's there after a restart. */
+export function setPortfolioSection(value) {
+  const next = isPortfolioSection(value) ? value : 'total';
+  if (next === section) return;
+  section = next;
+  updateLegacyChartSetting('section', section, false);
+  applySection();
+}
+
+function applySection() {
+  followSectionCoin();
+  replaceChartData();
+  applyCashInvestedPaneVisibility();
+  for (const fn of [...sectionListeners]) {
+    try { fn(section); } catch (error) { console.error('[finance] section listener failed:', error); }
   }
+}
+
+/** While the main chart shows a coin, redraw it as its history arrives. */
+function followSectionCoin() {
+  releaseCoin?.();
+  releaseCoin = null;
+  const coin = sectionCoin(section);
+  if (coin && chart) releaseCoin = useCoinHistory(coin, () => replaceChartData());
 }
 
 let hiddenRanges = [];
@@ -170,11 +221,23 @@ function chartPointFromVps(point) {
   return { spot: point.spot == null ? null : convertToGbp(point.spot, point.currency ?? 'USD'), perp: point.perp == null ? null : convertToGbp(point.perp, point.currency ?? 'USD'), t: point.t, v: convertFromGbp(gbp), g: gbp, liveCount: 1, errorCount: Math.max(0, Number(point.errorCount) || 0) };
 }
 
-function chartStatus() {
+// A coin's chart says why it's empty (never which coin: private mode may be on).
+const COIN_STATUS = {
+  loading: { value: 'Reading its history…', color: 'rgba(var(--ink-rgb),.5)', title: 'Reading this coin’s history from your portfolio server' },
+  none: { value: 'Nothing counted', color: 'rgba(var(--ink-rgb),.5)', title: 'Not held now, or its holdings are hidden or part of a group (a perp position’s collateral, say) that’s only counted whole' },
+  failed: { value: 'History unavailable', color: '#f87171', title: 'Your portfolio server didn’t answer. Finance tries again with its next sample.' },
+  unavailable: { value: 'Needs a portfolio server', color: 'rgba(var(--ink-rgb),.5)', title: 'A coin’s history comes from your portfolio server' },
+};
+
+function chartStatus(selected = section) {
   const count = Math.max(0, Number(getTotal().errorCount) || 0);
-  return count ? [{ key: 'unavailable', value: String(count), color: '#f87171', title: count === 1
+  const status = count ? [{ key: 'unavailable', value: String(count), color: '#f87171', title: count === 1
     ? '1 value unavailable — using the last confirmed value'
     : `${count} values unavailable — using their last confirmed values` }] : [];
+  const coin = sectionCoin(selected);
+  const coinStatus = coin && COIN_STATUS[coinHistory(coin).status];
+  if (coinStatus) status.push({ key: 'coin', ...coinStatus });
+  return status;
 }
 
 function currentOptions() {
@@ -211,13 +274,14 @@ function currentOptions() {
 // Private mode masks the value axis, crosshair and hover labels; the line stays.
 const formatChartValue = masked(value => `${getTotal().symbol}${Number(value).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
-function presentationOptions() {
+/** `selected` and `data`: an extra chart's section and points (else the main chart's). */
+function presentationOptions(selected = section, data = history) {
   // Same fallback pair as currentOptions() — kept identical to the
   // price-color service's defaults, not an independent guess.
   const colors = getPriceColors?.() || { up: '#34d399', down: '#f87171' };
   return {
-    lineColor: lineColorForTrend(history, colors, point => point.v),
-    upColor: colors.up, downColor: colors.down, hiddenRanges, status: chartStatus(),
+    lineColor: lineColorForTrend(data, colors, point => point.v),
+    upColor: colors.up, downColor: colors.down, hiddenRanges, status: chartStatus(selected),
     ...chartAxisOptions(),
     candleAnimationDuration: getBalanceAnimMs(),
     formatValue: formatChartValue,
@@ -312,8 +376,10 @@ function replaceHistoryFromVps(change) {
 }
 
 function restoreRuntimeSettings() {
-  section = ['spot', 'perp'].includes(portfolioState.portfolioChartSettings?.section) ? portfolioState.portfolioChartSettings.section : 'total';
-  replaceChartData(); syncSectionButtons();
+  const savedSection = portfolioState.portfolioChartSettings?.section;
+  const restored = isPortfolioSection(savedSection) ? savedSection : 'total';
+  if (restored !== section) { section = restored; applySection(); }
+  else replaceChartData();
   const saved = portfolioState.portfolioChartSettings || {};
   balanceVisible = saved.balanceVisible !== false;
   applyBalanceVisible(balanceVisible);
@@ -357,6 +423,13 @@ export async function initTotalChart(context) {
     if (chart) chart.setOptions(presentationOptions());
     updateBalanceDisplay();
   }));
+  // Private mode masks the charts' value labels and the balance: redrawn
+  // at once, as nothing else about the chart changed.
+  context.onCleanup(onPrivacyChange(() => {
+    refreshExtraPortfolioViews(true);
+    if (chart) chart.setOptions(presentationOptions());
+    updateBalanceDisplay();
+  }));
   const [savedHistory, savedHidden] = await Promise.all([loadChartHistory(), loadChartHidden()]);
   const remote = isRemotePortfolioMode(), rebuilt = buildCombinedHistoryFromConnectors(), splitStart = rebuilt[0]?.t ?? Infinity;
   const legacy = remote ? [] : savedHistory.filter(point => point.t < splitStart);
@@ -390,19 +463,13 @@ export function mount(contentEl, context) {
   contentEl.innerHTML = `<div id="total-chart-card" class="finance-portfolio-chart">
     <div class="finance-portfolio-toolbar atmos-chart-controls" role="toolbar" aria-label="Portfolio chart options">
       <div class="finance-toolbar-scroll">
-        <div role="group" aria-label="Portfolio section"><button type="button" data-portfolio-section="spot">Spot</button><button type="button" data-portfolio-section="perp">Perp</button><button type="button" data-portfolio-section="total">Total</button></div>
         <div role="group" aria-label="Timeline">${chartControlMarkup('timeline')}${chartControlMarkup('bridge')}${chartControlMarkup('scale')}</div>
         <div role="group" aria-label="Chart type">${chartControlMarkup('type')}</div>
         <div class="mq-timeframes" role="group" aria-label="Candle timeframe">${chartControlMarkup('timeframe', { intervals: PORTFOLIO_INTERVALS })}</div>
       </div>
     </div><div class="finance-plot-surface"><div class="portfolio-chart-host"></div></div></div>`;
-  sectionButtons = [...contentEl.querySelectorAll('[data-portfolio-section]')];
-  for (const button of sectionButtons) context.listen(button, 'click', () => {
-    section = button.dataset.portfolioSection;
-    updateLegacyChartSetting('section', section, false);
-    syncSectionButtons(); replaceChartData(); applyCashInvestedPaneVisibility();
-  });
-  selectSectionHistory(); syncSectionButtons();
+  // Total, Spot, Perp and your coins are chosen in the picker (panel.js).
+  selectSectionHistory();
   const surface = contentEl.querySelector('.finance-plot-surface');
   const host = contentEl.querySelector('.portfolio-chart-host');
   bindChartResetMeasurement(surface, () => chart, context);
@@ -434,17 +501,19 @@ export function mount(contentEl, context) {
   if (cashInvestedPaneEl) {
     chart.on('paneHover', ({ id, time }) => {
       if (id === CASH_INVESTED_PANE_ID && cashInvestedData.length >= 2)
-        showHistoricalComposition(time, { from: cashInvestedData[0]?.t, to: cashInvestedData.at(-1)?.t });
+        showHistoricalComposition(time);
     });
     chart.on('paneLeave', ({ id }) => { if (id === CASH_INVESTED_PANE_ID) clearHistoricalComposition(); });
   }
   mounted = true;
+  followSectionCoin();
 }
 
 export function unmount() {
+  releaseCoin?.();
+  releaseCoin = null;
   chart?.destroy();
   chart = null;
-  sectionButtons = [];
   mounted = false;
   cashInvestedPaneEl = null;
   cashInvestedData = [];

@@ -21,7 +21,12 @@ import { CHART_CONTROL_STYLES } from './src/chart-service.js';
 
 import { registerPanelPlugin } from './src/host/panel-registry.js';
 import { colorForChange, onPriceColorChange } from './src/host/semantic-colors.js';
-import { mount, unmount, mountPortfolioSection, setPriceAxisVisible, setTimeAxisVisible } from './src/total-chart.js';
+import {
+  mount, unmount, mountPortfolioSection, setPriceAxisVisible, setTimeAxisVisible,
+  getPortfolioSection, setPortfolioSection, onPortfolioSectionChange, portfolioSectionLabel, latestSectionValue,
+} from './src/total-chart.js';
+import { portfolioCoins } from './src/coin-history.js';
+import { coinSection, isPortfolioSection } from './src/chart-sections.js';
 import { setChartTypeIcons } from './src/toolbar-icons.js';
 import { portfolioState } from './persist.js';
 import { onStateLoaded, save } from './src/host/persist.js';
@@ -38,7 +43,7 @@ import { chartLabel, parseMarketQuery, KNOWN_EXCHANGES } from './markets/src/que
 import { queueMarketQuery } from './markets/src/session.js';
 import { hasMarketData } from './src/host/market-data.js';
 import { getTotal } from './src/totals.js';
-import { masked } from './src/privacy.js';
+import { isPrivate, masked, onPrivacyChange } from './src/privacy.js';
 
 const CHART_MODE_EVENT = 'atmos:chart-mode';
 let marketsPanelPromise = null;
@@ -140,8 +145,8 @@ function mountChartPanel(contentEl, context) {
           const items = [...(portfolioState.extraCharts || [])];
           items[index] = { ...items[index], ...patch }; portfolioState.extraCharts = items; save();
         };
-        const sources = hasMarketData() ? ['total', 'spot', 'perp', 'market'] : ['total', 'spot', 'perp'];
-        let selectedSource = sources.includes(saved.source) ? saved.source : ['perp', 'spot', 'total'][index];
+        // 'market', or a portfolio section ('total', 'spot', 'perp', 'coin:SOL').
+        let selectedSource = isPortfolioSection(saved.source) || (saved.source === 'market' && hasMarketData()) ? saved.source : ['perp', 'spot', 'total'][index];
         const body = document.createElement('div'); body.className = 'finance-extra-body';
         host.append(body);
         let viewContext = null;
@@ -159,33 +164,22 @@ function mountChartPanel(contentEl, context) {
           });
           const toolbar = body.querySelector('.finance-portfolio-toolbar, .mq-toolbar');
           const { tickerPicker, syncTickerPickerLabel: syncExtraLabel } = createTickerPicker(viewContext,
-            () => selectedSource === 'market' ? chartLabel(portfolioState.extraCharts?.[index]?.query || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'][index]) : 'Portfolio',
-            query => {
-              selectedSource = query ? 'market' : 'total';
-              update(query ? { source: selectedSource, query } : { source: selectedSource });
+            () => selectedSource === 'market' ? chartLabel(portfolioState.extraCharts?.[index]?.query || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'][index]) : portfolioSectionLabel(selectedSource),
+            selection => {
+              if (typeof selection === 'string') {
+                selectedSource = 'market';
+                update({ source: selectedSource, query: selection });
+              } else {
+                selectedSource = isPortfolioSection(selection?.section) ? selection.section : 'total';
+                update({ source: selectedSource });
+              }
               render();
             },
-            () => selectedSource === 'market' ? (portfolioState.extraCharts?.[index]?.query || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'][index]) : null);
+            () => selectedSource === 'market' ? (portfolioState.extraCharts?.[index]?.query || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'][index]) : null,
+            () => (selectedSource === 'market' ? null : selectedSource));
           syncLabel = syncExtraLabel;
           toolbar.prepend(tickerPicker);
           body.appendChild(createToolbarHandle(viewContext));
-          const tabs = document.createElement('div');
-          tabs.setAttribute('role', 'group');
-          tabs.setAttribute('aria-label', 'Portfolio section');
-          for (const key of selectedSource === 'market' ? [] : ['spot', 'perp', 'total']) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.dataset.portfolioSection = key;
-            button.textContent = key[0].toUpperCase() + key.slice(1);
-            button.classList.toggle('is-active', selectedSource === key);
-            button.setAttribute('aria-pressed', String(selectedSource === key));
-            viewContext.listen(button, 'click', () => {
-              if (selectedSource === key) return;
-              selectedSource = key; update({ source: key }); render();
-            });
-            tabs.appendChild(button);
-          }
-          if (tabs.childElementCount) toolbar.querySelector('.finance-toolbar-scroll').prepend(tabs);
           setChartTypeIcons(toolbar);
         };
         child.onCleanup(() => viewContext?.dispose());
@@ -307,11 +301,16 @@ function mountChartPanel(contentEl, context) {
   // catalog/category service here, so this lists the same watchlist prices
   // the Markets sidebar already tracks (markets/src/watchlist-data.js polls
   // them continuously via a boot hook, regardless of chart mode) rather than
-  // browsing the whole exchange. Portfolio is always the pinned first row.
+  // browsing the whole exchange. Two sections: Portfolio (the total, as a
+  // card, then Spot, Perp and each coin you hold, every one a chart of what
+  // it's worth) and Markets (your coins' and the watchlist's prices).
+  // onSelect(selection): a market query ("BTCUSDT coinbase"), or
+  // { section } for a portfolio chart ('total', 'spot', 'perp', 'coin:SOL').
   // getQuery(): the chart's current market query, or null while it shows the
-  // portfolio. The exchange row starts from that query's exchanges (none
-  // named = All) and applies to the current chart and to tickers picked here.
-  function createTickerPicker(context, getLabel, onSelect, getQuery = () => null) {
+  // portfolio; getSection(): the portfolio section it shows, or null. The
+  // exchange row starts from that query's exchanges (none named = All) and
+  // applies to the current chart and to tickers picked here.
+  function createTickerPicker(context, getLabel, onSelect, getQuery = () => null, getSection = () => (getQuery() ? null : 'total')) {
     const tickerPicker = document.createElement('div');
     tickerPicker.className = 'finance-ticker-picker';
     const tickerPickerButton = document.createElement('button');
@@ -383,7 +382,8 @@ function mountChartPanel(contentEl, context) {
       : price >= 1 ? '$' + price.toFixed(2) : '$' + price.toPrecision(4);
     const formatTickerChange = change => change == null ? '' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
     const formatShare = share => `${Math.round(share * 100)}%`;
-    const formatTotal = masked(total => `${total.symbol}${total.value.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    const formatAmount = masked(value => `${getTotal().symbol}${value.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    const formatTotal = total => formatAmount(total.value);
     // Core's shared semantic palette (positive/negative/neutral).
     const colorForTickerChange = colorForChange;
 
@@ -443,27 +443,47 @@ function mountChartPanel(contentEl, context) {
       row.querySelector('.finance-ticker-picker-sub').textContent = sub;
       return row;
     };
-    // The Portfolio entry: the balance chart is what the picker leaves for
-    // most of the time, so it is a card of its own above the lists, with the
+    // The total: the balance chart is what the picker leaves for most of
+    // the time, so it is a card of its own at the top of Portfolio, with the
     // live total, rather than one more row.
     const portfolioRow = () => {
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = `finance-ticker-picker-row finance-ticker-picker-portfolio${getQuery() ? '' : ' is-current'}`;
+      row.className = `finance-ticker-picker-row finance-ticker-picker-portfolio${getSection() === 'total' ? ' is-current' : ''}`;
       row.setAttribute('role', 'option');
       row.dataset.action = String(actions.size);
-      actions.set(row.dataset.action, () => { closeTickerPicker(); onSelect(null); });
+      row.dataset.section = 'total';
+      actions.set(row.dataset.action, () => { closeTickerPicker(); onSelect({ section: 'total' }); });
       const total = getTotal();
-      const holdings = heldSymbols().length;
+      const holdings = isPrivate() ? 0 : heldSymbols().length; // private: not even how many
       const sources = total.liveCount + total.pendingCount;
       const detail = [holdings ? `${holdings} holding${holdings === 1 ? '' : 's'}` : null,
         sources ? `${sources} source${sources === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ') || 'Balance chart';
       row.innerHTML = `<span class="finance-ticker-picker-portfolio-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 5-7 4 4"/></svg></span>
-        <span class="finance-ticker-picker-portfolio-text"><span class="finance-ticker-picker-symbol">Portfolio</span><span class="finance-ticker-picker-sub"></span></span>
+        <span class="finance-ticker-picker-portfolio-text"><span class="finance-ticker-picker-symbol">Total</span><span class="finance-ticker-picker-sub"></span></span>
         <span class="finance-ticker-picker-portfolio-total"></span>`;
       row.querySelector('.finance-ticker-picker-sub').textContent = detail;
       row.querySelector('.finance-ticker-picker-portfolio-total').textContent = total.ready && sources ? formatTotal(total) : '';
       row.title = 'Show the balance chart';
+      return row;
+    };
+    // Spot, Perp and a coin: what each is worth over time, and its share of the total.
+    const sectionRow = (section, name, value, title) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `finance-ticker-picker-row finance-ticker-picker-section${getSection() === section ? ' is-current' : ''}`;
+      row.setAttribute('role', 'option');
+      row.dataset.action = String(actions.size);
+      row.dataset.section = section;
+      actions.set(row.dataset.action, () => { closeTickerPicker(); onSelect({ section }); });
+      row.innerHTML = '<span class="finance-ticker-picker-symbol"></span><span class="finance-ticker-picker-share"></span><span class="finance-ticker-picker-value"></span>';
+      const total = latestSectionValue('total');
+      // Amounts once the exchange rates are in (as the total's), else none.
+      const known = value != null && Number.isFinite(value) && getTotal().ready;
+      row.querySelector('.finance-ticker-picker-symbol').textContent = name;
+      row.querySelector('.finance-ticker-picker-share').textContent = known && total > 0 ? formatShare(Math.max(0, value) / total) : '';
+      row.querySelector('.finance-ticker-picker-value').textContent = known ? formatAmount(value) : '';
+      row.title = title;
       return row;
     };
     const openSymbol = symbol => { closeTickerPicker(); onSelect(withExchanges(`${symbol}USDT`)); };
@@ -481,22 +501,39 @@ function mountChartPanel(contentEl, context) {
       actions.clear();
       const query = tickerSearch.value.trim().toUpperCase();
       const matches = symbol => !query || symbol.includes(query);
+      const named = (...names) => !query || names.some(name => name.startsWith(query));
       const byChange = (a, b) => (tickerData[b]?.change ?? -Infinity) - (tickerData[a]?.change ?? -Infinity);
-      const held = heldSymbols().filter(matches).sort(byChange);
-      const heldSet = new Set(heldSymbols());
-      const watched = watchlistState.tickers.filter(symbol => !heldSet.has(symbol) && matches(symbol)).sort(byChange);
-      const known = new Set([...heldSet, ...watchlistState.tickers]);
       const items = [];
-      if (!query) items.push(portfolioRow());
-      if (held.length) items.push(heading('Holdings'), ...held.map(symbol => symbolRow(symbol, { held: true })));
-      if (watched.length) items.push(heading('Watchlist'), ...watched.map(symbol => symbolRow(symbol, { removable: true })));
-      if (!query && !watched.length) {
+
+      // Portfolio. Private mode hides what you hold: no coins here or in
+      // Markets, where a coin you hold is found as any other (on the
+      // watchlist, or looked up).
+      const portfolio = [];
+      if (named('TOTAL', 'PORTFOLIO', 'BALANCE')) portfolio.push(portfolioRow());
+      if (named('SPOT')) portfolio.push(sectionRow('spot', 'Spot', latestSectionValue('spot'), 'Your spot holdings over time'));
+      if (named('PERP', 'PERPS', 'FUTURES')) portfolio.push(sectionRow('perp', 'Perp', latestSectionValue('perp'), 'Your perp accounts over time'));
+      for (const coin of isPrivate() ? [] : portfolioCoins()) {
+        if (!matches(coin.symbol)) continue;
+        portfolio.push(sectionRow(coinSection(coin.symbol), coin.symbol, coin.value, `What your ${coin.symbol} has been worth over time`));
+      }
+      if (portfolio.length) items.push(heading('Portfolio'), ...portfolio);
+
+      // Markets: without Market Data there are no market charts.
+      const markets = hasMarketData();
+      const heldNow = !markets || isPrivate() ? [] : heldSymbols();
+      const heldSet = new Set(heldNow);
+      const held = heldNow.filter(matches).sort(byChange);
+      const watched = markets ? watchlistState.tickers.filter(symbol => !heldSet.has(symbol) && matches(symbol)).sort(byChange) : [];
+      const known = new Set([...heldSet, ...watchlistState.tickers]);
+      if (held.length || watched.length) {
+        items.push(heading('Markets'), ...held.map(symbol => symbolRow(symbol, { held: true })), ...watched.map(symbol => symbolRow(symbol, { removable: true })));
+      } else if (markets && !query) {
         const hint = document.createElement('div');
         hint.className = 'finance-ticker-picker-hint';
         hint.textContent = 'Type a ticker above to watch it here.';
-        items.push(heading('Watchlist'), hint);
+        items.push(heading('Markets'), hint);
       }
-      if (query && !known.has(query)) {
+      if (markets && query && !known.has(query)) {
         const symbol = /(?:USDT|USDC|USD)$/.test(query) ? query : `${query}USDT`;
         items.push(heading('Not on your lists'),
           actionRow(`Look up ${query}`, 'Open its chart', () => { closeTickerPicker(); onSelect(withExchanges(symbol)); }),
@@ -534,8 +571,10 @@ function mountChartPanel(contentEl, context) {
       tickerPickerPanel.hidden = false;
       tickerPickerButton.setAttribute('aria-expanded', 'true');
       tickerSearch.value = '';
+      tickerSearch.placeholder = hasMarketData() ? 'Search, or type a ticker to add…' : 'Search your portfolio…';
       const current = getQuery();
       selectedExchanges = (current && parseMarketQuery(current).exchanges) || [];
+      exchangeRow.hidden = !hasMarketData();
       renderExchanges();
       renderTickerPicker();
       tickerSearch.focus();
@@ -549,9 +588,12 @@ function mountChartPanel(contentEl, context) {
       if (event.key === 'ArrowDown') { event.preventDefault(); tickerList.querySelector('[role="option"]')?.focus(); return; }
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      // Enter: the first row that matches, else Portfolio when nothing was typed.
-      const first = tickerList.querySelector('.finance-ticker-picker-row:not(.finance-ticker-picker-portfolio)');
-      (tickerSearch.value.trim() ? first : tickerList.querySelector('.finance-ticker-picker-portfolio'))?.click();
+      // Enter: a ticker typed in full is its market chart (your coin's own
+      // chart is a click away, above it); else the first row shown (the
+      // total, when nothing was typed).
+      const typed = tickerSearch.value.trim().toUpperCase();
+      const market = typed ? [...tickerList.querySelectorAll('.finance-ticker-picker-row[data-symbol]')].find(row => row.dataset.symbol === typed) : null;
+      (market || tickerList.querySelector('.finance-ticker-picker-row'))?.click();
     });
     context.listen(tickerList, 'keydown', event => {
       const row = event.target.closest('[role="option"]');
@@ -570,26 +612,32 @@ function mountChartPanel(contentEl, context) {
       closeTickerPicker();
     });
     context.onCleanup(onTickerUpdate(() => { renderTickerPicker(); syncTickerPickerLabel(); }));
+    // A coin's name is masked in private mode, in the label and the list.
+    context.onCleanup(onPrivacyChange(() => { renderTickerPicker(); syncTickerPickerLabel(); }));
     context.onCleanup(onPriceColorChange(renderTickerPicker));
     renderTickerPicker();
 
     syncTickerPickerLabel();
-    // Without Market Data there are no market charts to switch to.
-    if (!hasMarketData()) tickerPicker.hidden = true;
     return { tickerPicker, syncTickerPickerLabel };
   }
 
   let activeMode = null;
   const { tickerPicker, syncTickerPickerLabel } = createTickerPicker(context,
-    () => activeMode === 'markets' ? chartLabel(marketQueryState.lastQuery) : 'Portfolio',
-    query => {
-      if (!query) { showMode('portfolio'); return; }
-      updateTickerActive(parseMarketQuery(query).symbol.replace(/USDT$/, ''));
-      queueMarketQuery(query);
+    () => activeMode === 'markets' ? chartLabel(marketQueryState.lastQuery) : portfolioSectionLabel(getPortfolioSection()),
+    selection => {
+      if (typeof selection !== 'string') {
+        setPortfolioSection(selection?.section);
+        showMode('portfolio');
+        return;
+      }
+      updateTickerActive(parseMarketQuery(selection).symbol.replace(/USDT$/, ''));
+      queueMarketQuery(selection);
       showMode('markets');
     },
-    () => activeMode === 'markets' ? marketQueryState.lastQuery : null);
+    () => activeMode === 'markets' ? marketQueryState.lastQuery : null,
+    () => activeMode === 'markets' ? null : getPortfolioSection());
   context.onCleanup(onQueryRemembered(() => syncTickerPickerLabel()));
+  context.onCleanup(onPortfolioSectionChange(() => syncTickerPickerLabel()));
   let requestedMode = 'portfolio';
   let disposeMode = () => {};
   // Builds the next mode's whole DOM tree off-screen (detached, not yet a
@@ -608,7 +656,6 @@ function mountChartPanel(contentEl, context) {
     const nextMode = mode === 'markets' && hasMarketData() ? 'markets' : 'portfolio';
     requestedMode = nextMode;
     if (nextMode === activeMode) return;
-    const previousDispose = disposeMode;
     let nextDispose = () => {};
     // A plain block div would collapse — total-chart.js's and markets'
     // own root elements both assume `height:100%` resolves against a
@@ -620,7 +667,9 @@ function mountChartPanel(contentEl, context) {
       const modeContext = createModeContext(context);
       try {
         const { mountMarketsPanel } = await loadMarketsPanel();
-        if (requestedMode !== nextMode || context.signal?.aborted) {
+        // Asked twice while loading (the mode restored, then a chart asked
+        // for): the first one in is the one shown; this one goes.
+        if (requestedMode !== nextMode || nextMode === activeMode || context.signal?.aborted) {
           modeContext.dispose();
           return;
         }
@@ -643,7 +692,9 @@ function mountChartPanel(contentEl, context) {
     // indicators/settings, drag handle) into their new home — moving them
     // now, rather than before the swap, means they're never visibly absent
     // from the *old*, still-displayed toolbar for even a frame.
-    previousDispose();
+    // The mode showing now (not the one showing when this began: another
+    // switch may have finished meanwhile, and its chart must go too).
+    disposeMode();
     stage.replaceChildren(container);
     disposeMode = nextDispose;
     activeMode = nextMode;

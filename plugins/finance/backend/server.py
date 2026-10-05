@@ -14,18 +14,29 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 API_VERSION = 1
 PAIRING_PREFIX = "atmos-finance:"
 DEFAULT_DB = "/var/lib/atmos-portfolio/portfolio.sqlite3"
 MAX_HISTORY_ROWS = 10_000
-MAX_HOLDINGS_HISTORY_ROWS = 50_000
+# At most this many rows in one /v1/holdings-history answer: about 40 MB of
+# Python while it's built, under the service's 160 MB (0.9.0 allowed 50,000;
+# two such answers at once had the service killed for memory). Finance 1.1
+# reads one poll at a time (a few hundred rows).
+MAX_HOLDINGS_HISTORY_ROWS = 20_000
+# The history and holdings-history answers are built one at a time: they're
+# what takes the memory and the CPU, and the service has a quarter of one.
+HEAVY_ROUTES = frozenset({"/v1/history", "/v1/holdings-history"})
+_heavy = threading.BoundedSemaphore(1)
+# Timestamps per query when reading the holdings behind chosen samples.
+SAMPLES_PER_QUERY = 500
 RESOLUTIONS_MS = {"raw": 0, "5m": 300_000, "1h": 3_600_000, "1d": 86_400_000}
 HOUR_MS = 3_600_000
 DAY_MS = 86_400_000
@@ -432,7 +443,7 @@ def history(db_path: str, start_ms: int, end_ms: int, resolution: str,
         adjustments: dict[int, dict[str, float]] = {}
         if (excluded or excluded_sources or excluded_groups) and rows:
             conditions = ["(source_id = ? AND holding_id = ?)" for _ in (excluded or set())]
-            params: list[object] = [start_ms, end_ms]
+            params: list[object] = []
             for source_id, holding_id in excluded or set():
                 params.extend((source_id, holding_id))
             if excluded_sources:
@@ -442,21 +453,32 @@ def history(db_path: str, start_ms: int, end_ms: int, resolution: str,
             if group_sources:
                 conditions.append(f"source_id IN ({','.join('?' for _ in group_sources)})")
                 params.extend(group_sources)
-            selected = {row["ts_ms"] for row in rows}
-            for item in db.execute(
-                f"SELECT ts_ms,source_id,holding_id,kind,value,meta FROM holdings_history "
-                f"WHERE ts_ms BETWEEN ? AND ? AND ({' OR '.join(conditions)})",
-                params,
-            ):
-                if item["ts_ms"] not in selected:
-                    continue
-                try:
-                    meta = json.loads(item["meta"]) if item["meta"] else {}
-                except (TypeError, ValueError):
-                    meta = {}
-                meta = _legacy_meta(item["source_id"], item["kind"], meta)
-                instrument = meta.get("instrument")
-                group = meta.get("group") or None
+            # Only the holdings behind the points returned (each bucket's
+            # newest sample), not every poll in the range: a 5-minute tier
+            # over four weeks reads a fifth of the rows. By primary key.
+            selected = [row["ts_ms"] for row in rows]
+            # A holding's meta is the same poll after poll: read once.
+            meta_seen: dict[tuple, tuple] = {}
+
+            def items():
+                for start in range(0, len(selected), SAMPLES_PER_QUERY):
+                    chunk = selected[start:start + SAMPLES_PER_QUERY]
+                    yield from db.execute(
+                        f"SELECT ts_ms,source_id,holding_id,kind,value,meta FROM holdings_history "
+                        f"WHERE ts_ms IN ({','.join('?' for _ in chunk)}) AND ({' OR '.join(conditions)})",
+                        [*chunk, *params],
+                    )
+
+            for item in items():
+                key = (item["source_id"], item["kind"], item["meta"])
+                if key not in meta_seen:
+                    try:
+                        meta = json.loads(item["meta"]) if item["meta"] else {}
+                    except (TypeError, ValueError):
+                        meta = {}
+                    meta = _legacy_meta(item["source_id"], item["kind"], meta)
+                    meta_seen[key] = (meta.get("instrument"), meta.get("group") or None)
+                instrument, group = meta_seen[key]
                 source_match = item["source_id"] in (excluded_sources or set())
                 group_match = (item["source_id"], group) in (excluded_groups or set())
                 holding_match = (item["source_id"], item["holding_id"]) in (excluded or set())
@@ -754,6 +776,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         # Never log authorization headers or query values.
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
 
+    def log_request(self, code: object = "-", size: object = "-") -> None:
+        # send_json() logs each answer itself, with its time and size and
+        # without the query (it names holdings).
+        pass
+
     def send_json(self, status: HTTPStatus, payload: object) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode()
         self.send_response(status)
@@ -762,7 +789,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(body)
+        started = getattr(self, "_started", None)
+        took = f"{(time.monotonic() - started) * 1000:.0f} ms" if started is not None else "-"
+        path = urlparse(self.path).path
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Finance stopped waiting (it gives up after 20 s): say so, no traceback.
+            self.log_message("%s %d %s %d bytes, but the client had gone", path, int(status), took, len(body))
+            self.close_connection = True
+            return
+        self.log_message("%s %d %s %d bytes", path, int(status), took, len(body))
 
     def authorized(self) -> str | None:
         """The paired device making this request, or None. The shared token
@@ -777,6 +814,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         return device_for_token(self.server.db_path, token)
 
     def do_GET(self) -> None:
+        self._started = time.monotonic()
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             # Unauthenticated, so it says only that the service is up.
@@ -791,7 +829,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
             return
         try:
-            self.route(parsed)
+            if parsed.path in HEAVY_ROUTES:
+                with _heavy:
+                    self.route(parsed)
+            else:
+                self.route(parsed)
         except ValueError as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 

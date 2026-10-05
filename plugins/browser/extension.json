@@ -1,10 +1,10 @@
 {
   "apiVersion": 4,
   "engines": {
-    "atmos": ">=0.19.2"
+    "atmos": ">=0.20.0"
   },
   "tier": "first-party",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -37,7 +37,30 @@
     },
     "boot": {
       "entry": "boot.js"
-    }
+    },
+    "commands": [
+      {
+        "name": "new-tab",
+        "args": "address or search",
+        "about": "Open a new tab, there",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "tab",
+        "args": "tab",
+        "about": "Go to one of your tabs",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "close-tab",
+        "args": "tab",
+        "about": "Close the current tab, or one by name",
+        "takesArgs": true,
+        "suggests": true
+      }
+    ]
   },
   "permissions": {
     "web": true

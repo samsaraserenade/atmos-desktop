@@ -52,6 +52,7 @@ fs.writeFileSync(path.join(probe, 'extension.json'), JSON.stringify({
       { name: 'wipe', about: 'Wipe the slate', suggests: true },
       { name: 'step', about: 'Two steps' },
       { name: 'boom', about: 'Breaks' },
+      { name: 'look', about: 'Shows its panel' },
       { name: 'switch', about: 'Atmos\'s own name' },
     ],
   },
@@ -97,6 +98,7 @@ atmos.commands.handle('switch', () => ({ done: 'never' }));
 fs.writeFileSync(path.join(probe, 'boot.js'), `
 import atmos from 'atmos-sdk';
 atmos.commands.handle('roll', ({ args }) => ({ done: 'Rolled ' + (args || 'a die') + ' (boot)' }));
+atmos.commands.handle('look', async () => { await atmos.panel.show(); return { done: 'Looked' }; });
 `);
 fs.writeFileSync(path.join(probe, 'sidebar.js'), 'document.body.textContent = "Probe widget";\n');
 
@@ -191,7 +193,7 @@ const check = (name, ok, detail) => {
     const summary = await page.evaluate(async () => (await window.atmosCore.listPlugins()).find(plugin => plugin.id === 'command-probe')?.trust?.permissionSummary
       ?? (await window.atmosCore.listPlugins()).find(plugin => plugin.id === 'command-probe')?.permissionSummary ?? null);
     check('the extension\'s commands are on what it\'s approved on, never Atmos\'s own names',
-      Array.isArray(summary) && summary.includes('Adds commands to Atmos\'s command bar: rev/roll, rev/pick, rev/wipe, rev/step, rev/boom'), summary);
+      Array.isArray(summary) && summary.includes('Adds commands to Atmos\'s command bar: rev/roll, rev/pick, rev/wipe, rev/step, rev/boom, rev/look'), summary);
 
     // ── In a panel with no bar of its own (Atmos Browser) ────────────────
     const browser = await panelBox('plugin:browser');
@@ -202,7 +204,11 @@ const check = (name, ok, detail) => {
     check('…54 px, as wide as the panel, on its bottom edge',
       now.field && browser && now.field.height === 54 && Math.abs(now.field.width - browser.width) <= 1 && Math.abs(now.field.bottom - browser.bottom) <= 1 && Math.abs(now.field.left - browser.left) <= 1, { field: now.field, browser });
     check('the list rises from it, as wide', now.list && Math.abs(now.list.bottom - now.field.top) <= 1 && now.list.width === now.field.width, { list: now.list, field: now.field });
-    check('nothing of the probe shows: Atmos\'s commands only', JSON.stringify(now.rows) === JSON.stringify(['rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch']), now.rows);
+    const headings = await page.evaluate(() => [...document.querySelectorAll('#command-bar-list .command-bar-heading')].map(item => item.textContent.trim()));
+    check('every command, under its extension\'s name: the browser\'s first (the panel it\'s for), then Atmos\'s, then the rest by name',
+      JSON.stringify(now.rows.slice(0, 9)) === JSON.stringify(['Atmos Browser', 'rev/new-tab', 'rev/tab', 'rev/close-tab', 'Atmos', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch'])
+      && JSON.stringify(headings) === JSON.stringify(['Atmos Browser', 'Atmos', 'Audio Player', 'Command Probe · community', 'Finance', 'Matrix Chat'])
+      && now.rows.includes('rev/roll') && now.rows.includes('rev/chart') && now.rows.includes('rev/go') && now.sources.every(source => source === ''), { rows: now.rows, headings, sources: now.sources });
     await page.screenshot({ path: path.join(out, '01-own-bar.png') });
 
     await type('ro');
@@ -218,6 +224,34 @@ const check = (name, ok, detail) => {
     check('with its panel away, it runs in its background frame; the bar closes and says what happened',
       !now.open && now.flash === 'Rolled 2d6 (boot)', now);
     await page.screenshot({ path: path.join(out, '02-flash.png') });
+    await wait(3600);
+
+    // Shift+Enter: and go there. Alt+Enter: stay here, whatever the command asks.
+    const panelNow = () => page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).getActivePanelPluginId());
+    await press('Control+Backslash');
+    await type('rev/look');
+    const foot = await page.evaluate(() => document.querySelector('#command-bar-list .command-bar-foot')?.textContent.trim());
+    await page.keyboard.press('Alt+Enter');
+    await wait(800);
+    const stayed = { panel: await panelNow(), flash: (await state()).flash };
+    await wait(3600);
+    await press('Control+Backslash');
+    await type('rev/look');
+    await press('Enter');
+    await wait(800);
+    const looked = { panel: await panelNow(), flash: (await state()).flash };
+    await page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('browser'));
+    await wait(3600);
+    await press('Control+Backslash');
+    await type('rev/roll 3');
+    await page.keyboard.press('Shift+Enter');
+    await wait(800);
+    const went = { panel: await panelNow(), flash: (await state()).flash };
+    check('Alt+Enter runs a command where you are (its panel.show() does nothing); Enter as it does; Shift+Enter goes to its panel after; the keys line says so',
+      stayed.panel === 'browser' && stayed.flash === 'Looked' && looked.panel === 'command-probe' && looked.flash === 'Looked'
+      && went.panel === 'command-probe' && went.flash === 'Rolled 3 (boot)' && /Shift\+Enter go there · Alt\+Enter stay here/.test(foot || ''),
+      { foot, stayed, looked, went });
+    await page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('browser'));
     await wait(3600);
 
     // Atmos's own: a panel by name, settings pages, Tab, Esc, the mouse.
@@ -299,9 +333,9 @@ const check = (name, ok, detail) => {
     await press('Control+Backslash');
     now = await state();
     check('over a panel that has a bar, Atmos\'s bar lies on it', now.where === 'panel bar' && probeBox && Math.abs(now.field.bottom - probeBox.bottom) <= 1 && now.field.height === 54, { now, probeBox });
-    check('its commands come first while it shows, then Atmos\'s; never Atmos\'s names from it',
-      JSON.stringify(now.rows) === JSON.stringify(['rev/roll', 'rev/pick', 'rev/wipe', 'rev/step', 'rev/boom', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch'])
-      && now.sources.slice(0, 5).every(source => source === 'Command Probe · community') && now.sources[5] === '', now);
+    check('its commands come first while it shows, under its name, then Atmos\'s; never Atmos\'s names from it',
+      JSON.stringify(now.rows.slice(0, 12)) === JSON.stringify(['Command Probe · community', 'rev/roll', 'rev/pick', 'rev/wipe', 'rev/step', 'rev/boom', 'rev/look', 'Atmos', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch'])
+      && now.rows.filter(row => row === 'rev/switch').length === 1, now);
     await page.screenshot({ path: path.join(out, '03-panel-bar.png') });
     await type('rev/roll 3');
     await press('Enter');

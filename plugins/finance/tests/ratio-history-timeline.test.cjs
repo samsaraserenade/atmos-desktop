@@ -64,3 +64,56 @@ assert.equal(timelineResult.after.ts, 2000, 'a timestamp after every cached poll
 assert.equal(timelineResult.empty, null, 'an empty cache must report "nothing to show", not throw');
 assert.equal(timelineResult.nullCache, null, 'a missing cache (e.g. before the first fetch resolves) must report "nothing to show", not throw');
 console.log('Passed: holdings-history rows bucket by poll and resolve to the nearest snapshot at or before a hovered time');
+
+// ── loadSnapshotNear: one poll, read from a few minutes of polls ──────────
+// (the Movers' "a day ago" read every poll of 30 hours, up to 50,000 rows,
+// and the server ran out of memory).
+(async () => {
+  const MIN = 60_000;
+  const context = vm.createContext({ Map, Set, Promise, Number, Math, Array });
+  vm.runInContext(timelineSource, context);
+  const polls = [10 * MIN, 11 * MIN, 12 * MIN, 200 * MIN];
+  const asked = [];
+  const fetch = async ({ from, to }) => {
+    asked.push([from / MIN, to / MIN]);
+    return polls.filter(ts => ts >= from && ts <= to).flatMap(ts => [
+      { ts_ms: ts, source_id: 'a', symbol: 'SOL', value: 1 }, { ts_ms: ts, source_id: 'b', symbol: 'ETH', value: 2 },
+    ]);
+  };
+  const near = (at, options) => context.loadSnapshotNear(at, { ...options, fetch });
+
+  const at13 = await near(13 * MIN, { before: 6 * 60 * MIN });
+  assert.equal(at13.ts, 12 * MIN, 'the last poll at or before');
+  assert.equal(at13.holdings.length, 2);
+  assert.deepEqual(asked, [[8, 13]], 'five minutes of polls, one read');
+
+  asked.length = 0;
+  const at100 = await near(100 * MIN, { before: 6 * 60 * MIN });
+  assert.equal(at100.ts, 12 * MIN, 'a gap: wider windows, narrowest first');
+  assert.deepEqual(asked, [[95, 100], [40, 100], [-260, 100]]);
+
+  asked.length = 0;
+  assert.equal(await near(100 * MIN, { before: 6 * 60 * MIN }), at100, 'asked again: kept');
+  assert.deepEqual(asked, []);
+
+  assert.equal(await near(5 * MIN, { before: 3 * MIN }), null, 'none that close: nothing');
+  asked.length = 0;
+  const ahead = await near(150 * MIN, { before: 30 * MIN, after: 6 * 60 * MIN });
+  assert.equal(ahead.ts, 200 * MIN, 'none before: the first one after, within `after`');
+  assert.deepEqual(asked, [[145, 150], [120, 150], [150, 155], [150, 210]]);
+
+  assert.deepEqual(Array.from(context.snapshotWindows(48 * 60 * MIN)).map(ms => ms / MIN), [5, 60, 360, 2880]);
+  assert.deepEqual(Array.from(context.snapshotWindows(12 * 60 * MIN)).map(ms => ms / MIN), [5, 60, 360, 720]);
+  assert.deepEqual(Array.from(context.snapshotWindows(0)), []);
+
+  let failing = true;
+  const flaky = async range => { if (failing) throw new Error('down'); return fetch(range); };
+  await assert.rejects(context.loadSnapshotNear(11 * MIN, { fetch: flaky }), /down/);
+  failing = false;
+  assert.equal((await context.loadSnapshotNear(11 * MIN, { fetch: flaky })).ts, 11 * MIN, 'a failed read is asked again');
+
+  const balance = readFileSync(`${__dirname}/../src/balance.js`, 'utf8');
+  assert.doesNotMatch(balance, /loadHoldingsTimeline\(/, 'no range of every poll is read for one snapshot');
+  assert.match(balance, /if \(!_compositionEl\) \{\r?\n\s+if \(minute !== _relayedMinute\)/, 'a frame without the composition bar reads nothing, it tells the frame that has it');
+  console.log('Passed: a snapshot is read from a few minutes of polls, wider only when there\'s none, and kept');
+})().catch(error => { console.error(error); process.exitCode = 1; });

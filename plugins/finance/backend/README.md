@@ -55,17 +55,28 @@ sudo -u atmos-portfolio python3 /opt/atmos-portfolio/server.py prune --vacuum
 - `GET /v1/history?from=...&to=...&resolution=raw|5m|1h|1d` — bounded history
   (at most 10,000 points).
 - `GET /v1/holdings-history?from=...&to=...` — itemized point-in-time holdings
-  (at most 50,000 rows).
+  (at most 20,000 rows; 50,000 before 0.9.1). Ask for a few minutes around
+  the time you want, as Finance does, not a day of every poll.
 
 Both say `"truncated": true` when the limit cut the answer short; the oldest
 points are returned, so ask again from the last `t`/`ts_ms`. `/v1/info`
 includes the retention settings. Money is always USD; Finance converts.
 
+These two answers are built one at a time (0.9.1): they're what takes the
+memory and the CPU, and the service is capped at 160 MB and a quarter of a
+CPU. Before, two large holdings-history answers at once could get it killed
+for memory and restarted (`systemctl show atmos-portfolio -p NRestarts`).
+Each answer is logged with its path, status, time and size, never its
+query: `journalctl -u atmos-portfolio` shows what's slow.
+
 `/v1/history` also accepts repeated `exclude=source_id|holding_id`,
 `excludeSource=source_id`, and `excludeGroup=source_id|group` parameters.
 Hyperliquid supports the `perp` and `earn` groups.
 Excluded rows are subtracted from Total, Spot, Perps, invested, and cash at
-each stored poll without deleting the underlying itemized history.
+each point returned without deleting the underlying itemized history; only
+the holdings behind those points are read (each bucket's newest sample, by
+primary key), not every poll in the range. Finance draws one coin's history
+as the total less the total without it, so the two line up exactly.
 
 Holdings carry a stable `holding_id` plus small classification metadata for
 dApp, protocol type, exchange/counterparty, chain, and wallet address. Equal

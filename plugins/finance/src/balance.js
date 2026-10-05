@@ -28,14 +28,15 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { privateFormat } from './privacy.js';
+import { isPrivate, MASK, privateFormat } from './privacy.js';
 import { smoothingAlpha } from './chart-service.js';
 import { getPortfolioComposition, compositionFromHoldingsSnapshot } from './totals.js';
 import { renderCompositionMarkup } from './composition.js';
-import { loadHoldingsTimeline, nearestSnapshot } from './holdings-timeline.js';
+import { loadSnapshotNear } from './holdings-timeline.js';
 import { computeDailyAttribution } from './daily-attribution.js';
 import { portfolioState } from '../persist.js';
 import { onStateLoaded, save } from './host/persist.js';
+import { atmos } from './host/frame.js';
 
 // Share the expensive holdings walk across synchronous tile renders, just
 // like watchlist-data.js. Expire before the next tick so updates stay fresh.
@@ -75,6 +76,7 @@ let _lastBalanceFitTemplate = null;
 // the deliberate, immediate-apply triggers (font change, container
 // resize, first paint).
 let _pendingFitTimer = null;
+let _pendingFitTemplate = null; // the template that timer is for
 
 // Cached on-screen width of the mini chart SVG, kept in sync by a
 // ResizeObserver rather than measured with getBoundingClientRect() inside
@@ -126,11 +128,14 @@ let _balanceLayerReleaseTimer = null;
 // live at that moment instead of the current live totals, reverting via
 // clearHistoricalComposition() on pointerleave. See holdings-timeline.js for
 // the on-demand fetch/cache this is built on.
-const HOLDINGS_TIMELINE_LOOKBACK_MS = 30 * 24 * 60 * 60_000; // cap the on-demand fetch to the last 30 days
 let _hoveringHistory = false;
-let _holdingsTimelineCache = null;
-let _holdingsTimelineLoading = false;
-let _holdingsTimelineRangeKey = null;
+// The poll under the pointer is read once it rests (a snapshot per minute
+// hovered, kept: moving back is instant); one read at a time.
+const HOVER_REST_MS = 150;
+let _hoverTarget = null;
+let _hoverTimer = null;
+let _hoverReading = false;
+let _relayedMinute = null; // a frame without the bar: the minute last told
 const _balanceAnimMs = 60_000; // Fixed one-minute balance transition.
 // The hero box (sparkline + big figure) no longer has a fixed height that
 // the balance figure has to be squeezed to fit -- a width-constrained
@@ -317,19 +322,17 @@ export function removeBalanceFont(id) {
 // and the flow split, since both just need "what did I hold ~24h ago".
 
 const HOUR_MS = 60 * 60_000;
-// The Day and Week tiles each compare today's holdings with a poll from
-// that long ago. `lookback` fetches a little further back than the window
-// itself so a missed poll right at the boundary still resolves to something
-// close to "yesterday" (or "last week"), rather than falling through to
-// nearestSnapshot()'s earliest-available fallback and silently comparing
-// against whenever tracking began. `ahead` bounds the fetch on the near
-// side, so a week's comparison reads a few hours of polls, not seven days
-// of them. If the closest poll is further from the target than `tolerance`
-// there's a real gap (a new install, a VPS outage): better to show nothing
-// than label a stale comparison "today".
+// The Day and Week tiles each compare today's holdings with the poll from
+// that long ago, read alone (holdings-timeline.js loadSnapshotNear: a few
+// minutes of polls, wider only if there's none). `lookback` is how much
+// earlier it may be, so a missed poll right at the boundary still resolves
+// to something close to "yesterday" (or "last week"); `ahead`, how much
+// later, when there's none before (tracking began just after). Further than
+// that there's a real gap (a new install, a VPS outage): better to show
+// nothing than label a stale comparison "today".
 const PERIOD_ATTRIBUTION = Object.freeze({
-  '1d': { range: 24 * HOUR_MS, lookback: 6 * HOUR_MS, ahead: 0, tolerance: 36 * HOUR_MS, label: '24H' },
-  '1w': { range: 7 * 24 * HOUR_MS, lookback: 12 * HOUR_MS, ahead: 6 * HOUR_MS, tolerance: 3 * 24 * HOUR_MS, label: '7D' },
+  '1d': { range: 24 * HOUR_MS, lookback: 6 * HOUR_MS, ahead: 0, label: '24H' },
+  '1w': { range: 7 * 24 * HOUR_MS, lookback: 12 * HOUR_MS, ahead: 6 * HOUR_MS, label: '7D' },
 });
 const ATTRIBUTION_REFRESH_MS = 5 * 60_000;
 const MAX_MOVERS = 6; // one list, ranked by the size of the $ move
@@ -455,11 +458,10 @@ async function _refreshAttribution(period = _activePeriod()) {
   const spec = PERIOD_ATTRIBUTION[period];
   if (!spec) return;
   try {
-    const now = Date.now();
-    const target = now - spec.range;
-    const cache = await loadHoldingsTimeline({ from: target - spec.lookback, to: spec.ahead ? target + spec.ahead : now });
-    const snapshot = nearestSnapshot(cache, target);
-    if (!snapshot || Math.abs(target - snapshot.ts) > spec.tolerance) {
+    // To the minute: refreshed every five minutes, a past poll read once.
+    const target = Math.floor((Date.now() - spec.range) / 60_000) * 60_000;
+    const snapshot = await loadSnapshotNear(target, { before: spec.lookback, after: spec.ahead });
+    if (!snapshot) {
       _attribution[period] = null;
     } else {
       const previous = compositionFromHoldingsSnapshot(snapshot.holdings);
@@ -521,7 +523,7 @@ function _renderMovers() {
   // list too instead of only the tiles/ATH -- and so calling this every
   // updateBalanceDisplay() pass (including the once-per-frame path during
   // fullscreen scrubbing) is a cheap no-op on frames where neither moved.
-  const renderKey = `${period}|${symbol}|${up}|${down}|${movers.map(m => `${m.symbol}:${m.valueChange}:${m.percentChange}`).join(',')}`;
+  const renderKey = `${isPrivate()}|${period}|${symbol}|${up}|${down}|${movers.map(m => `${m.symbol}:${m.valueChange}:${m.percentChange}`).join(',')}`;
   if (renderKey === _lastMoversRenderKey) return;
   _lastMoversRenderKey = renderKey;
   _moversEl.querySelector('.pt-mini-list-head').textContent = `MOVERS · ${spec.label}`;
@@ -542,8 +544,10 @@ function _renderMovers() {
     amount.style.color = _hexToRgba(isUp ? up : down, 0.85);
     amount.textContent = amountText;
     values.append(amount);
-    const row = _buildMiniListRow(mover.symbol, values);
-    row.title = `${mover.symbol} · ${amountText}${pctText ? ` (${pctText})` : ''} over the last ${spec.label.toLowerCase()}`;
+    // Private mode hides which coins you hold, not only the amounts.
+    const name = isPrivate() ? MASK : mover.symbol;
+    const row = _buildMiniListRow(name, values);
+    row.title = `${name} · ${amountText}${pctText ? ` (${pctText})` : ''} over the last ${spec.label.toLowerCase()}`;
     return row;
   });
   _moversEl.querySelector('.pt-movers-rows').replaceChildren(...rows);
@@ -564,13 +568,13 @@ function _renderFlow() {
   const colorFor = amount => _hexToRgba(amount >= 0 ? up : down, 0.85);
   // Which symbols are behind a bucket, so a wrong-looking number has a
   // concrete "why" on hover instead of just the total.
-  const contributorsTitle = contributors => contributors.length
+  const contributorsTitle = contributors => contributors.length && !isPrivate()
     ? contributors.slice(0, 4).map(c => `${c.symbol} ${fmt(c.amount)}`).join(', ')
     : null;
   const { depositContributors = [], withdrawalContributors = [] } = attribution;
   // See _renderMovers' matching comment -- same reasoning, same cheap-noop
   // goal once this is called from updateBalanceDisplay() below.
-  const renderKey = `${period}|${symbol}|${up}|${down}|${flow.market}|${flow.deposits}|${flow.withdrawals}|${flow.net}`;
+  const renderKey = `${isPrivate()}|${period}|${symbol}|${up}|${down}|${flow.market}|${flow.deposits}|${flow.withdrawals}|${flow.net}`;
   if (renderKey === _lastFlowRenderKey) return;
   _lastFlowRenderKey = renderKey;
   _flowEl.querySelector('.pt-mini-list-head').textContent = `CHANGE · ${spec.label}`;
@@ -656,13 +660,14 @@ export function mountBalanceSection(bodyEl, context) {
     _lastBalanceFitTemplate = null;
     clearTimeout(_pendingFitTimer);
     _pendingFitTimer = null;
+    _pendingFitTemplate = null;
     _balanceMeasureCtx = null;
     _balanceWidth = 0;
     _balanceEl = _balanceHeroEl = _balanceTextEl = _balanceAmountEl = _miniChartSvgEl = null;
     _hoveringHistory = false;
-    _holdingsTimelineCache = null;
-    _holdingsTimelineLoading = false;
-    _holdingsTimelineRangeKey = null;
+    clearTimeout(_hoverTimer);
+    _hoverTimer = null;
+    _hoverTarget = null;
     _balanceContext = null;
   });
   // Padding lives on this inner wrapper, NOT on bodyEl itself. bodyEl *is*
@@ -939,6 +944,11 @@ export function mountCompositionBar(hostEl, context) {
   _lastCompositionKey = null;
   if (context?.onCleanup) {
     context.onCleanup(() => { if (_compositionEl === hostEl) _compositionEl = null; });
+    // The cash/invested pane being hovered in the panel's frame.
+    context.onCleanup(atmos.events.on('composition-at', detail => {
+      if (Number.isFinite(detail?.time)) showHistoricalComposition(detail.time);
+      else clearHistoricalComposition();
+    }));
   }
   // The bar's own markup gets replaced wholesale on every render (see
   // _renderComposition's innerHTML write below), so this listens on the
@@ -1056,57 +1066,65 @@ function _renderComposition(composition = compositionSnapshot()) {
 }
 
 /**
- * Repaint the composition bar + allocation donut with the holdings that
- * were live at `timestamp`, instead of the current live totals. Called by
+ * Repaint the composition bar with the holdings that were live at
+ * `timestamp`, instead of the current live totals. Called by
  * total-chart.js while the user is hovering its cash/invested indicator
- * pane. `range` is that pane's own visible time span -- used (capped to
- * HOLDINGS_TIMELINE_LOOKBACK_MS) to bound the on-demand holdings-history
- * fetch so a long-lived portfolio's entire multi-month history isn't
- * pulled in for one hover.
+ * pane. The bar is in the Spot widget's frame and the pane in the panel's:
+ * a frame without the bar tells the others ('composition-at', to the
+ * minute) and reads nothing. The poll is read once the pointer rests on a
+ * minute (holdings-timeline.js loadSnapshotNear: a few minutes of polls),
+ * and kept.
  *
  * @param {number} timestamp
- * @param {{from: number, to: number}} range
  */
-export function showHistoricalComposition(timestamp, { from: rangeFrom, to: rangeTo } = {}) {
-  if (!Number.isFinite(timestamp) || !Number.isFinite(rangeTo)) return;
-  const from = Math.max(
-    Number.isFinite(rangeFrom) ? rangeFrom : -Infinity,
-    rangeTo - HOLDINGS_TIMELINE_LOOKBACK_MS,
-  );
-  _hoveringHistory = true;
-  const rangeKey = `${from}|${rangeTo}`;
-  if (_holdingsTimelineRangeKey !== rangeKey) {
-    _holdingsTimelineRangeKey = rangeKey;
-    _holdingsTimelineCache = null;
-  }
-  if (!_holdingsTimelineCache) {
-    if (!_holdingsTimelineLoading) {
-      _holdingsTimelineLoading = true;
-      loadHoldingsTimeline({ from, to: rangeTo })
-        .then(cache => { _holdingsTimelineCache = cache; })
-        .catch(error => console.warn('[portfolio-tracker] holdings history lookup failed:', error.message))
-        .finally(() => {
-          _holdingsTimelineLoading = false;
-          if (_hoveringHistory) _paintHistoricalSnapshot(timestamp);
-        });
+export function showHistoricalComposition(timestamp) {
+  if (!Number.isFinite(timestamp)) return;
+  const minute = Math.floor(timestamp / 60_000) * 60_000;
+  if (!_compositionEl) {
+    if (minute !== _relayedMinute) {
+      _relayedMinute = minute;
+      atmos.events.emit('composition-at', { time: minute }).catch(() => {});
     }
     return;
   }
-  _paintHistoricalSnapshot(timestamp);
+  _hoveringHistory = true;
+  _hoverTarget = minute;
+  clearTimeout(_hoverTimer);
+  _hoverTimer = setTimeout(_readHoveredSnapshot, HOVER_REST_MS);
+}
+
+function _readHoveredSnapshot() {
+  _hoverTimer = null;
+  if (!_hoveringHistory || _hoverTarget === null || _hoverReading) return;
+  const target = _hoverTarget;
+  _hoverReading = true;
+  loadSnapshotNear(target, { before: 48 * HOUR_MS })
+    .then(snapshot => {
+      if (_hoveringHistory && _hoverTarget === target && snapshot) _renderComposition(compositionFromHoldingsSnapshot(snapshot.holdings));
+    })
+    .catch(error => console.warn('[portfolio-tracker] holdings history lookup failed:', error.message))
+    .finally(() => {
+      _hoverReading = false;
+      // The pointer moved on meanwhile: that minute next.
+      if (_hoveringHistory && _hoverTarget !== target && !_hoverTimer) _readHoveredSnapshot();
+    });
 }
 
 /** Stop showing a hovered point-in-time snapshot and go back to live totals. */
 export function clearHistoricalComposition() {
+  if (!_compositionEl) {
+    if (_relayedMinute !== null) {
+      _relayedMinute = null;
+      atmos.events.emit('composition-at', { time: null }).catch(() => {});
+    }
+    return;
+  }
+  clearTimeout(_hoverTimer);
+  _hoverTimer = null;
+  _hoverTarget = null;
   if (!_hoveringHistory) return;
   _hoveringHistory = false;
   updateBalanceDisplay();
-}
-
-function _paintHistoricalSnapshot(timestamp) {
-  if (!_hoveringHistory || !_holdingsTimelineCache) return;
-  const snapshot = nearestSnapshot(_holdingsTimelineCache, timestamp);
-  if (!snapshot) return;
-  _renderComposition(compositionFromHoldingsSnapshot(snapshot.holdings));
 }
 
 function _lastVisibleIndexAtOrBefore(timestamp) {
@@ -1225,19 +1243,38 @@ function _fitBalanceText(text, force = false) {
   // all-eights template so font sizing changes only when the formatted number
   // gains/loses a character, rather than subtly pulsing as the value animates.
   const template = String(text).replace(/\d/g, '8');
-  if (!force && template === _lastBalanceFitTemplate) return;
+  if (!force && template === _lastBalanceFitTemplate) {
+    // Back to the size it has (a tick across a digit boundary and back
+    // within the debounce): the resize that was waiting is for a number no
+    // longer showing.
+    clearTimeout(_pendingFitTimer);
+    _pendingFitTimer = null;
+    _pendingFitTemplate = null;
+    return;
+  }
 
   // force=true is always a deliberate, one-off trigger (font change,
   // container resize, first paint) -- apply immediately, and let it
   // preempt/cancel any resize an ordinary tick was about to debounce
-  // below, since the deliberate change already supersedes it.
-  if (force || _lastBalanceFitTemplate === null) {
+  // below, since the deliberate change already supersedes it. So is
+  // anything but the digits changing: hiding or showing the balance
+  // (private mode; "€••••" sized for its four dots left the number, once
+  // shown, too big for the sidebar until the debounce below settled, and
+  // with the balance ticking it never did), or another currency ("Fr" is
+  // wider than "€").
+  const shape = value => value.replace(/[8,.\s]/g, '');
+  const shapeChanged = _lastBalanceFitTemplate !== null && shape(template) !== shape(_lastBalanceFitTemplate);
+  if (force || shapeChanged || _lastBalanceFitTemplate === null) {
     clearTimeout(_pendingFitTimer);
     _pendingFitTimer = null;
+    _pendingFitTemplate = null;
     _lastBalanceFitTemplate = template;
     _applyBalanceFit(template);
     return;
   }
+  // Already waiting to fit this one: a tick re-rendering the same template
+  // doesn't push it back (a live balance would otherwise never settle).
+  if (_pendingFitTimer && template === _pendingFitTemplate) return;
 
   // An ordinary balance tick that crosses a digit-count boundary (e.g.
   // $9,999.99 -> $10,000.00, or back) changes `template` and would
@@ -1249,8 +1286,10 @@ function _fitBalanceText(text, force = false) {
   // in the meantime) means a brief real crossing settles once things
   // hold still, instead of snapping back and forth with every tick.
   clearTimeout(_pendingFitTimer);
+  _pendingFitTemplate = template;
   _pendingFitTimer = setTimeout(() => {
     _pendingFitTimer = null;
+    _pendingFitTemplate = null;
     _lastBalanceFitTemplate = template;
     _applyBalanceFit(template);
   }, 900);

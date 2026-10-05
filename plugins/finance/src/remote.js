@@ -10,7 +10,8 @@ const HISTORY_TIERS = [
 
 async function fetchJson(route) {
   const result = await invoke('vps:fetch', route);
-  if (!result?.ok) throw new Error(result?.status ? `VPS HTTP ${result.status}` : 'VPS unavailable');
+  // "VPS unavailable: no answer in 20 s", "…: its address didn't resolve (DNS)".
+  if (!result?.ok) throw new Error(result?.status ? `VPS HTTP ${result.status}` : `VPS unavailable${result?.error ? `: ${result.error}` : ''}`);
   try { return JSON.parse(result.body); }
   catch { throw new Error('VPS returned invalid data'); }
 }
@@ -77,8 +78,7 @@ function historyPoints(batches) {
 }
 
 /** The whole history, coarser the older it is. */
-async function loadHistory(exclusions = excludedHoldingKeys(), excludedSources = excludedSourceIds(), excludedGroups = excludedGroupKeys()) {
-  const now = Date.now();
+async function loadHistory(exclusions = excludedHoldingKeys(), excludedSources = excludedSourceIds(), excludedGroups = excludedGroupKeys(), now = Date.now()) {
   const boundaries = [
     0,
     now - HISTORY_TIERS[0].until,
@@ -98,6 +98,35 @@ async function loadHistory(exclusions = excludedHoldingKeys(), excludedSources =
 async function loadRecentHistory(from, exclusions, excludedSources, excludedGroups) {
   const batch = await fetchJson(historyRoute(from, null, 'raw', exclusions, excludedSources, excludedGroups));
   return { points: historyPoints([batch]), truncated: batch.truncated === true };
+}
+
+/**
+ * The value of some of your holdings over time (one coin's, for its chart):
+ * the total less the total without them, which the server works out as it
+ * does when they're hidden. Both are read for the same times, so they line
+ * up point for point. In the portfolio's scope: what's hidden stays out.
+ * `keys` are scope keys ("source|holding"); grouped holdings can't be left
+ * out on their own, so they're never counted here. With `from`, only the
+ * samples from then on (`truncated` when the server held some back).
+ *
+ * @returns {Promise<{ points: Array<{t: number, value: number, currency: string}>, truncated: boolean }>}
+ */
+export async function loadHoldingsValueHistory(keys, { from = null } = {}) {
+  const exclusions = excludedHoldingKeys();
+  const excludedSources = excludedSourceIds();
+  const excludedGroups = excludedGroupKeys();
+  const without = [...new Set([...exclusions, ...keys])];
+  const now = Date.now();
+  const read = list => (from === null
+    ? loadHistory(list, excludedSources, excludedGroups, now).then(points => ({ points, truncated: false }))
+    : loadRecentHistory(from, list, excludedSources, excludedGroups));
+  const [all, less] = await Promise.all([read(exclusions), read(without)]);
+  const lessAt = new Map(less.points.map(point => [point.t, point.value]));
+  return {
+    points: all.points.filter(point => lessAt.has(point.t))
+      .map(point => ({ t: point.t, value: Math.max(0, point.value - lessAt.get(point.t)), currency: point.currency })),
+    truncated: all.truncated || less.truncated,
+  };
 }
 
 /**

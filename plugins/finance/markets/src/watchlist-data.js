@@ -233,12 +233,29 @@ async function fetchDexScreener(symbols) {
   }));
 }
 
+// Binance's pairs, read once a session (one request): a coin it doesn't
+// list (a Solana meme coin, USDT itself) isn't asked about one by one, each
+// a refusal the console shows as a CORS error. null if it couldn't be read:
+// then every coin is asked, as before.
+let binancePairs = null;
+let binancePairsRead = null;
+function binanceListing() {
+  binancePairsRead ??= financeFetch('https://api.binance.com/api/v3/ticker/price')
+    .then(response => response.json())
+    .then(list => { if (Array.isArray(list) && list.length) binancePairs = new Set(list.map(item => item?.symbol)); })
+    .catch(() => { binancePairsRead = null; }); // asked again next time
+  return binancePairsRead.then(() => binancePairs);
+}
+
 async function probeSource(symbol) {
   if (unresolvedSymbols.has(symbol)) return false;
-  try {
-    const data = await (await financeFetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}USDT`)).json();
-    if (freshTicker(data)) { watchlistState.tickerSource[symbol] = 'binance'; delete binanceRetryAt[symbol]; return true; }
-  } catch (_error) { /* try CoinGecko */ }
+  const listed = await binanceListing();
+  if (!listed || listed.has(`${symbol}USDT`)) {
+    try {
+      const data = await (await financeFetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}USDT`)).json();
+      if (freshTicker(data)) { watchlistState.tickerSource[symbol] = 'binance'; delete binanceRetryAt[symbol]; return true; }
+    } catch (_error) { /* try CoinGecko */ }
+  }
   const id = await cgIdFor(symbol);
   if (id) { watchlistState.tickerSource[symbol] = 'coingecko'; return true; }
   // CoinGecko couldn't be asked: try again later, rather than settle for a

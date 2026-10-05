@@ -107,7 +107,7 @@ test('Finance\'s other state (a pending panel action) redraws nothing', async ()
   two.registerStateNamespace('portfolio-tracker', { defaults: {} });
   let heard = 0;
   two.onExternalStateChange(() => heard++);
-  await core.update(core.frames[0], { pendingAction: { type: 'open-market', at: 1 } });
+  await core.update(core.frames[0], { pendingActions: [{ type: 'open-market', at: 1 }] });
   await settle();
   assert.equal(heard, 0);
 });

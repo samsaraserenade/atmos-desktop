@@ -106,7 +106,9 @@ Atmos Core owns the shell, and extensions fill it.
   you're in (or in the sidebar's footer, if you prefer) for `rev/`
   commands: switch panels, open Settings on a page, and the commands of
   your extensions, listed by what's on screen (`rev/go` a Matrix room,
-  `rev/play` the music) and answered as you type.
+  `rev/play` the music, `rev/chart BTC 4h`, `rev/new-tab`) and answered as
+  you type. Enter does what the command does; Shift+Enter also takes you
+  to its panel, Alt+Enter keeps you where you are.
 - **A sidebar of widgets.** Widgets from any extension share one sidebar.
   Reorder them, resize them, collapse them, and choose whether each one
   shows everywhere or only beside a particular panel.
@@ -188,12 +190,17 @@ server you run yourself.
   and locks), Hyperliquid (Spot, Perps and Earn), Arbitrum, BSC, Aptos,
   Cardano, Injective, Binance Spot, and Monero entered by hand.
 - **Portfolio chart** with full history, scope filters to leave out a source,
-  a holding or a group such as Perps, and a cash/invested breakdown.
+  a holding or a group such as Perps, and a cash/invested breakdown; Spot,
+  Perp or any coin you hold on a chart of its own.
 - **Balance, Performance, Spot, Futures, Allocation and Connections widgets**
-  in the sidebar, and a private mode that hides your balances.
+  in the sidebar, and a private mode that hides your balances and which
+  coins you hold.
 - **Markets chart and watchlist** with live trades and candles from Binance,
   Bybit, Kraken and Coinbase. If an exchange is blocked where you are, the
   chart carries on with the others.
+- **`rev/` commands** in Atmos's command bar, from any panel:
+  `rev/chart BTC 4h` shows a market chart, `rev/timeframe 1D` changes the
+  chart's timeframe, `rev/portfolio sol` shows what your SOL has been worth.
 - **Your own server.** The portfolio server
   ([`plugins/finance/backend`](plugins/finance/backend)) collects every
   minute on a small VPS or a home server, with systemd or Docker, reachable

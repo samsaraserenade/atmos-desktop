@@ -127,6 +127,7 @@
    pads and colours every button with !important; the rules below are
    scoped under the sheet and repeat the !important so they win. */
 .finance-ticker-picker-panel .finance-exchange-picker { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:0 12px; padding:0 2px; }
+.finance-ticker-picker-panel .finance-exchange-picker[hidden] { display:none; }
 .finance-ticker-picker-panel .finance-exchange-chip {
   height:auto; padding:2px 0; border:0 !important; background:transparent !important; cursor:pointer;
   color:rgba(var(--ink-rgb),.38) !important; font-family:var(--app-font-family, "Segoe UI", sans-serif);
@@ -136,6 +137,8 @@
 .finance-ticker-picker-panel .finance-exchange-chip.is-active { color:rgb(var(--ink-rgb)) !important; }
 .finance-ticker-picker-panel .finance-exchange-chip:focus-visible { outline:1px solid rgba(var(--ink-rgb),.5); outline-offset:2px; }
 .finance-ticker-picker-list { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; margin:0 -4px; padding:0 4px; }
+/* A long list scrolls; its rows keep their height. */
+.finance-ticker-picker-list > * { flex-shrink:0; }
 .finance-ticker-picker-heading {
   padding:10px 8px 4px; color:rgba(var(--ink-rgb),.42);
   font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
@@ -166,7 +169,12 @@
 .finance-ticker-picker-panel .finance-ticker-picker-remove:hover { color:var(--color-negative,#f87171) !important; }
 .finance-ticker-picker-panel .finance-ticker-picker-action { grid-template-columns:minmax(0,1fr) auto; }
 .finance-ticker-picker-action .finance-ticker-picker-sub { color:rgba(var(--ink-rgb),.4); font-weight:500; font-size:11px; white-space:nowrap; }
-/* The Portfolio entry is a card above the lists, not a row among them. */
+/* Spot, Perp and your coins under Portfolio: name, share of the total, value. */
+.finance-ticker-picker-panel .finance-ticker-picker-section { grid-template-columns:minmax(0,1fr) auto minmax(72px,auto); }
+.finance-ticker-picker-value { color:rgba(var(--ink-rgb),.7); font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+.finance-ticker-picker-panel .finance-ticker-picker-section.is-current { box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.22); }
+.finance-ticker-picker-section.is-current .finance-ticker-picker-symbol { color:rgb(var(--ink-rgb)); }
+/* The total is a card at the top of Portfolio, not a row among them. */
 .finance-ticker-picker-panel .finance-ticker-picker-portfolio {
   grid-template-columns:auto minmax(0,1fr) auto; gap:12px;
   height:auto; min-height:52px; margin:0 0 6px; padding:8px 12px 8px 10px; border-radius:10px;

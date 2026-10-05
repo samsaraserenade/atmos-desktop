@@ -4,11 +4,11 @@
  * On-demand, cached lookup of "what was I holding at time T", backed by
  * registry.js's fetchHoldingsHistory() (→ the VPS's /v1/holdings-history).
  *
- * Deliberately NOT part of any polling loop: a caller (balance.js's ratio-
- * history hover, currently the only one) asks once for a time range the
- * first time it actually needs historical detail, and every subsequent
- * lookup within that range is a local Map lookup — no network round-trip
- * per hover frame.
+ * Deliberately NOT part of any polling loop. loadSnapshotNear() (below)
+ * reads the one poll a caller needs (balance.js: what you held a day or a
+ * week ago, or at a time hovered on the cash/invested pane) from a few
+ * minutes of polls; loadHoldingsTimeline() reads a whole range, for a
+ * caller that needs every poll in it.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -66,4 +66,53 @@ export function nearestSnapshot(cache, timestamp) {
   if (found < 0) found = 0; // before the earliest cached poll — show the earliest we have
   const ts = sortedTs[found];
   return { ts, holdings: byTs.get(ts) || [] };
+}
+
+// ── One snapshot, near a time ──────────────────────────────────────────────
+// The server keeps every poll (a minute apart) for 30 days, the last of
+// each hour to a year and the last of each day after (its retention). A
+// snapshot is read from a few minutes of polls, a few hundred rows, and
+// from wider windows only when there's none (thinned history, a gap):
+// never a day of every poll (up to 50,000 rows, megabytes of JSON, on a
+// server capped at a quarter of a CPU).
+const MINUTE_MS = 60_000;
+const SNAPSHOT_WINDOWS_MS = [5 * MINUTE_MS, 60 * MINUTE_MS, 6 * 60 * MINUTE_MS, 48 * 60 * MINUTE_MS];
+const SNAPSHOT_CACHE_MAX = 120;
+const _snapshots = new Map(); // key -> Promise<{ ts, holdings } | null>
+
+/** The windows to try for up to `span`, narrowest first (the last one `span` itself). */
+export function snapshotWindows(span) {
+  if (!(span > 0)) return [];
+  const windows = SNAPSHOT_WINDOWS_MS.filter(window => window < span);
+  return [...windows, span];
+}
+
+/**
+ * The holdings at the poll nearest `at`: the last one at or before it, no
+ * more than `before` earlier; failing that, the first one after it, no more
+ * than `after` later. null when there's none that close. Answers are kept
+ * (a past poll doesn't change), so asking again costs nothing.
+ *
+ * @param {number} at
+ * @param {{before?: number, after?: number, fetch?: Function}} options
+ */
+export function loadSnapshotNear(at, { before = 48 * 60 * MINUTE_MS, after = 0, fetch = fetchHoldingsHistory } = {}) {
+  const key = `${at}|${before}|${after}`;
+  if (_snapshots.has(key)) return _snapshots.get(key);
+  const promise = (async () => {
+    for (const window of snapshotWindows(before)) {
+      const { byTs, sortedTs } = bucketByTimestamp(await fetch({ from: at - window, to: at }));
+      if (sortedTs.length) { const ts = sortedTs.at(-1); return { ts, holdings: byTs.get(ts) }; }
+    }
+    for (const window of snapshotWindows(after)) {
+      const { byTs, sortedTs } = bucketByTimestamp(await fetch({ from: at, to: at + window }));
+      if (sortedTs.length) { const ts = sortedTs[0]; return { ts, holdings: byTs.get(ts) }; }
+    }
+    return null;
+  })();
+  _snapshots.set(key, promise);
+  // A failed read is asked again next time; the oldest answers make room.
+  promise.catch(() => _snapshots.delete(key));
+  while (_snapshots.size > SNAPSHOT_CACHE_MAX) _snapshots.delete(_snapshots.keys().next().value);
+  return promise;
 }

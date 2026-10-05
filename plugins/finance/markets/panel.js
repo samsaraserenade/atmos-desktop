@@ -8,7 +8,7 @@ import { getServiceFileUrl } from '../src/host/service-loader.js';
 import { atmos } from '../src/host/frame.js';
 import { marketQueryState, persistChartSettings, rememberQuery } from './persist.js';
 import { parseMarketQuery, formatPrice, KNOWN_EXCHANGES } from './src/query-engine.js';
-import { consumePendingQuery, onMarketQuery } from './src/session.js';
+import { consumePendingInterval, consumePendingQuery, onMarketQuery } from './src/session.js';
 import { watchlistState } from './persist.js';
 import { updateTickerActive, onTickerRemoved } from './src/watchlist-data.js';
 
@@ -117,6 +117,16 @@ function mountMarketChart(root, context, mountOptions = {}) {
   let followLatest = savedChart.followLatest !== false;
   let activeInterval = savedChart.interval || '5m';
   let customIntervalMs = savedChart.customIntervalMs || null;
+  // A timeframe asked for (rev/chart, rev/timeframe) before the chart is
+  // drawn: it beats the one Charting restores for the chart (ensureChart).
+  let requestedInterval = null;
+  const knownInterval = interval => interval === 'auto' || Object.hasOwn(INTERVAL_MS, interval);
+  const queuedInterval = isolated ? null : consumePendingInterval();
+  if (knownInterval(queuedInterval)) {
+    activeInterval = queuedInterval;
+    requestedInterval = queuedInterval;
+    persistSettings({ interval: queuedInterval });
+  }
   let historicalCandles = [];
   // Deliberately NOT restoring savedChart.activeRange here -- whatever range
   // button (1D/1W/1M/All) was last active would otherwise override
@@ -327,8 +337,13 @@ function mountMarketChart(root, context, mountOptions = {}) {
         if (refetch && intervalChanged && dataSource === 'history' && activeQuery) runQuery(queryText());
       };
       chart.on('settings', syncFromChart);
-      // The chart may restore a different timeframe than the one just
+      // A timeframe asked for while the chart wasn't drawn yet stands;
+      // otherwise the chart may restore a different one than the one just
       // fetched (its own saved view): fetch that one then.
+      if (requestedInterval && requestedInterval === activeInterval) {
+        chart.setOptions({ bucketMs: activeInterval === 'auto' ? null : INTERVAL_MS[activeInterval] });
+      }
+      requestedInterval = null;
       syncFromChart(chart.getState(), true);
     }
     clearPendingPoints();
@@ -621,6 +636,19 @@ function mountMarketChart(root, context, mountOptions = {}) {
     if (event.key === 'Escape' && event.target === input) input.blur();
   });
 
-  if (!isolated) context.onCleanup(onMarketQuery(query => runQuery(query)));
+  // rev/chart and rev/timeframe (frame-panel.js): a timeframe, as the
+  // toolbar sets it, kept over Charting's own if the chart isn't drawn yet.
+  const requestInterval = interval => {
+    if (!knownInterval(interval)) return;
+    if (!chart) requestedInterval = interval;
+    setInterval(interval);
+  };
+  context.listen(root, 'finance:chart-interval', event => requestInterval(event.detail?.interval));
+  if (!isolated) {
+    context.onCleanup(onMarketQuery((query, interval) => {
+      runQuery(query);
+      if (interval) requestInterval(interval);
+    }));
+  }
   runQuery(isolated ? (mountOptions.query || 'BTCUSDT') : consumePendingQuery(marketQueryState.lastQuery));
 }

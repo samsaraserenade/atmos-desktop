@@ -54,6 +54,8 @@ async function watchlist({ state, binanceDown = false, coinGeckoRefuses = false,
     if (url.hostname === 'api.binance.com') {
       // Binance answers an unknown symbol with a 400 and no CORS headers: to a frame, a network error.
       if (network.binanceDown) throw new TypeError('Failed to fetch');
+      // Every pair's price, delisted ones too (the listing read once a session).
+      if (url.pathname.endsWith('/ticker/price')) return answer(200, Object.entries(BINANCE).map(([symbol, price]) => ({ symbol: `${symbol}USDT`, price: String(price) })));
       const wanted = url.searchParams.get('symbols')
         ? JSON.parse(url.searchParams.get('symbols'))
         : [url.searchParams.get('symbol')];
@@ -193,4 +195,17 @@ test('while CoinGecko can\'t be asked, an unknown coin waits rather than taking 
   const later = await watchlist({ state: { tickers: ['WEN'], tickerSource: {}, cgIdCache: {} } });
   await later.module.fetchTickers();
   assert.ok(later.network.requests.some(url => url.includes('dexscreener')), 'CoinGecko answering "none": DexScreener is the last resort, as before');
+});
+
+test('a coin Binance doesn\'t list isn\'t asked about one by one: its listing is read once a session', async () => {
+  const { module, state, network } = await watchlist({
+    state: { tickers: ['SOL', 'WEN', 'DRIFT', 'USDT'], tickerSource: {}, cgIdCache: { WEN: 'wen-4', DRIFT: 'drift-protocol', USDT: 'tether' } },
+  });
+  await module.fetchTickers();
+  await module.fetchTickers();
+  const asked = pair => network.requests.filter(url => url.includes(`ticker/24hr?symbol=${pair}`)).length;
+  assert.equal(network.requests.filter(url => url.endsWith('/api/v3/ticker/price')).length, 1, 'the listing, once');
+  assert.deepEqual([asked('WENUSDT'), asked('DRIFTUSDT'), asked('USDTUSDT')], [0, 0, 0], 'no refusals (a CORS error each in the console)');
+  assert.equal(asked('SOLUSDT'), 1, 'a listed coin is asked as before');
+  assert.deepEqual({ ...state.tickerSource }, { SOL: 'binance', WEN: 'coingecko', DRIFT: 'coingecko', USDT: 'coingecko' });
 });

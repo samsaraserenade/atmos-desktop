@@ -475,7 +475,7 @@ export function getFuturesDirectionSplit() {
 
 // Same output shape as getPortfolioComposition(), but built from a single
 // holdings-history snapshot (the rows for one ts_ms poll, as returned by
-// ./holdings-timeline.js's nearestSnapshot()) instead of the live
+// ./holdings-timeline.js's loadSnapshotNear()) instead of the live
 // per-connector state. Lets the sidebar render "what was I invested in at
 // this point in time" through the exact same composition-bar/allocation-
 // donut renderers already used for the live view (see balance.js).

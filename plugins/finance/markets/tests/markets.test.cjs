@@ -8,6 +8,12 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+// The query engine as a module of its own: Charting's interval helpers in
+// place of chart-service.js (which needs the Charting service), and its
+// symbols module by file URL (a data: module has no folder).
+const queryEngineSource = () => read('src/query-engine.js')
+  .replace(/^export \{ parseIntervalMs[^\n]+/m, fs.readFileSync(path.resolve(root, '../../../services/charting/intervals.js'), 'utf8'))
+  .replace("from './symbols.js'", `from '${require('node:url').pathToFileURL(path.join(root, 'src/symbols.js')).href}'`);
 
 test('Markets keeps its module entry points inside Finance', () => {
   // Markets is part of Finance; only Finance has a manifest.
@@ -61,7 +67,7 @@ test('sidebar icon uses the standard Atmos accordion dimensions', () => {
 });
 
 test('query parser recognizes symbols, intents, exchanges, and intervals', async () => {
-  const source = read('src/query-engine.js').replace(/^export \{ parseIntervalMs[^\n]+/m, fs.readFileSync(path.resolve(root, '../../../services/charting/intervals.js'), 'utf8'));
+  const source = queryEngineSource();
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
   const { parseMarketQuery } = await import(moduleUrl);
   assert.deepEqual(parseMarketQuery('BTC order book on Kraken'), {
@@ -73,7 +79,7 @@ test('query parser recognizes symbols, intents, exchanges, and intervals', async
 });
 
 test('chart labels show the coin and any named exchange, not the remembered query text', async () => {
-  const source = read('src/query-engine.js').replace(/^export \{ parseIntervalMs[^\n]+/m, fs.readFileSync(path.resolve(root, '../../../services/charting/intervals.js'), 'utf8'));
+  const source = queryEngineSource();
   const { chartLabel } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   assert.equal(chartLabel('BTCUSDT 1m candles'), 'BTC');
   assert.equal(chartLabel('BTCUSDT coinbase 1m candles'), 'BTC · Coinbase');
@@ -81,7 +87,7 @@ test('chart labels show the coin and any named exchange, not the remembered quer
 });
 
 test('custom chart intervals accept seconds through days and reject unsafe values', async () => {
-  const source = read('src/query-engine.js').replace(/^export \{ parseIntervalMs[^\n]+/m, fs.readFileSync(path.resolve(root, '../../../services/charting/intervals.js'), 'utf8'));
+  const source = queryEngineSource();
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
   const { parseIntervalMs, formatIntervalMs } = await import(moduleUrl);
   assert.equal(parseIntervalMs('1s'), 1_000);

@@ -32,8 +32,10 @@ const sandbox = vm.createContext({ document, window, context, console, portfolio
   workspace: { classList: { contains: () => collapsed, toggle: (_, value) => { collapsed = value; } }, querySelectorAll: () => handles },
   save: () => saves++, onStateLoaded: () => {},
   watchlistState: { tickers: ['BTC', 'ETH'] }, tickerData: {}, onTickerUpdate: () => () => {}, getServiceFileUrl: async () => null, hasMarketData: () => true,
-  heldSymbols: () => [], accountShareFor: () => null, addTicker: async () => true, removeTicker() {},
-  getTotal: () => ({ value: 1234.5, symbol: '£', ready: true, liveCount: 1, pendingCount: 0 }), masked: format => format,
+  heldSymbols: () => ['SOL'], accountShareFor: () => null, addTicker: async () => true, removeTicker() {},
+  portfolioCoins: () => [{ symbol: 'SOL', value: 200 }], coinSection: symbol => `coin:${symbol}`,
+  latestSectionValue: section => ({ total: 1234.5, spot: 1000, perp: 234.5 })[section],
+  getTotal: () => ({ value: 1234.5, symbol: '£', ready: true, liveCount: 1, pendingCount: 0 }), masked: format => format, isPrivate: () => false, onPrivacyChange: () => () => {},
   colorForChange: () => 'rgba(255,255,255,.55)', onPriceColorChange: () => () => {},
   KNOWN_EXCHANGES: ['binance', 'bybit', 'kraken', 'coinbase'],
   parseMarketQuery: query => {
@@ -65,16 +67,30 @@ const selections = [[], []];
 const pickers = selections.map((selected, index) => sandbox.createTickerPicker(context, () => `Chart ${index}`, query => selected.push(query)).tickerPicker);
 const button = pickers[1].children[0], panel = pickers[1].children[1];
 button.handlers.click();
-// Rows are delegated from the list: Portfolio, then the Watchlist heading, BTC, ETH.
+// Rows are delegated from the list: Portfolio (the total, Spot, Perp, each
+// coin held), then Markets (the coins held, then the watchlist).
 const list = panel.querySelector('.finance-ticker-picker-list');
 const clickRow = index => list.handlers.click({ target: list.children[index] });
-assert.equal(list.children[3].dataset.symbol, 'ETH');
-assert.equal(list.children[0].querySelector('.finance-ticker-picker-portfolio-total').textContent, '£1,234.50', 'the Portfolio card carries the live total');
-clickRow(3);
+const rows = () => list.children.map(row => (row.className.includes('heading') ? `# ${row.textContent}` : row.dataset.section || row.dataset.symbol));
+assert.deepEqual(rows(), ['# Portfolio', 'total', 'spot', 'perp', 'coin:SOL', '# Markets', 'SOL', 'BTC', 'ETH']);
+assert.equal(list.children[1].querySelector('.finance-ticker-picker-portfolio-total').textContent, '£1,234.50', 'the total\'s card carries the live total');
+assert.match(list.children[1].className, /is-current/, 'a portfolio chart\'s picker marks what it shows');
+assert.equal(list.children[2].querySelector('.finance-ticker-picker-value').textContent, '£1,000.00');
+assert.equal(list.children[2].querySelector('.finance-ticker-picker-share').textContent, '81%', 'Spot\'s share of the total');
+assert.equal(list.children[4].querySelector('.finance-ticker-picker-symbol').textContent, 'SOL');
+assert.equal(list.children[4].querySelector('.finance-ticker-picker-value').textContent, '£200.00');
+clickRow(8);
 assert.deepEqual(selections, [[], ['ETHUSDT']]);
 button.handlers.click();
-clickRow(0);
-assert.deepEqual(selections[1], ['ETHUSDT', null]);
+clickRow(1);
+const plain = value => JSON.parse(JSON.stringify(value)); // made in the sandbox's realm
+assert.deepEqual(plain(selections[1]), ['ETHUSDT', { section: 'total' }]);
+button.handlers.click();
+clickRow(4);
+assert.deepEqual(plain(selections[1].at(-1)), { section: 'coin:SOL' }, 'a coin: what your holdings of it are worth');
+button.handlers.click();
+clickRow(2);
+assert.deepEqual(plain(selections[1].at(-1)), { section: 'spot' });
 button.handlers.click();
 const search = panel.querySelector('.finance-ticker-picker-search');
 search.value = 'SOLUSDT';
@@ -97,8 +113,20 @@ assert.equal(chips.children[4].attributes['aria-pressed'], 'true');
 assert.equal(chips.children[0].attributes['aria-pressed'], 'false');
 search.value = '';
 search.handlers.input();
-clickRow(3);
+clickRow(8);
 assert.equal(selections[1].at(-1), 'ETHUSDT coinbase');
+button.handlers.click();
+search.value = 'sp';
+search.handlers.input();
+assert.deepEqual(rows(), ['# Portfolio', 'spot', '# Not on your lists', undefined, undefined], 'Spot found by name');
+search.value = '';
+button.handlers.click();
+
+// Private mode hides what you hold: no coins under Portfolio or Markets.
+sandbox.isPrivate = () => true;
+button.handlers.click();
+assert.deepEqual(rows(), ['# Portfolio', 'total', 'spot', 'perp', '# Markets', 'BTC', 'ETH']);
+sandbox.isPrivate = () => false;
 
 const marketSelections = [];
 const marketPicker = sandbox.createTickerPicker(context, () => 'BTC', query => marketSelections.push(query), () => 'BTCUSDT coinbase 1m candles').tickerPicker;
@@ -115,6 +143,12 @@ assert.equal(marketSelections.at(-1), 'BTCUSDT', 'every exchange picked collapse
 assert.equal(marketChips.children[0].attributes['aria-pressed'], 'true');
 console.log('Passed: either docking handle updates all charts; secondary picker selections remain local; exchange chips apply per chart');
 
-// Without Market Data (an optional dependency) there are no market charts to switch to.
+// Without Market Data (an optional dependency) there are no market charts:
+// the picker still switches between Portfolio's charts.
 sandbox.hasMarketData = () => false;
-assert.equal(sandbox.createTickerPicker(context, () => 'Portfolio', () => {}).tickerPicker.hidden, true);
+const offline = sandbox.createTickerPicker(context, () => 'Portfolio', () => {}).tickerPicker;
+assert.equal(offline.hidden, false);
+offline.children[0].handlers.click();
+assert.deepEqual(offline.children[1].querySelector('.finance-ticker-picker-list').children.map(row => (row.className.includes('heading') ? `# ${row.textContent}` : row.dataset.section || row.dataset.symbol)),
+  ['# Portfolio', 'total', 'spot', 'perp', 'coin:SOL']);
+assert.equal(offline.children[1].querySelector('.finance-exchange-picker').hidden, true, 'no exchanges to pick');

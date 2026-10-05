@@ -9,7 +9,8 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 
 test('declares a framed extension that keeps its surfaces\' ids', () => {
   const manifest = JSON.parse(read('extension.json'));
-  assert.equal(manifest.apiVersion, 3);
+  assert.equal(manifest.apiVersion, 4);
+  assert.equal(manifest.engines.atmos, '>=0.20.0', 'its rev/ commands are SDK 1.3 (Atmos 0.20.0)');
   assert.equal(manifest.runtime, 'frame');
   assert.equal(manifest.requires['extensions.frames'], 3);
   const { panel, sidebar, boot } = manifest.contributes;

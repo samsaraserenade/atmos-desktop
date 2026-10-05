@@ -791,9 +791,7 @@ p.sm-trust-caution { margin: 0 0 8px; }
 .sm-trust-error { margin-top: 8px; color: rgb(248,113,113); }
 
 /* ── Home ─────────────────────────────────────────────────────────────── */
-/* App info top-left, About in its own small scrollable pane to the right —
-   the two are independent blocks side by side rather than one centered
-   stack, so the poem no longer pushes the app info around as it opens. */
+/* The app's information, top-left. */
 .sm-home {
   height: 100%; min-height: 320px;
   display: flex; flex-direction: row; align-items: flex-start;
@@ -922,27 +920,6 @@ p.sm-trust-caution { margin: 0 0 8px; }
 .sa-details[open] > summary::after { transform: rotate(225deg); }
 .sa-details > summary small { font-size: .6rem; color: rgba(var(--ink-rgb),.32); }
 .sa-details > summary:hover { color: rgb(var(--ink-rgb)); }
-
-/* No align-self override -- .sm-home's own align-items:flex-start already
-   puts this pane at the top of the panel, alongside the info column on the
-   left. (Previously align-self:flex-end sank just this pane to the bottom
-   while the info column stayed at top; moved back to top-right.) */
-.sm-about-logo {
-  flex: 1; min-width: 0; height: 270px;
-  display: flex; align-items: center; justify-content: center;
-  overflow: hidden;
-}
-.sm-about-logo img {
-  display: block; width: min(100%,270px); height: min(100%,270px);
-  object-fit: contain; opacity: .86; cursor: pointer;
-  transform: translate(10px, -40px);
-  /* No drop-shadow here anymore -- at this blur/spread (32px, .32 alpha)
-     it rendered as a soft dark smudge under/around the mascot rather than
-     a crisp shadow, which is what actually looked like a "background" on
-     an otherwise transparent PNG. The source image itself has a clean
-     alpha channel (verified: ~75% fully transparent, ~23% fully opaque,
-     ~1.5% ordinary antialiased edge pixels) -- nothing to fix there. */
-}
 
 /* ── First-run onboarding ─────────────────────────────────────────────── */
 .sm-onboarding { max-width:620px; padding:34px 38px; }

@@ -315,6 +315,13 @@ export interface CommandInput {
   value?: string | null;
   /** The options' values, as the user left them. */
   options: Record<string, string | boolean>;
+  /**
+   * Only when running, and only when the user asked (Atmos 0.20.1): true for
+   * Shift+Enter, "and go there" (Atmos shows your panel once you're done);
+   * false for Alt+Enter, "stay here" (atmos.panel.show() does nothing while
+   * this runs: do what you'd show for later, or where it's visible).
+   */
+  go?: boolean;
 }
 /** What running a command can come back with. Nothing: the bar closes. */
 export interface CommandResult {

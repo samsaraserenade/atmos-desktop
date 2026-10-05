@@ -622,9 +622,10 @@ wordmark when it lives there) takes `rev/` commands: Atmos's own
 (`rev/sidebar`, `rev/settings [page]`, `rev/extensions`, `rev/switch
 <panel>`) and those extensions declare. It opens over the bottom bar of
 the panel you're in (Settings → Appearance → Sidebar → Command Bar can put
-it in the sidebar's footer instead). Commands are listed by what's
-showing: the panel the bar is for, other panels on screen, widgets on
-screen, Atmos's own, then the rest only once their name is typed. Once a
+it in the sidebar's footer instead). Every command is listed, under its
+extension's name, by what's showing: the panel the bar is for, other
+panels on screen, widgets on screen, Atmos's own, then the rest by name.
+Once a
 name is typed: Atmos's commands, panels and pages of Settings whose name
 starts so, an extension's command called exactly that, panels and pages
 with a later word that starts so (`rev/play` finds Music), then
@@ -662,7 +663,19 @@ Then handle them, in the frame that can do them. A background frame's
 handlers work whatever is showing; a panel's while the panel is open, a
 widget's while it's in the sidebar. When several of your frames handle a
 command, the one on screen runs it; when none does (its panel isn't open),
-the bar says to open yours.
+the bar says to open yours. Handle them in your background frame if they
+should work from anywhere (Matrix Chat's, Music's, Finance's and Atmos
+Browser's do).
+
+**Show your panel only when the result is something to look at.** A chart
+or a room you opened, yes (`atmos.panel.show()`); music played, a tab
+closed or a setting changed, no: the bar says what happened where it was,
+and the user stays where they are. The user can ask otherwise (Atmos
+0.20.1): Shift+Enter runs your command and then shows your panel, and
+Alt+Enter runs it where they are, `atmos.panel.show()` doing nothing while
+it runs. Your `run` hears which as `go` (`true`, `false`, or absent for a
+plain Enter); with `false`, do what you'd have shown so that it's there
+when your panel next shows.
 
 ```js
 atmos.commands.handle('go', async ({ args, value }) => {
@@ -678,7 +691,7 @@ atmos.commands.handle('go', async ({ args, value }) => {
 
 | Call | What it does |
 |---|---|
-| `atmos.commands.handle(name, run, { suggest })` | `run({ args, value, options })` when the command is chosen: `args` is what follows its name, `value` the chosen row's, `options` your options' values as the user left them. Return nothing (the bar closes), `{ done }` (a line shown where the bar was), `{ keep: true, done? }` (it stays open), or `{ fill, options?, done? }` (the bar takes that text and option values: a next step), or throw (the bar shows the error). `suggest({ args, options })` returns rows, or `{ rows, options }`. 2 s to list, 15 s to run. Returns a function that stops handling it |
+| `atmos.commands.handle(name, run, { suggest })` | `run({ args, value, options, go })` when the command is chosen: `args` is what follows its name, `value` the chosen row's, `options` your options' values as the user left them, `go` Shift+Enter (`true`) or Alt+Enter (`false`), if either (above). Return nothing (the bar closes), `{ done }` (a line shown where the bar was), `{ keep: true, done? }` (it stays open), or `{ fill, options?, done? }` (the bar takes that text and option values: a next step), or throw (the bar shows the error). `suggest({ args, options })` returns rows, or `{ rows, options }`. 2 s to list, 15 s to run. Returns a function that stops handling it |
 | `atmos.commands.bar(element)` | Panels: the bar along the bottom of your panel (`.atmos-bar`, below). The command bar opens over it while the keyboard is in your panel; without one Atmos lays a bar of its own along the panel's bottom. One per frame. Returns `stop()` |
 | `atmos.commands.field(input, { options })` | A text field of yours that also takes commands (a message bar): `rev/` typed into it opens the bar there with what's typed, so commands have one list in one place. Keys typed before the bar has the keyboard follow it (while nothing has been typed in the bar), and Enter in that moment sends nothing from your field; when the bar closes, the field has the keyboard again. If the bar can't open, the text stays. To hand over text of your own (Enter in an empty view: `rev/go <what was typed>`), put it in the field and send an `input` event. `options` presets your command's option values. Returns `stop()` |
 | `atmos.commands.open(text, options?)` | Open the bar with `text` yourself. Only while your frame has focus and the user has just typed or clicked. `options` presets your command's option values |

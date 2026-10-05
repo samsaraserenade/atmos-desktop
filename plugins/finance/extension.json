@@ -1,7 +1,10 @@
 {
-  "apiVersion": 3,
+  "apiVersion": 4,
+  "engines": {
+    "atmos": ">=0.20.0"
+  },
   "tier": "first-party",
-  "version": "1.0.14",
+  "version": "1.1.0",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -69,7 +72,30 @@
     ],
     "boot": {
       "entry": "frame-engine.js"
-    }
+    },
+    "commands": [
+      {
+        "name": "chart",
+        "args": "symbol, exchange, timeframe",
+        "about": "Show a market chart in Finance: rev/chart BTC 4h",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "timeframe",
+        "args": "1m, 4H, 1D…",
+        "about": "Change the timeframe of Finance’s chart",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "portfolio",
+        "args": "total, spot, perp or a coin",
+        "about": "Show your portfolio in Finance, or one coin you hold: rev/portfolio sol",
+        "takesArgs": true,
+        "suggests": true
+      }
+    ]
   },
   "legacyStorage": {
     "state": [

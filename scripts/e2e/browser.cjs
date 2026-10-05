@@ -442,6 +442,36 @@ setTimeout(() => {
     const afterBar = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify({ value: document.getElementById("field").value })'));
     check('…Esc closes it and the page has the keyboard again, the sidebar as it was', barClosed && afterBar.value.includes('z')
       && await page.evaluate(() => document.body.classList.contains('drawer-open')) === sidebarOpen, { barClosed, afterBar, active: await page.evaluate(() => document.activeElement?.tagName) });
+    // The browser's rev/ commands (src/commands.js), typed in Atmos's bar:
+    // a new tab going somewhere, a tab by name, closing one.
+    const tabsBefore = (await tabs()).length;
+    await x.key('ctrl+\\');
+    await wait(300);
+    await x.type(`rev/new-tab ${B}/solid?title=Opened`);
+    await wait(700);
+    await x.key('Return');
+    const openedByBar = await settled('Opened', 8000);
+    const afterNew = await tabs();
+    check('rev/new-tab with an address opens it in a new tab', !!openedByBar && afterNew.length === tabsBefore + 1, { afterNew: afterNew.map(tab => tab.title) });
+    await x.key('ctrl+\\');
+    await wait(300);
+    await x.type('rev/tab Typing');
+    await wait(700);
+    await x.key('Return');
+    const backToTyping = await settled('Typing', 5000);
+    await x.key('ctrl+\\');
+    await wait(300);
+    await x.type('rev/close-tab Opened');
+    await wait(700);
+    await x.key('Return');
+    const closedFlash = await until(() => page.evaluate(() => document.querySelector('.command-bar-flash')?.textContent.trim() || null), { timeout: 3000 });
+    const afterClose = await tabs();
+    check('rev/tab goes to a tab by name; rev/close-tab closes one and says how to bring it back',
+      !!backToTyping && afterClose.length === tabsBefore && !afterClose.some(tab => tab.title === 'Opened') && /^Closed Opened\. Ctrl\+Shift\+T/.test(closedFlash || ''),
+      { backToTyping, afterClose: afterClose.map(tab => tab.title), closedFlash });
+    // The keyboard back in the page for what follows.
+    await x.click(layer.x + field.x + 20, layer.y + field.y + 10);
+    await wait(300);
     // Zoom, per site.
     await x.key('ctrl+equal');
     await wait(400);

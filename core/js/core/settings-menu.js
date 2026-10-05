@@ -574,9 +574,6 @@ function _renderHome() {
         <div class="sm-home-version">${_appVersion ? `Version ${_appVersion}` : 'Version —'}</div>
         <div class="sm-home-updates">${_atmosHomeHtml()}</div>
       </div>
-      <div class="sm-about-logo">
-        <img src="assets/Grev.png" alt="Atmos mascot" id="sm-about-mascot">
-      </div>
     </div>`;
 
   // Theme still affects the wordmark shown on this page even though its
@@ -594,26 +591,6 @@ function _renderHome() {
     if (wordmarkImg) wordmarkImg.src = getAppTheme() === 'atmos-light' ? 'assets/blacktitle.png' : 'assets/title.png';
   }));
 
-  // A little "boop" reaction -- swap to the click variant for as long as the
-  // mascot is actually being pressed, then revert. Covers mouse and touch,
-  // and also reverts on mouseleave/cancel so a press-then-drag-off doesn't
-  // strand it on the click frame.
-  const mascotImg = _listEl.querySelector('#sm-about-mascot');
-  if (mascotImg) {
-    // Settings' own Rev (grey, horned); the boot splash keeps Rev2.
-    const restMascotSrc = 'assets/Grev.png';
-    const clickMascotSrc = 'assets/GrevClick.png';
-    // Loaded now, so the first press doesn't blink while it downloads.
-    new Image().src = clickMascotSrc;
-    const press = () => { mascotImg.src = clickMascotSrc; };
-    const release = () => { mascotImg.src = restMascotSrc; };
-    mascotImg.addEventListener('mousedown', press);
-    mascotImg.addEventListener('mouseup', release);
-    mascotImg.addEventListener('mouseleave', release);
-    mascotImg.addEventListener('touchstart', press, { passive: true });
-    mascotImg.addEventListener('touchend', release);
-    mascotImg.addEventListener('touchcancel', release);
-  }
   _wireManagerActions();
 }
 

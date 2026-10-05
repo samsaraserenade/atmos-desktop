@@ -60,8 +60,11 @@ assert.equal(run('getPortfolioComposition().cash'), 500);
 assert.equal(run("compositionFromHoldingsSnapshot([{source_id:'hyperliquid',kind:'cash',symbol:'USDC',value:1000,currency:'USD'}]).cash"), 0);
 
 const chartSource = fs.readFileSync(path.join(root, 'src/total-chart.js'), 'utf8');
-const selector = chartSource.slice(chartSource.indexOf('function selectSectionHistory()'), chartSource.indexOf('function syncSectionButtons()'));
+const between = (from, to) => chartSource.slice(chartSource.indexOf(from), chartSource.indexOf(to, chartSource.indexOf(from)));
+const selector = between('export function portfolioSectionHistory', 'const extraPortfolioViews').replace('export ', '')
+  + between('function selectSectionHistory()', '/** What the main chart shows');
 vm.runInContext("var section='spot', history=[], remoteSections=[], totalHistory=[{t:1,g:100,v:125,spot:60,perp:40},{t:2,g:150,v:187.5}];", context);
+vm.runInContext("var sectionCoin = value => value.startsWith('coin:') ? value.slice(5) : null, coinHistory = symbol => ({ points: symbol === 'SOL' ? [{ t: 1, value: 40, currency: 'USD' }] : [] }), chartPointFromVps = point => ({ t: point.t, g: point.value, v: point.value * 1.25 });", context);
 vm.runInContext(selector, context);
 run('selectSectionHistory()');
 assert.equal(run('history.length'), 1);
@@ -70,6 +73,11 @@ run("section='perp';selectSectionHistory()");
 assert.equal(run('history[0].v'), 50);
 run("section='total';selectSectionHistory()");
 assert.equal(run('history === totalHistory'), true);
+// A coin: its own history (coin-history.js), converted as the total's points are.
+run("section='coin:SOL';selectSectionHistory()");
+assert.deepEqual(JSON.parse(run('JSON.stringify(history)')), [{ t: 1, g: 40, v: 50 }]);
+run("section='coin:ETH';selectSectionHistory()");
+assert.equal(run('history.length'), 0, 'not read yet: empty, until it arrives');
 const sidebar = fs.readFileSync(path.join(root, 'markets/sidebar.js'), 'utf8');
 // The Futures widget's balance rows, against a tiny stand-in for the DOM.
 vm.runInContext(`

@@ -151,6 +151,51 @@ function createConnectionStore({ file, legacyFile, storage = safeStorage, fsImpl
   };
 }
 
+// The portfolio server is a small machine (the service is capped at a
+// quarter of a CPU): a burst of requests from every Finance frame at once
+// (the history in tiers, a coin's chart, the widgets) is sent a few at a
+// time, each timed from when it's sent, so the ones waiting behind a slow
+// answer don't time out with it.
+const VPS_AT_ONCE = 3;
+const VPS_TIMEOUT_MS = 20_000;
+const VPS_SLOW_MS = 5_000;
+
+/** run() a few at a time, in the order asked. */
+function createRequestQueue(limit = VPS_AT_ONCE) {
+  let active = 0;
+  const waiting = [];
+  const next = () => {
+    if (active >= limit || !waiting.length) return;
+    active++;
+    const { run, resolve, reject } = waiting.shift();
+    Promise.resolve().then(run).then(resolve, reject).finally(() => { active--; next(); });
+  };
+  return {
+    run: fn => new Promise((resolve, reject) => { waiting.push({ run: fn, resolve, reject }); next(); }),
+    get active() { return active; },
+    get waiting() { return waiting.length; },
+  };
+}
+
+/** Why a request got no answer, in plain words (Node's fetch puts the reason in error.cause). */
+function describeNetworkError(error) {
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return `no answer in ${VPS_TIMEOUT_MS / 1000} s`;
+  const code = error?.cause?.code || error?.code || '';
+  const reasons = {
+    ENOTFOUND: 'its address didn’t resolve (DNS)',
+    EAI_AGAIN: 'its address didn’t resolve (DNS)',
+    ECONNREFUSED: 'it refused the connection (is the service running?)',
+    ECONNRESET: 'the connection was reset',
+    ETIMEDOUT: 'connecting timed out',
+    UND_ERR_CONNECT_TIMEOUT: 'connecting timed out',
+    EHOSTUNREACH: 'it can’t be reached (is Tailscale up?)',
+    ENETUNREACH: 'it can’t be reached (no network)',
+    UND_ERR_SOCKET: 'the connection dropped',
+    UND_ERR_HEADERS_TIMEOUT: `no answer in ${VPS_TIMEOUT_MS / 1000} s`,
+  };
+  return reasons[code] || (code ? `${code}` : error?.message || 'unreachable');
+}
+
 /** Plain-language reason for a failed request. */
 function describeFailure(status, error) {
   if (status === 401 || status === 403) return 'The server refused the token';
@@ -281,17 +326,31 @@ module.exports = async function activate(context) {
     return { configured: false };
   });
 
+  const vpsQueue = createRequestQueue();
   context.handle('vps:fetch', async (_event, route) => {
+    let url;
     try {
       const server = connection.get();
       if (!server) return { ok: false, status: 0, body: '', error: 'No portfolio server is set up' };
-      const url = requireVpsRoute(route, server.baseUrl);
-      const response = await fetch(url, {
-        headers: { Accept: 'application/json', Authorization: `Bearer ${server.token}` },
-        signal: AbortSignal.timeout(20_000),
+      url = requireVpsRoute(route, server.baseUrl);
+      return await vpsQueue.run(async () => {
+        const started = Date.now();
+        try {
+          const response = await fetch(url, {
+            headers: { Accept: 'application/json', Authorization: `Bearer ${server.token}` },
+            signal: AbortSignal.timeout(VPS_TIMEOUT_MS),
+          });
+          const body = await response.text();
+          const ms = Date.now() - started;
+          // Only the path: the query names your holdings.
+          if (ms >= VPS_SLOW_MS) console.warn(`[finance] the portfolio server took ${(ms / 1000).toFixed(1)} s for ${url.pathname} (${Math.round(body.length / 1024)} KB)`);
+          return { ok: response.ok, status: response.status, body };
+        } catch (error) {
+          const reason = describeNetworkError(error);
+          console.warn(`[finance] no answer from the portfolio server for ${url.pathname} after ${((Date.now() - started) / 1000).toFixed(1)} s: ${reason}`);
+          return { ok: false, status: 0, body: '', error: reason };
+        }
       });
-      const body = await response.text();
-      return { ok: response.ok, status: response.status, body };
     } catch (error) {
       return { ok: false, status: 0, body: '', error: error.message };
     }
@@ -305,3 +364,5 @@ module.exports.parsePairingCode = parsePairingCode;
 module.exports.createPairingCode = createPairingCode;
 module.exports.createConnectionStore = createConnectionStore;
 module.exports.probeServer = probeServer;
+module.exports.createRequestQueue = createRequestQueue;
+module.exports.describeNetworkError = describeNetworkError;

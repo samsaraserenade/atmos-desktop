@@ -14,7 +14,7 @@ assert.equal(localWrites.length,2);
 const primary=vm.createContext({...base,mountOptions:{}});
 vm.runInContext(code+"persistSettings({interval:'5m'});remember('BTCUSDT');",primary);
 assert.equal(globalWrites.length,2);
-assert.match(source,/if \(!isolated\) context.onCleanup\(onMarketQuery/);
+assert.match(source,/if \(!isolated\) \{?\s*context\.onCleanup\(onMarketQuery/);
 assert.match(source,/generation !== queryGeneration \|\| context.signal\?\.aborted/);
 const panel=fs.readFileSync(`${__dirname}/../panel.js`,'utf8');
 assert.match(panel,/toolbar.append\(layoutPicker\)/);
@@ -45,11 +45,16 @@ assert.match(portfolio,/context\.listen\(host, 'finance:refresh-chart-sizing'/);
 assert.match(portfolio,/context\.listen\(contentEl, 'finance:refresh-chart-sizing'/);
 assert.match(markets,/context\.listen\(root, 'finance:refresh-chart-sizing'/);
 const fn=portfolio.slice(portfolio.indexOf('export function portfolioSectionHistory'), portfolio.indexOf('const extraPortfolioViews')).replace('export ', '');
-const dataContext=vm.createContext({ totalHistory:[{t:1,v:100,g:100,spot:30,perp:70},{t:2,v:120,g:120,spot:40,perp:80}],remoteSections:[],convertFromGbp:v=>v*2 });
+const dataContext=vm.createContext({ totalHistory:[{t:1,v:100,g:100,spot:30,perp:70},{t:2,v:120,g:120,spot:40,perp:80}],remoteSections:[],convertFromGbp:v=>v*2,
+  sectionCoin:value=>value.startsWith('coin:')?value.slice(5):null, coinHistory:()=>({ points:[{t:2,value:15,currency:'USD'}] }), chartPointFromVps:point=>({ t:point.t, g:point.value, v:point.value*2 }) });
 vm.runInContext(fn,dataContext);
 assert.equal(vm.runInContext("portfolioSectionHistory('spot')[1].v",dataContext),80);
 assert.equal(vm.runInContext("portfolioSectionHistory('perp')[1].v",dataContext),160);
 assert.equal(vm.runInContext("portfolioSectionHistory('total')[1].v",dataContext),120);
+assert.equal(vm.runInContext("portfolioSectionHistory('coin:SOL')[0].v",dataContext),30,'a coin chart: its holdings\' history');
+// The Spot/Perp/Total tabs are gone: an extra chart's section is chosen in its picker.
+assert.doesNotMatch(panel,/dataset\.portfolioSection|aria-label', 'Portfolio section'/);
+assert.doesNotMatch(portfolio,/data-portfolio-section/);
 assert.match(panel,/count = \[2, 3, 4\]/);
 const css=fs.readFileSync(__dirname+'/../assets/chart-workspace.css','utf8');
 assert.ok(css.includes('.finance-chart-grid[data-count="3"] > .finance-chart-stage { grid-column:1 / -1; }'));

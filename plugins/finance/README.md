@@ -10,6 +10,19 @@ chart work on their own; the portfolio comes from a portfolio server you run
 > incomplete or wrong. Give the portfolio server **read-only** API keys
 > only. Nothing Finance shows is a recommendation to buy or sell.
 
+## Commands
+
+In Atmos's command bar (Ctrl+\, from any panel), answered by the engine
+frame (`src/commands.js`) and done by the panel, which opens:
+
+| Command | |
+|---|---|
+| `rev/chart <symbol> [exchange] [timeframe]` | A market chart: `rev/chart BTC 4h`, `rev/chart eth coinbase`. Your watchlist, holdings and recent charts are listed as you type; any symbol the exchanges trade works typed in full. Needs Market Data |
+| `rev/timeframe <timeframe>` | The main chart's timeframe, portfolio or market: `1m`, `4H`, `1D`, `1W`, `1M` (a month; `m` alone is minutes), `Auto`. With several charts, its **every chart** option sets them all |
+| `rev/portfolio [total \| spot \| perp \| <coin>]` | A portfolio chart on the main chart: the total (nothing typed), Spot, Perp (`perps`, `futures`) or a coin you hold: `rev/portfolio sol`, what your SOL has been worth. Your coins are listed as you type, but not while balances are hidden |
+
+Finance 1.1.0 needs Atmos 0.20.0.
+
 ## How it's built
 
 Finance runs in sandboxed frames, in an origin of its own (`"isolation": "origin"`; ATMOS_CORE_INTEGRATION.md § 4):
@@ -18,7 +31,7 @@ Finance runs in sandboxed frames, in an origin of its own (`"isolation": "origin
 finance/
 ├── extension.json          # frames: panel, six widgets, engine; legacyStorage
 ├── main.cjs                # Main process: VPS, cached network fetches
-├── frame-engine.js         # Background frame: reads the VPS, polls prices and rates, publishes
+├── frame-engine.js         # Background frame: reads the VPS, polls prices and rates, publishes; rev/ commands
 ├── frame-panel.js          # The Finance panel (portfolio and markets charts)
 ├── frame-widget-*.js       # Balance, Performance, Portfolio Connections, Spot, Allocation, Futures
 ├── panel.js, sidebar.js    # Finance's panel and widgets (run inside those frames)
@@ -122,9 +135,34 @@ market movement, deposits and withdrawals, from the VPS's per-symbol
 holdings history. Total shows the all-time high and low. Choosing the
 selected tile again flips every tile between percentages and amounts.
 
-The **watchlist** lives in the chart's ticker picker (the dropdown at the
-left of the toolbar), with your holdings above it: search or type a symbol
-to look it up or watch it, remove a watched symbol from its row.
+The chart's **picker** (the dropdown at the left of its toolbar) chooses
+what each chart shows, in two sections. **Portfolio**: the total (the card,
+with the live balance), Spot, Perp, and each coin you hold, with what it's
+worth and its share of the total. **Markets**: the market charts of the
+coins you hold and of the watchlist. Search or type a symbol to look it up
+or watch it (Enter on a ticker typed in full opens its market chart);
+remove a watched symbol from its row. Without Market Data it lists
+Portfolio only.
+
+A **coin's chart** is what your holdings of it have been worth over time,
+across every source that holds it: the inverse of leaving it out of the
+total. The portfolio server keeps each holding's value with every sample
+and leaves holdings out as hiding them does (`/v1/history?exclude=`), so a
+coin's history is the total less the total without it, read for the same
+times (`src/coin-history.js`, `remote.js` `loadHoldingsValueHistory`); no
+history of its own is kept. It follows the portfolio's scope (a holding you
+hid isn't counted), counts the holdings you have now (one sold off before
+on another source isn't known, so its past is missing), and leaves out
+grouped holdings such as a perp position's collateral, which the server
+leaves out only with their group. While a chart shows a coin it is kept up
+with the newest samples, as the total is.
+
+**Private mode** (Balance's header menu → Hide balances) hides what you hold,
+not only how much: amounts and the charts' value labels are masked, the
+Spot and Futures widgets say they're hidden instead of listing positions,
+Allocation masks its coins (the exposure lens) and wallet addresses, Movers
+its coins, and neither the picker nor the command bar lists your coins.
+Market prices (the watchlist, the markets chart) stay.
 
 The **Allocation** widget shows where the capital is: by dApp, protocol
 type, exchange, chain, wallet or stable/invested (chosen from the widget's

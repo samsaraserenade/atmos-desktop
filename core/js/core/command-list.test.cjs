@@ -119,13 +119,18 @@ const AUDIO = { extension: 'plugin:audio-player', label: 'Audio Player', rank: 2
 const AWAY = { extension: 'plugin:dice', label: 'Dice', rank: 4, commands: [{ name: 'roll', args: 'dice', about: 'Roll some dice', takesArgs: true, suggests: false }] };
 const SOURCES = [AWAY, AUDIO, MATRIX];
 
-test('commands are listed by what\'s showing: the panel\'s, widgets\', Atmos\'s own, the rest once typed', async () => {
+test('every command is listed, by what\'s showing: the panel\'s, widgets\', Atmos\'s own, then the rest, each under a heading', async () => {
   const { suggest, commandList } = await load();
   assert.deepEqual(commandList(SOURCES).map(command => `${command.name}:${command.rank}`),
     ['go:0', 'leave:0', 'mute:0', 'play:2', 'sidebar:3', 'settings:3', 'extensions:3', 'switch:3', 'roll:4']);
   const all = suggest('', { sources: SOURCES });
-  assert.deepEqual(titles(all), ['rev/go', 'rev/leave', 'rev/mute', 'rev/play', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch'], 'Dice has nothing showing');
-  assert.deepEqual(all.rows.map(row => row.source), ['Matrix Chat', 'Matrix Chat', 'Matrix Chat', 'Audio Player', '', '', '', '']);
+  assert.deepEqual(all.rows.map(row => row.heading ?? row.title), [
+    'Matrix Chat', 'rev/go', 'rev/leave', 'rev/mute', 'Audio Player', 'rev/play',
+    'Atmos', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch', 'Dice', 'rev/roll',
+  ], 'Dice, with nothing showing, last');
+  assert.ok(all.rows.filter(row => row.title).every(row => row.source === ''), 'under its heading, a row doesn\'t repeat whose it is');
+  const away = { extension: 'plugin:abacus', label: 'Abacus', rank: 4, commands: [{ name: 'count', about: 'Count' }] };
+  assert.deepEqual(suggest('', { sources: [AWAY, away] }).rows.filter(row => row.heading).map(row => row.heading), ['Atmos', 'Abacus', 'Dice'], 'those with nothing showing by name');
   assert.deepEqual(titles(suggest('r', { sources: SOURCES })), ['rev/roll'], 'typed, it\'s there');
   assert.deepEqual(titles(suggest('rev/ro', { sources: SOURCES })), ['rev/roll']);
 });

@@ -163,24 +163,75 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   // Private mode (Balance menu > Hide balances): amounts, positions and the
   // server address are masked in every widget, and the portfolio chart's
   // value labels too; the chart line stays. Then back again.
-  const togglePrivate = async () => {
+  // Frames here draw on few animation frames (Xvfb), and the figures are
+  // redrawn on one: wait for the Balance and the chart's labels to follow.
+  const togglePrivate = async hidden => {
     await header.click({ button: 'right' });
     await s.page.waitForTimeout(400);
     await s.page.locator('.ctx-menu-surface .ctx-item', { hasText: 'Hide balances' }).click();
-    await s.page.waitForTimeout(1500);
+    const shows = (masked => document.body.innerText.includes('••••') === masked);
+    await balance?.waitForFunction(shows, hidden, { timeout: 15000 }).catch(() => {});
+    await (await frameFor(s.page, 'Finance'))?.waitForFunction(masked => {
+      const label = document.querySelector('.atmos-chart__axes-layer text[text-anchor="end"]');
+      return !label || label.textContent.includes('••••') === masked;
+    }, hidden, { timeout: 15000 }).catch(() => {});
+    await s.page.waitForTimeout(1000);
   };
   const axisLabels = async () => (await frameFor(s.page, 'Finance'))?.evaluate(() => [...document.querySelectorAll('.atmos-chart__axes-layer text[text-anchor="end"]')].map(el => el.textContent).slice(0, 3)).catch(e => e.message);
-  await togglePrivate();
+  // The balance figure, sized to the widget's width: hidden and shown again,
+  // it's the size it was, inside the widget.
+  const balanceFit = () => balance?.evaluate(() => {
+    const amount = document.getElementById('tc-balance-amount');
+    const rect = amount?.getBoundingClientRect();
+    return rect ? { fontSize: amount.style.fontSize, inside: rect.right <= document.documentElement.clientWidth + 1 && amount.scrollWidth <= Math.ceil(rect.width) + 1 } : null;
+  }).catch(e => e.message);
+  // Which coins are held is hidden too: the main chart's picker, opened and closed.
+  const pickerContents = async () => (await frameFor(s.page, 'Finance'))?.evaluate(async () => {
+    const button = document.querySelector('.finance-chart-stage .finance-ticker-picker-button');
+    button?.click();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const sheet = button?.closest('.finance-ticker-picker');
+    const contents = {
+      headings: [...sheet.querySelectorAll('.finance-ticker-picker-heading')].map(el => el.textContent),
+      portfolio: [...sheet.querySelectorAll('.finance-ticker-picker-row[data-section]')].map(el => el.dataset.section),
+      markets: [...sheet.querySelectorAll('.finance-ticker-picker-row[data-symbol]')].map(el => el.dataset.symbol),
+    };
+    button?.click();
+    return contents;
+  }).catch(e => e.message);
+  const fitBefore = await balanceFit();
+  const pickerBefore = await pickerContents();
+  await togglePrivate(true);
   const spotFrame = await frameFor(s.page, 'Spot');
   r.privateMode = {
     balance: await text(balance),
     spot: await text(spotFrame),
+    futures: await text(await frameFor(s.page, 'Futures')),
+    // Below the fold, a widget is drawn once it's scrolled to.
+    allocation: await (async () => {
+      await s.page.evaluate(() => document.querySelector('#fin-section-portfolio-allocation')?.scrollIntoView({ block: 'center' }));
+      const frame = await frameFor(s.page, 'Allocation');
+      await frame?.waitForFunction(() => document.body.innerText.includes('••••'), null, { timeout: 15000 }).catch(() => {});
+      return text(frame);
+    })(),
+    // Its exposure lens lists coins: masked. (Back to capital after.)
+    exposure: await (async () => {
+      const frame = await frameFor(s.page, 'Allocation');
+      await frame?.evaluate(() => document.querySelector('[data-mode="exposure"]')?.click());
+      await s.page.waitForTimeout(500);
+      const shown = await text(frame);
+      await frame?.evaluate(() => document.querySelector('[data-mode="capital"]')?.click());
+      return shown;
+    })(),
     connections: await text(connections),
     axis: await axisLabels(),
     performance: await text(await frameFor(s.page, 'Performance')),
+    picker: { before: pickerBefore, private: await pickerContents() },
   };
-  await togglePrivate();
+  await togglePrivate(false);
   r.privateMode.balanceAfter = await text(balance);
+  r.privateMode.spotAfter = await text(spotFrame);
+  r.privateMode.fit = { before: fitBefore, after: await balanceFit() };
   r.privateMode.axisAfter = await axisLabels();
 
   step('// Opening a watchlist symbol');
@@ -192,6 +243,43 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   await s.page.waitForTimeout(2500);
   const panelNow = await frameFor(s.page, 'Finance');
   r.panelAfterWatchlistClick = await panelNow?.evaluate(() => ({ markets: !!document.querySelector('.mq-toolbar'), text: document.body.innerText.slice(0, 60) })).catch(e => e.message);
+
+  step("// A coin's chart");
+  // The picker's Portfolio section: ETH's holdings over time (the total less
+  // the total without them), on the main chart, in place of the total.
+  const mainPortfolioChart = async () => (await frameFor(s.page, 'Finance'))?.evaluate(() => {
+    const stage = document.querySelector('.finance-chart-stage');
+    return {
+      label: stage?.querySelector('.finance-ticker-picker-label')?.textContent ?? null,
+      markets: !!stage?.querySelector('.mq-market'),
+      axis: [...(stage?.querySelectorAll('.atmos-chart__axes-layer text[text-anchor="end"]') || [])].map(el => el.textContent).slice(0, 3),
+      status: [...(stage?.querySelectorAll('[data-chart-status]') || [])].map(el => el.textContent),
+      tabs: stage?.querySelectorAll('[data-portfolio-section]').length ?? null,
+    };
+  }).catch(e => e.message);
+  await panelNow?.evaluate(async () => {
+    document.querySelector('.finance-chart-stage .finance-ticker-picker-button')?.click();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    document.querySelector('.finance-chart-stage .finance-ticker-picker-row[data-section="coin:ETH"]')?.click();
+  }).catch(e => { r.coinError = e.message; });
+  await s.page.waitForTimeout(2500);
+  r.coinChart = await mainPortfolioChart();
+  await s.page.screenshot({ path: path.join(out, '95-coin-chart.png') });
+  // Typed in full, a ticker you hold is its market chart on Enter (the
+  // coin's own chart is the row above it).
+  await (await frameFor(s.page, 'Finance'))?.evaluate(async () => {
+    document.querySelector('.finance-chart-stage .finance-ticker-picker-button')?.click();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const search = document.querySelector('.finance-chart-stage .finance-ticker-picker-search');
+    search.value = 'eth';
+    search.dispatchEvent(new Event('input'));
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  }).catch(e => { r.enterError = e.message; });
+  await s.page.waitForTimeout(2500);
+  r.enterOnTicker = await (await frameFor(s.page, 'Finance'))?.evaluate(() => ({
+    markets: !!document.querySelector('.finance-chart-stage .mq-market'),
+    label: document.querySelector('.finance-chart-stage .finance-ticker-picker-label')?.textContent ?? null,
+  })).catch(e => e.message);
 
   step('// The ticker picker in every chart of a multi-chart layout');
   // Each chart's picker rises from its own toolbar. In two rows, the top
@@ -442,6 +530,86 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   }, 'data:font/ttf;base64,' + fs.readFileSync(path.join(repo, 'plugins/finance/assets/fonts/BebasNeue-Regular.ttf')).toString('base64'));
   await s.page.waitForTimeout(1500);
   r.appFontInWidget = await balance?.evaluate(async () => { await document.fonts.ready; return document.fonts.check('12px "E2E App Font"'); }).catch(e => e.message);
+
+  step('// rev/chart and rev/timeframe');
+  // Typed in Atmos's command bar with the keyboard, from another panel:
+  // answered by Finance's engine frame, done by its panel.
+  {
+    const command = async text => {
+      await s.page.keyboard.press('Control+Backslash');
+      await s.page.waitForTimeout(300);
+      await s.page.keyboard.type(text, { delay: 20 });
+      await s.page.waitForTimeout(900);
+      await s.page.keyboard.press('Enter');
+      const flash = await s.page.waitForFunction(() => document.querySelector('.command-bar-flash')?.textContent.trim() || null, null, { timeout: 5000 })
+        .then(handle => handle.jsonValue()).catch(() => null);
+      await s.page.waitForTimeout(2500);
+      return flash;
+    };
+    const mainChart = async () => (await frameFor(s.page, 'Finance'))?.evaluate(() => {
+      const stage = document.querySelector('.finance-chart-stage');
+      return {
+        markets: !!stage?.querySelector('.mq-market'),
+        ticker: stage?.querySelector('.mq-ticker-input')?.value ?? null,
+        timeframe: stage?.querySelector('[data-interval].is-active, [data-interval][aria-pressed="true"]')?.dataset.interval ?? null,
+      };
+    }).catch(e => e.message);
+    await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('audio-player'));
+    await s.page.waitForTimeout(800);
+    const chartFlash = await command('rev/chart BTC 4h');
+    const panelNow = await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).getActivePanelPluginId());
+    const afterChart = await mainChart();
+    const timeframeFlash = await command('rev/timeframe 1D');
+    const afterTimeframe = await mainChart();
+    const solFlash = await command('rev/chart sol');
+    const afterSol = await mainChart();
+    // The portfolio chart takes a timeframe as its toolbar gives it.
+    await (await frameFor(s.page, 'Finance'))?.evaluate(() => document.dispatchEvent(new CustomEvent('atmos:chart-mode', { detail: { mode: 'portfolio' } })));
+    await s.page.waitForTimeout(1500);
+    const weekFlash = await command('rev/timeframe 1W');
+    const portfolio = await mainChart();
+    // rev/portfolio: Spot, a coin, then the total again, from another panel.
+    await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('audio-player'));
+    await s.page.waitForTimeout(800);
+    const sections = {};
+    for (const [name, text] of [['spot', 'rev/portfolio spot'], ['eth', 'rev/portfolio eth'], ['total', 'rev/portfolio total']]) {
+      const flash = await command(text);
+      sections[name] = { flash, ...(await mainPortfolioChart()) };
+    }
+    // Two charts, from another panel: "every chart" sets both.
+    await (await frameFor(s.page, 'Finance'))?.evaluate(() => {
+      document.querySelector('.finance-layout-button')?.click();
+      [...document.querySelectorAll('.finance-layout-menu button')].find(b => Number(b.dataset.count) === 2 && b.dataset.orientation === 'horizontal')?.click();
+    });
+    await s.page.waitForTimeout(2000);
+    await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('audio-player'));
+    await s.page.waitForTimeout(800);
+    await s.page.keyboard.press('Control+Backslash');
+    await s.page.waitForTimeout(300);
+    await s.page.keyboard.type('rev/timeframe 1h', { delay: 20 });
+    await s.page.waitForTimeout(900);
+    const everyChip = await s.page.evaluate(() => [...document.querySelectorAll('#command-bar-list .command-bar-chip')].map(chip => chip.textContent.trim()));
+    await s.page.locator('#command-bar-list .command-bar-chip', { hasText: 'every chart' }).click().catch(() => {});
+    await s.page.waitForTimeout(500);
+    await s.page.keyboard.press('Enter');
+    const everyFlash = await s.page.waitForFunction(() => document.querySelector('.command-bar-flash')?.textContent.trim() || null, null, { timeout: 5000 })
+      .then(handle => handle.jsonValue()).catch(() => null);
+    await s.page.waitForTimeout(3000);
+    const everyChart = await (await frameFor(s.page, 'Finance'))?.evaluate(() => [document.querySelector('.finance-chart-stage'), ...document.querySelectorAll('.finance-extra-chart')]
+      .map(chart => chart.querySelector('[data-interval].is-active, [data-interval][aria-pressed="true"]')?.dataset.interval ?? null)).catch(e => e.message);
+    await (await frameFor(s.page, 'Finance'))?.evaluate(() => {
+      document.querySelector('.finance-layout-button')?.click();
+      [...document.querySelectorAll('.finance-layout-menu button')].find(b => Number(b.dataset.count) === 1)?.click();
+    });
+    r.revCommands = {
+      chart: { flash: chartFlash, panel: panelNow, ...afterChart },
+      timeframe: { flash: timeframeFlash, ...afterTimeframe },
+      sol: { flash: solFlash, ...afterSol },
+      portfolio: { flash: weekFlash, ...portfolio },
+      sections,
+      every: { chips: everyChip, flash: everyFlash, charts: everyChart },
+    };
+  }
 
   r.errors = s.errors;
   await s.page.evaluate(async () => (await import('atmos-core/persist.js')).flushPendingSave());

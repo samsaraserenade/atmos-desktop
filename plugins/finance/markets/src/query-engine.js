@@ -1,13 +1,7 @@
 export { parseIntervalMs, formatIntervalMs } from '../../src/chart-service.js';
 // Keep this module on the plugin protocol's supported `.js` module route.
-const KNOWN_EXCHANGES = Object.freeze(['binance', 'bybit', 'kraken', 'coinbase']);
+import { KNOWN_EXCHANGES, normalizeSymbol } from './symbols.js';
 const INTENTS = Object.freeze(['overview', 'price', 'trades', 'orderbook', 'liquidations', 'candles', 'analytics', 'providers', 'raw']);
-function normalizeSymbol(value) {
-  const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!compact) return null;
-  if (/^[A-Z]{2,6}$/.test(compact) && !['USD', 'USDT', 'USDC', 'EUR', 'GBP'].includes(compact)) return `${compact}USDT`;
-  return compact;
-}
 
 export function parseMarketQuery(input, fallbackSymbol = 'BTCUSDT') {
   const raw = String(input || '').trim();

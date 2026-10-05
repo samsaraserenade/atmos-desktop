@@ -105,6 +105,8 @@ const formatHoldingValue = masked(value => '$' + _holdingValueFmt.format(value))
 // nothing" aren't the same string, and a loss reads as a loss at a glance
 // rather than needing the reader to notice a bare minus sign.
 const formatSignedUsd = masked(formatSignedUsdPlain);
+const HIDDEN_NOTE = 'Hidden while balances are hidden';
+
 function formatSignedUsdPlain(value) {
   if (value == null || !Number.isFinite(value)) return '—';
   const sign = value > 0 ? '+' : value < 0 ? '−' : '';
@@ -306,7 +308,7 @@ function updateFuturesDirectionBar() {
   // Match the invested/cash bar's cache behavior: palette colors are part
   // of the render key, so a price-color change repaints even when the ratio
   // values themselves have not moved.
-  const key = `${longColor}|${shortColor}|${showAmount}|${split.long}|${split.short}`;
+  const key = `${isPrivate()}|${longColor}|${shortColor}|${showAmount}|${split.long}|${split.short}`;
   if (key === _lastFuturesDirectionKey) return;
   _lastFuturesDirectionKey = key;
   futuresDirectionEl.style.setProperty('--pt-long-fill', hexToRgba(longColor, .25));
@@ -316,7 +318,8 @@ function updateFuturesDirectionBar() {
 
 function renderFuturesRows() {
   const sortMode = portfolioState.futuresSortMode === 'size' ? 'size' : 'pnl';
-  const positions = getFuturesPositions().sort((a, b) => {
+  // Private mode hides your positions, not only their sizes.
+  const positions = (isPrivate() ? [] : getFuturesPositions()).sort((a, b) => {
     if (sortMode === 'size') {
       return (b.positionValue ?? b.value ?? -Infinity) - (a.positionValue ?? a.value ?? -Infinity);
     }
@@ -331,8 +334,8 @@ function renderFuturesRows() {
     if (!futuresEmptyEl) {
       futuresEmptyEl = document.createElement('div');
       futuresEmptyEl.className = 'watchlist-empty';
-      futuresEmptyEl.textContent = 'No open positions';
     }
+    futuresEmptyEl.textContent = isPrivate() ? HIDDEN_NOTE : 'No open positions';
     if (!futuresEmptyEl.isConnected) futuresRowsHost.appendChild(futuresEmptyEl);
     return;
   }
@@ -549,14 +552,15 @@ export function renderPositionRows() {
   updateSpotTotal();
   if (!positionsRowsHost?.isConnected) return;
   const sortMode = portfolioState.positionsSortMode === 'share' ? 'share' : 'change';
-  const heldList = heldSymbols().sort(sortMode === 'share' ? byShare : byChange);
+  // Private mode hides what you hold, not only how much.
+  const heldList = isPrivate() ? [] : heldSymbols().sort(sortMode === 'share' ? byShare : byChange);
   if (!heldList.length) {
     clearRowCache(positionsRowCache);
     if (!positionsEmptyEl) {
       positionsEmptyEl = document.createElement('div');
       positionsEmptyEl.className = 'watchlist-empty';
-      positionsEmptyEl.textContent = 'No holdings yet';
     }
+    positionsEmptyEl.textContent = isPrivate() ? HIDDEN_NOTE : 'No holdings yet';
     if (!positionsEmptyEl.isConnected) positionsRowsHost.appendChild(positionsEmptyEl);
     return;
   }

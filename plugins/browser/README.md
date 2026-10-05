@@ -32,6 +32,7 @@ The plugin itself is the browser's UI and its memory:
 |---|---|
 | `boot.js` | The background frame: the engine, alive while Atmos runs, so tabs stay open when the panel is switched away and links from Atmos have somewhere to go. |
 | `src/engine.js` | Tabs and what their pages are doing, history, bookmarks, site icons, downloads, what pages ask; the views follow its changes. |
+| `src/commands.js` | `rev/new-tab`, `rev/tab` and `rev/close-tab` in Atmos's command bar. |
 | `panel.js`, `src/ui/*` | The tab strip, toolbar and address bar, the new-tab page, History, the warning and error pages, prompts, find, downloads, menus. |
 | `sidebar.js`, `sidebar-bookmarks.js` | The Tabs and Bookmarks widgets. |
 | `settings.js` | Its settings, on a page of their own: Settings → Browser. |
@@ -199,6 +200,20 @@ never fire while you type in a page):
 
 In the address bar, Alt+Enter opens in a new tab and a leading `?` always
 searches.
+
+## Commands
+
+In Atmos's command bar (Ctrl+\, from any panel), answered by the engine
+in the background frame (`src/commands.js`):
+
+| Command | |
+|---|---|
+| `rev/new-tab [address or search]` | A new tab, going there as the address bar would (bookmarks and history listed as you type); its **private** option opens a private tab |
+| `rev/tab <name>` | Go to one of your tabs, by title or address |
+| `rev/close-tab [name]` | Close the current tab, or one by name (Ctrl+Shift+T brings it back; a private tab's row is marked, since once no private tab is open, closed ones can't come back) |
+
+`rev/new-tab` and `rev/tab` show the browser. Atmos Browser 1.1.0 needs
+Atmos 0.20.0.
 
 ## Settings
 

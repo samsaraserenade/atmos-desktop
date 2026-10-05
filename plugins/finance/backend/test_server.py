@@ -78,6 +78,26 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(source_point["spot"], 0)
         self.assertEqual(source_point["perp"], 0)
 
+    def test_excluded_holdings_are_read_only_at_the_samples_returned(self):
+        # A coin's history in Finance is the total less the total without it:
+        # exact at every point, and the holdings behind each point read by
+        # its sample, a chunk of samples at a time (0.9.1).
+        from unittest import mock
+        for i in range(10):
+            server.ingest(self.db, {"ts_ms": 1000 + i * 60_000, "sources": [{"id": "wallet", "value": 100 + i, "holdings": [
+                {"id": "sol", "symbol": "SOL", "value": 10 + i, "kind": "invested"},
+                {"id": "usdc", "symbol": "USDC", "value": 90, "kind": "cash"},
+            ]}]})
+        full = server.history(self.db, 0, 10**7, "5m")
+        less = server.history(self.db, 0, 10**7, "5m", {("wallet", "sol")})
+        self.assertEqual([p["t"] for p in full], [241_000, 541_000], "each bucket's newest sample")
+        self.assertEqual([p["t"] for p in less], [p["t"] for p in full])
+        self.assertEqual([a["v"] - b["v"] for a, b in zip(full, less)], [14, 19], "SOL's value at those samples")
+        with mock.patch.object(server, "SAMPLES_PER_QUERY", 1):
+            self.assertEqual(server.history(self.db, 0, 10**7, "5m", {("wallet", "sol")}), less)
+        raw = server.history(self.db, 0, 10**7, "raw", {("wallet", "sol")})
+        self.assertEqual([p["v"] for p in raw], [90] * 10)
+
     def test_position_exclusion_does_not_remove_shared_account_capital(self):
         server.ingest(self.db, {"ts_ms": 1000, "sources": [{
             "id": "hyperliquid-wallet", "value": 100,
@@ -291,6 +311,42 @@ class ApiTests(unittest.TestCase):
         self.assertIn("from", body["error"])
         self.assertEqual(self.get("/v1/holdings-history?to=soon")[0], 400)
         self.assertEqual(self.get("/v1/history?from=0&to=9999")[0], 200)
+
+    def test_answers_are_logged_with_their_time_and_size_never_the_query(self):
+        from unittest import mock
+        lines = []
+        with mock.patch.object(server.ApiHandler, "log_message", lambda handler, fmt, *args: lines.append(fmt % args)):
+            self.assertEqual(self.get("/v1/history?from=0&to=9999&exclude=wallet%7Csecret-coin")[0], 200)
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0], r"^/v1/history 200 \d+ ms \d+ bytes$")
+        self.assertNotIn("secret", lines[0])
+
+    def test_history_answers_are_built_one_at_a_time(self):
+        # What takes the memory: two big answers at once had 0.9.0 killed.
+        import threading
+        import time as clock
+        from unittest import mock
+        active, most = [0], [0]
+        lock = threading.Lock()
+
+        def slow(*args, **kwargs):
+            with lock:
+                active[0] += 1
+                most[0] = max(most[0], active[0])
+            clock.sleep(0.05)
+            with lock:
+                active[0] -= 1
+            return []
+
+        with mock.patch.object(server, "history", slow), mock.patch.object(server, "holdings_history", slow):
+            threads = [threading.Thread(target=self.get, args=(path,)) for path in
+                       ["/v1/history?from=0", "/v1/history?from=1", "/v1/holdings-history?from=0", "/v1/history?from=2"]]
+            for thread in threads:
+                thread.start()
+            self.assertEqual(self.get("/v1/portfolio")[0], 200, "the rest isn't held up")
+            for thread in threads:
+                thread.join()
+        self.assertEqual(most[0], 1)
 
     def test_history_says_when_the_row_limit_cut_it_short(self):
         from unittest import mock
