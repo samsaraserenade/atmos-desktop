@@ -35,6 +35,13 @@
  * saved state without an approval): the installed copy loads, and the
  * developer folder is ignored, marked on it as `developerIgnored`.
  *
+ * Copies of the old system services left in the installed folder by Atmos
+ * 0.11 (when Audio, Location and Wallpaper were packages, their manifests
+ * saying "tier": "system") are ignored: Core has those, or they are
+ * official services again (Location, 0.21), whose package replaces the
+ * folder when installed. Listed, the old copy showed as a community
+ * extension that can't load, and stood in the official one's way.
+ *
  * A third place, `previousRoot`, holds the version an update replaced
  * (extension-manager.cjs keeps it until the new one has started once). Its
  * copies only count if officially signed, and lose ties, so they only load
@@ -50,6 +57,8 @@ const { compareVersions, isValidVersion } = require('./extension-version.cjs');
 const TIERS = Object.freeze(['system', 'first-party', 'third-party']);
 const KINDS = Object.freeze({ plugins: 'plugin', services: 'service' });
 const VALID_ID = /^[a-z0-9][a-z0-9-]*$/;
+// The system services as Atmos 0.11 installed them, as packages.
+const FORMER_SYSTEM_PACKAGES = new Set(['audio', 'location', 'wallpaper']);
 
 /**
  * The tier a bundled or unsigned extension gets from where it was found.
@@ -181,6 +190,11 @@ function createExtensionCatalog({
           continue;
         }
         const candidate = candidateFor(kind, id, source, extensionPath);
+        if ((source === 'installed' || source === 'previous') && kind === 'services'
+          && FORMER_SYSTEM_PACKAGES.has(id) && candidate.manifest?.tier === 'system') {
+          if (source === 'installed') warn(`[extensions] ignoring installed service '${id}' (${extensionPath}): left by Atmos 0.11, when it was a package; installing the official one replaces it`);
+          continue;
+        }
         // A kept previous version counts only as an official fallback.
         if (source === 'previous' && !(candidate.tier === 'first-party' && candidate.signature?.status === 'valid')) continue;
         if (!byId.has(id)) byId.set(id, []);

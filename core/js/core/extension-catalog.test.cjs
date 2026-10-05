@@ -52,3 +52,26 @@ test('system services come from Core; bundled extensions win; only bundled ones 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the old system services Atmos 0.11 installed as packages are ignored, so the official Location can take the id', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-catalog-'));
+  try {
+    const installed = path.join(dir, 'installed', 'services');
+    const bundled = path.join(dir, 'bundled', 'services');
+    makeExtension(installed, 'location', { apiVersion: 2, tier: 'system', version: '1.0.0', publisher: 'atmos' });
+    makeExtension(installed, 'wallpaper', { apiVersion: 2, tier: 'system', version: '1.0.0' });
+    makeExtension(installed, 'clock', { tier: 'system' }); // anything else claiming it: a community extension, as before
+    const warnings = [];
+    let catalog = createExtensionCatalog({ bundledRoot: () => null, installedRoot: kind => (kind === 'services' ? installed : null), warn: message => warnings.push(message) });
+    assert.deepEqual(catalog.list('services').map(entry => `${entry.id}:${entry.tier}`), ['clock:third-party']);
+    assert.ok(warnings.some(message => message.includes("installed service 'location'") && message.includes('0.11')));
+    // Running from source (or once the official one is installed): that one.
+    makeExtension(bundled, 'location', { apiVersion: 4, tier: 'first-party', version: '1.0.0' });
+    catalog = createExtensionCatalog({ bundledRoot: kind => (kind === 'services' ? bundled : null), installedRoot: kind => (kind === 'services' ? installed : null), warn() {} });
+    const location = catalog.find('services', 'location');
+    assert.equal(location.source, 'bundled');
+    assert.equal(location.tier, 'first-party');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
