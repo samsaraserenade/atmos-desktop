@@ -54,7 +54,6 @@
 }
 .mq-refresh-select:hover,.mq-refresh-select:focus { border-color:rgba(var(--ink-rgb),.24); background:rgba(var(--ink-rgb),.1); }
 .mq-refresh-select option { color:rgb(var(--ink-rgb)); background:rgb(var(--surface-rgb)); }
-.mq-timeframes.is-hidden { display:none; }
 
 .portfolio-section-summary {
   display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:0 14px;
@@ -189,11 +188,6 @@
 .futures-card-stat-label { font-size:.55rem; letter-spacing:.04em; text-transform:uppercase; color:rgba(var(--ink-rgb),.32); }
 .futures-card-stat-value { font-size:.65rem; font-variant-numeric:tabular-nums; color:rgba(var(--ink-rgb),.75); }
 
-
-@media (max-width:720px) {
-
-  .mq-timeframes [data-interval="15m"], .mq-timeframes [data-interval="4h"] { display:none; }
-}
 
 /* Keep controls in document flow so the plot never sits underneath them. */
 .mq-market { display:flex; flex-direction:column; }

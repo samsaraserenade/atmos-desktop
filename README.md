@@ -83,6 +83,8 @@ reach into your pages, they add to the workspace around them.
 - **Sidebar widgets** that show beside any panel, the browser included.
 - **Background work** that lasts the whole session: a player, a socket, a
   poller.
+- **Commands** in Atmos's command bar: `rev/play` from any panel, listed
+  by what's on screen.
 - **Services and libraries** for other extensions to build on: charts,
   currency, market data, media tags.
 - **One SDK for everyone.** Official or not, every extension runs in
@@ -100,6 +102,11 @@ Atmos Core owns the shell, and extensions fill it.
   or stacked, run four in a grid, or float them as windows you can move,
   resize and layer. Dividers are draggable and every layout remembers its
   proportions. Ctrl+Tab opens Task View; a middle click opens Settings.
+- **A command bar.** Ctrl+\\ opens a bar over the bottom of the panel
+  you're in (or in the sidebar's footer, if you prefer) for `rev/`
+  commands: switch panels, open Settings on a page, and the commands of
+  your extensions, listed by what's on screen (`rev/go` a Matrix room,
+  `rev/play` the music) and answered as you type.
 - **A sidebar of widgets.** Widgets from any extension share one sidebar.
   Reorder them, resize them, collapse them, and choose whether each one
   shows everywhere or only beside a particular panel.
@@ -212,7 +219,8 @@ Features:
 - Metadata handling
 - A waveform seek bar
 - Now Playing, Queue and Library sidebar widgets
-- Global play and pause controls
+- Global play and pause controls: Space, and `rev/play`, `rev/next`,
+  `rev/previous`, `rev/song` and `rev/album` in the command bar
 
 ### Matrix Chat
 
@@ -234,9 +242,9 @@ A secure chat experience built directly into the workspace using
   encrypted with Windows' own secure storage, and deleted when you sign out.
 - **Rooms, spaces and DMs** in a sidebar widget, with replies, edits,
   reactions, read receipts, images and files, and several accounts at once.
-- **`rev/` commands** in the message bar: `rev/go`, `rev/join`, `rev/dm`,
-  `rev/create-room`, `rev/create-space`, `rev/invite`, `rev/leave` and
-  `rev/notifications`.
+- **`rev/` commands** in Atmos's command bar, from any panel or typed in
+  the message bar: `rev/go`, `rev/join`, `rev/dm`, `rev/create-room`,
+  `rev/create-space`, `rev/invite`, `rev/leave` and `rev/notifications`.
 
 ---
 

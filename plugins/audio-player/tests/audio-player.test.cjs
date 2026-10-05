@@ -19,7 +19,7 @@ const sources = () => fs.readdirSync(root, { recursive: true })
 
 test('runs in frames: drawer panel, three widgets, a boot frame with Space', () => {
   const m = manifest();
-  assert.equal(m.apiVersion, 3);
+  assert.equal(m.apiVersion, 4);
   assert.equal(m.runtime, 'frame');
   assert.equal(m.requires['extensions.frames'], 3);
   assert.deepEqual(m.contributes.panel.drawer, { bar: 54, keys: true });
@@ -112,6 +112,13 @@ test('menus keep their controls: waveform appearance and cover appearance', () =
   assert.match(view, /type: 'range', label: 'Cover Size'/);
   assert.match(view, /zeroLabel: 'Off'/);
   assert.match(read('sidebar-queue.js'), /label: 'Show in Explorer'/);
+});
+
+test('Atmos\'s command bar opens over the player bar; rev/ in the search goes to it', () => {
+  const view = read('src/player-view.js');
+  assert.match(view, /atmos\.commands\.bar\(bar\)/);
+  assert.match(view, /atmos\.commands\.field\(search\);\r?\n  search\.addEventListener\('input'/, 'before the search\'s own listener, so rev/ never filters the grid');
+  assert.match(read('src/engine.js'), /handleCommands\(\{ togglePlay, playNext, playPrev, playTrack, playAlbum, status \}\)/, 'answered in the background frame');
 });
 
 test('typing searches the library, in the panel or on the workspace', () => {

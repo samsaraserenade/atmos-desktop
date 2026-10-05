@@ -350,6 +350,17 @@ setTimeout(() => {
     await engine(e => e.forward(e.selectedId()));
     await settled('Linked');
     check('back and forward', (await selected()).title === 'Linked');
+    // The mouse's own back and forward buttons (X buttons 8 and 9), pressed over the page.
+    const pageBox = await layerBox();
+    await x.click(pageBox.x + 300, pageBox.y + 300, 8);
+    await settled('Alpha');
+    await wait(700); // long enough for a second step back to show, if one were taken
+    const afterBack = (await selected()).title;
+    await x.click(pageBox.x + 300, pageBox.y + 300, 9);
+    await settled('Linked');
+    await wait(700);
+    const afterForward = await selected();
+    check('the mouse\u2019s back and forward buttons go back and forward, once each', afterBack === 'Alpha' && afterForward.title === 'Linked' && afterForward.canGoBack, { afterBack, afterForward: afterForward.title });
     const history = await engine(e => e.history.search('').then(list => list.map(item => item.title)));
     check('history keeps the pages visited', history.includes('Alpha') && history.includes('Linked'), history);
     check('failed pages and refused addresses aren’t in history', !history.some(title => /pwned|passwd/.test(title)), history);
@@ -408,6 +419,29 @@ setTimeout(() => {
     const stillBrowser = await registry(r => r.getActivePanelPluginId());
     const sidebarOpen = await page.evaluate(() => document.body.classList.contains('drawer-open'));
     check('keys typed in a page reach the page, Atmos\'s single-key shortcuts never fire', typed.value === 'a[b]c`d' && typed.keys.includes('Tab') && stillBrowser === 'browser' && sidebarOpen === sidebarBefore, { typed, stillBrowser, sidebarBefore, sidebarOpen });
+    // Ctrl+\ is Atmos's command bar (command-bar.js), from a page too, and the page never sees it.
+    await x.click(layer.x + field.x + 20, layer.y + field.y + 10);
+    await wait(200);
+    await x.key('ctrl+\\');
+    // It opens over the bottom of the browser's panel (Atmos's own bar: the browser declares none).
+    const barOpen = await until(() => page.evaluate(() => {
+      const bar = document.getElementById('command-bar-field');
+      if (!bar?.isConnected || document.activeElement?.id !== 'command-bar-input') return null;
+      const panel = document.querySelector('iframe[data-extension="plugin:browser"].atmos-extension-frame-panel')?.getBoundingClientRect();
+      const rect = bar.getBoundingClientRect();
+      return { own: bar.classList.contains('is-own'), height: Math.round(rect.height), onPanel: !!panel && Math.abs(rect.bottom - panel.bottom) <= 1 && Math.abs(rect.width - panel.width) <= 1 };
+    }), { timeout: 3000 });
+    const keysAfterBar = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)'));
+    check('Ctrl+\\ in a page opens Atmos\'s command bar over the browser\'s panel, and the page doesn\'t get it',
+      !!barOpen && barOpen.own && barOpen.onPanel && barOpen.height === 54 && !keysAfterBar.includes('\\'), { barOpen, keysAfterBar });
+    await x.key('Escape');
+    const barClosed = await until(() => page.evaluate(() => !document.getElementById('command-bar-field')?.isConnected
+      && document.activeElement?.tagName === 'WEBVIEW'), { timeout: 3000 });
+    await x.type('z');
+    await wait(300);
+    const afterBar = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify({ value: document.getElementById("field").value })'));
+    check('…Esc closes it and the page has the keyboard again, the sidebar as it was', barClosed && afterBar.value.includes('z')
+      && await page.evaluate(() => document.body.classList.contains('drawer-open')) === sidebarOpen, { barClosed, afterBar, active: await page.evaluate(() => document.activeElement?.tagName) });
     // Zoom, per site.
     await x.key('ctrl+equal');
     await wait(400);

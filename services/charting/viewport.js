@@ -176,8 +176,13 @@ function normalizeCandle(candle, index) {
   return [t0, t1, o, h, l, c].every(finite) ? Object.freeze({ source: candle, index, t0, t1, o, h, l, c }) : null;
 }
 
-function rangeStartTime(key, firstTime, lastTime) {
+// 'last:<ms>' (Ctrl+click on a timeframe) shows that much time up to the
+// newest point; '1d', '1w', '1m' (30 days) and 'ytd' are the older range
+// buttons' keys, still read from saved charts.
+export function rangeStartTime(key, firstTime, lastTime) {
   if (!key || key === 'all') return firstTime;
+  const last = /^last:(\d+)$/.exec(key);
+  if (last) return lastTime - Number(last[1]);
   if (key === '1d') return lastTime - 24 * 60 * 60_000;
   if (key === '1w') return lastTime - 7 * 24 * 60 * 60_000;
   if (key === '1m') return lastTime - 30 * 24 * 60 * 60_000;

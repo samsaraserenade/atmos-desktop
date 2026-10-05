@@ -167,6 +167,13 @@ test('permissions: denied unless the user allowed the site; fullscreen and clipb
     assert.equal(decide(name, {}, allowAll), 'allow', name);
     assert.equal(decide(name, {}, () => 'block'), 'deny', name);
   }
+  // The mouse's back and forward buttons: on release, never other buttons or moves.
+  assert.equal(policy.mouseCommand({ type: 'mouseUp', button: 'back' }), 'back');
+  assert.equal(policy.mouseCommand({ type: 'mouseUp', button: 'forward' }), 'forward');
+  for (const mouse of [{ type: 'mouseDown', button: 'back' }, { type: 'mouseUp', button: 'left' }, { type: 'mouseUp', button: 'middle' },
+    { type: 'mouseMove', button: 'none' }, { type: 'mouseUp' }, null, undefined]) {
+    assert.equal(policy.mouseCommand(mouse), null, JSON.stringify(mouse));
+  }
   // Pointer lock: a tab's, just after a click or key in it, with no prompt; never a pop-up's.
   assert.equal(policy.permissionDecision('pointerLock', {}, none, { origin, tab: true, activated: true }), 'allow');
   assert.equal(policy.permissionDecision('pointerLock', {}, allowAll, { origin, tab: true, activated: false }), 'deny');
@@ -384,6 +391,13 @@ test('the browser\'s shortcuts are taken before the page; single keys never are'
   assert.equal(key('j', { control: true }), 'downloads');
   assert.equal(key('p', { control: true }), 'print');
   assert.equal(key('n', { control: true }), null, 'no new windows');
+  // Atmos's command bar: the \ | key (US \, UK's left of Z), with Shift too, Cmd on a Mac.
+  assert.equal(key('\\', { control: true, code: 'Backslash' }), 'command-bar');
+  assert.equal(key('\\', { control: true, code: 'IntlBackslash' }), 'command-bar');
+  assert.equal(key('|', { control: true, shift: true, code: 'IntlBackslash' }), 'command-bar');
+  assert.equal(key('Unidentified', { control: true, code: 'IntlBackslash' }), 'command-bar');
+  assert.equal(key('\\', { meta: true }), 'command-bar');
+  assert.equal(key('\\', { control: true, alt: true }), null, 'AltGr+\\ types a character');
   for (const single of [']', '[', '\\', 'Tab', ' ', 'Escape', 'a', 'ArrowLeft']) assert.equal(key(single), null, single);
   assert.equal(policy.shortcutFor({ type: 'keyUp', key: 't', control: true }), null);
   assert.equal(key('ArrowLeft', { alt: true, control: true }), null);

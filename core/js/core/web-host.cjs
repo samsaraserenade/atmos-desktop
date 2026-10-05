@@ -767,6 +767,9 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     // Electron reports mouse events for every frame's widget, an embedded
     // frame of another site included.
     contents.on('before-mouse-event', (_event, mouse) => {
+      // The mouse's back and forward buttons, as Alt+Left and Alt+Right.
+      const command = policy.mouseCommand(mouse);
+      if (command) { send(guestId, 'command', { command }); return; }
       if (mouse.type !== 'mouseDown') return;
       userActed(contents);
       send(guestId, 'mouse-down');

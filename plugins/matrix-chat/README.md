@@ -151,13 +151,19 @@ The generated attachment bundle is consumed from `vendor/`; its source entry is 
   into the last room you had open (`engine.view` keeps one per account in
   `lastRooms`); with none, `ui/empty-view.js` shows an empty timeline and the
   message bar.
-- `rev/` commands in the message bar (`ui/commands.js` parses them,
-  `ui/command-bar.js` lists and runs them): `rev/go`, `rev/join`, `rev/dm`,
-  `rev/create-room`, `rev/create-space`, `rev/invite`, `rev/leave`,
-  `rev/notifications` (the ping sound, on or off). The list
-  opens above the bar; `@` mentions and plain text are untouched, and Enter
-  never sends a command as a message. The two create commands show their
-  options as chips.
+- `rev/` commands in Atmos's command bar (SDK 1.3): `rev/go`, `rev/join`,
+  `rev/dm`, `rev/create-room`, `rev/create-space`, `rev/invite`,
+  `rev/leave`, `rev/notifications` (the ping sound, on or off), declared in
+  `extension.json` (`contributes.commands`) and answered in the background
+  frame by `ui/command-handlers.js`, so they work from any panel (Ctrl+\\)
+  with the Chat panel closed. In the Chat panel the bar opens over the
+  message bar (`atmos.commands.bar`), and typing `rev/` there hands what's
+  typed to it (`atmos.commands.field`, keys typed fast following it); `@`
+  mentions and plain text are untouched, and a command is never sent as a
+  message. The two create
+  commands offer their options as chips (which space, who can join,
+  encryption, an address); creating a space goes straight on to its first
+  room. Needs Atmos 0.20.0 (`engines`).
 - Two sidebar widgets. Matrix Chat: invites, then one list of collapsible
   groups (Direct Messages, each space with the rooms you haven't joined,
   Other rooms); which are open is saved. Matrix Account: your profile, saved

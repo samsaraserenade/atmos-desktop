@@ -15,7 +15,7 @@ test('service declares a renderer-only CoreV2 contract', () => {
   assert.equal(extension.apiVersion, 2);
   assert.equal(extension.requires['extensions.manifest'], 1);
   assert.equal(extension.requires['lifecycle.context'], 1);
-  assert.match(extension.version, /^1\.2\.\d+$/); // patch releases (a README fix, say) don't change the contract
+  assert.match(extension.version, /^1\.\d+\.\d+$/); // minor and patch releases don't change the contract
   assert.equal(service.apiVersion, 2);
   assert.equal(service.rendererApiVersion, 2);
   assert.equal(service.rendererApi, 'api.js');

@@ -81,6 +81,31 @@ function bottomDock() { return document.getElementById('sidebar-bottom-dock'); }
 function topDock() { return document.getElementById('sidebar-top-dock'); }
 function sections() { return [...(panel()?.querySelectorAll('.fin-section') || [])]; }
 
+/**
+ * Put a section (a widget, holding its extension's frame) in `parent`
+ * before `before` (null: at the end). Moving an element that holds an
+ * iframe reloads the iframe, so a widget would start over (a docked
+ * Balance redrew from scratch whenever another widget was dragged), unless
+ * it's moved with moveBefore(), Chromium's state-preserving move. Nothing
+ * moves when it's already there.
+ */
+function place(parent, element, before = null) {
+  if (element.parentElement === parent && (before ? element.nextElementSibling === before : parent.lastElementChild === element)) return;
+  if (before === element) return;
+  if (typeof parent.moveBefore === 'function' && element.isConnected && parent.isConnected) {
+    try { parent.moveBefore(element, before); return; } catch { /* not movable atomically: below */ }
+  }
+  parent.insertBefore(element, before);
+}
+
+/** Put `wanted` (in order) at the end of `host`, moving only what isn't already in place. */
+function arrange(host, wanted) {
+  const current = [...host.children].filter(item => item.matches('.fin-section'));
+  const tail = current.slice(current.length - wanted.length);
+  if (tail.length === wanted.length && tail.every((item, index) => item === wanted[index])) return;
+  for (const section of wanted) place(host, section);
+}
+
 function sectionId(section, fallbackIndex = 0) {
   if (!section.dataset.sid) section.dataset.sid = section.id || `sec-${fallbackIndex}`;
   return section.dataset.sid;
@@ -260,16 +285,11 @@ function applyDockedSections() {
     const docked = isDocked(section);
     section.classList.toggle('docked-bottom', docked === 'bottom');
     section.classList.toggle('docked-top', docked === 'top');
-    if (!docked && section.parentElement !== normalHost) normalHost.appendChild(section);
+    if (!docked && section.parentElement !== normalHost) place(normalHost, section);
   }
-  for (const id of sidebarState.dockedSections) {
-    const section = sections().find(item => sectionId(item) === id);
-    if (section) dockHost.appendChild(section);
-  }
-  for (const id of sidebarState.topDockedSections) {
-    const section = sections().find(item => sectionId(item) === id);
-    if (section) topHost.appendChild(section);
-  }
+  const byIds = ids => ids.map(id => sections().find(item => sectionId(item) === id)).filter(Boolean);
+  arrange(dockHost, byIds(sidebarState.dockedSections));
+  arrange(topHost, byIds(sidebarState.topDockedSections));
   applySidebarSectionHeights();
 }
 
@@ -325,10 +345,7 @@ export function restoreSidebarOrder() {
   if (!host) return;
   sections().forEach(sectionId);
   migrateLegacyOrder();
-  for (const id of sidebarState.order) {
-    const element = [...sections()].find(section => section.dataset.sid === id);
-    if (element) host.appendChild(element);
-  }
+  arrange(host, sidebarState.order.map(id => sections().find(section => section.dataset.sid === id)).filter(Boolean));
   applyDockedSections();
 }
 
@@ -422,7 +439,8 @@ export function attachSidebarSection(section, { contextMenuItems } = {}) {
     const bounds = section.getBoundingClientRect();
     sections().forEach(item => item.classList.remove('drag-over'));
     section.classList.add('drag-over');
-    event.clientY > bounds.top + bounds.height / 2 ? section.after(dragging) : section.before(dragging);
+    if (event.clientY > bounds.top + bounds.height / 2) place(section.parentElement, dragging, section.nextElementSibling);
+    else place(section.parentElement, dragging, section);
   });
   section.addEventListener('dragleave', () => section.classList.remove('drag-over'));
   section.addEventListener('drop', event => {

@@ -1,8 +1,12 @@
 'use strict';
 
 const { EventEmitter } = require('node:events');
+const { CALENDAR_MONTHS, bucketStart, bucketEnd } = require('./bucket-time');
 
 function formatInterval(intervalMs) {
+  const months = CALENDAR_MONTHS[intervalMs];
+  if (months) return months === 12 ? '1y' : `${months}mo`;
+  if (intervalMs % 604_800_000 === 0) return `${intervalMs / 604_800_000}w`;
   if (intervalMs % 86_400_000 === 0) return `${intervalMs / 86_400_000}d`;
   if (intervalMs % 3_600_000 === 0) return `${intervalMs / 3_600_000}h`;
   if (intervalMs % 60_000 === 0) return `${intervalMs / 60_000}m`;
@@ -17,13 +21,20 @@ class CandleEngine extends EventEmitter {
     this.candles = new Map();
   }
 
+  /** Builds candles of this interval too, from the next trade on. */
+  addInterval(intervalMs) {
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0 || this.intervals.includes(intervalMs)) return false;
+    this.intervals = [...this.intervals, intervalMs].sort((a, b) => a - b);
+    return true;
+  }
+
   _key(symbol, exchange, intervalMs) { return `${exchange}:${symbol}:${intervalMs}`; }
 
   ingest(trade) {
     const updates = [];
     const closed = [];
     for (const intervalMs of this.intervals) {
-      const start = Math.floor(trade.timestamp / intervalMs) * intervalMs;
+      const start = bucketStart(trade.timestamp, intervalMs);
       const key = this._key(trade.symbol, trade.exchange, intervalMs);
       let candle = this.candles.get(key);
       if (candle && start > candle.start) {
@@ -38,7 +49,7 @@ class CandleEngine extends EventEmitter {
       }
       if (!candle) {
         candle = {
-          symbol: trade.symbol, exchange: trade.exchange, interval: formatInterval(intervalMs), intervalMs, start, end: start + intervalMs,
+          symbol: trade.symbol, exchange: trade.exchange, interval: formatInterval(intervalMs), intervalMs, start, end: bucketEnd(start, intervalMs),
           firstTradeAt: trade.timestamp, lastTradeAt: trade.timestamp,
           open: trade.price, high: trade.price, low: trade.price, close: trade.price,
           volume: 0, tradeCount: 0, buyVolume: 0, sellVolume: 0, delta: 0,

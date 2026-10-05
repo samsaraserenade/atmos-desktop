@@ -24,7 +24,7 @@ const atmos = new Proxy({}, {
 });
 export default atmos;
 
-export const SDK_VERSION = '1.2.0';
+export const SDK_VERSION = '1.3.0';
 export const extension = namespace('extension');
 export const surface = namespace('surface');
 export const state = namespace('state');
@@ -37,6 +37,7 @@ export const wallpaper = namespace('wallpaper');
 export const audio = namespace('audio');
 export const location = namespace('location');
 export const lifecycle = namespace('lifecycle');
+export const commands = namespace('commands');
 export const notifications = namespace('notifications');
 export const drawer = namespace('drawer');
 export const legacy = namespace('legacy');

@@ -231,6 +231,9 @@ file other than the conventional one). A second sidebar widget needs an
 | `"showIn": ["audio-player"]` | widget | The panels it shows beside until the user chooses otherwise. Absent: beside the extension's own panel (every panel if it has none). `[]`: every panel |
 | `"legacyId"`, `"drawer"`, boot `"keys"` | | Official extensions only (section 4) |
 
+`"commands"` beside the surfaces (SDK 1.3, Atmos 0.20) declares rev/
+commands for Atmos's command bar (section 4, "Commands in Atmos's bar").
+
 Panels have no keys of their own from Atmos 0.19.1: `"shortcut"` and
 `"shortcutToggles"` are still accepted, so a manifest that has them stays
 valid, and ignored.
@@ -382,7 +385,8 @@ make the block invalid.
 - **Something new in SDK 1.1** (marked "1.1" in section 4) needs
   `">=0.16.0"`: Atmos 0.15 reads `engines` and says the extension isn't for
   it, rather than running it without the call. SDK 1.2's `atmos.web`
-  (official only) needs `">=0.17.0"`.
+  (official only) needs `">=0.17.0"`; SDK 1.3's `atmos.commands` and
+  `"commands"`, `">=0.20.0"`.
 
 ### Versions and dependencies
 
@@ -481,9 +485,10 @@ refused call rejects with an `AtmosPermissionError` naming what to declare.
 Subscriptions (`events.on`, `listen`, the `onChange`s) don't reject: a
 refusal is logged in the frame's console.
 
-**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.2.0'` (Atmos 0.17),
+**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.3.0'` (Atmos 0.20),
 and a later 1.x only adds. What 1.1 added is marked **1.1**; 1.2 added
-only `atmos.web`, for official extensions. Everything below is **stable** unless marked
+only `atmos.web`, for official extensions; 1.3, `atmos.commands` (with
+`"commands"` in the manifest) and ui.css's bar. Everything below is **stable** unless marked
 **experimental** (it may still change in a minor version). The calls in
 "Official extensions only" at the end of this section may change in a
 minor version too, and Atmos refuses them to community extensions.
@@ -495,7 +500,7 @@ minor version too, and Atmos refuses them to community extensions.
 | `atmos.extension` | `{ id, kind, tier, version }`: which extension this frame belongs to |
 | `atmos.surface` | `{ type, id, presentation, glass, drawer }`: `type` is `'panel'`, `'sidebar'`, `'settings'` or `'boot'`; `presentation` is `'full'`, `'tile'` or `'window'` (panels) and never changes, since a layout change makes a new frame |
 | `atmos.ready` | A promise that resolves once the frame is connected. Entry files already run after it |
-| `atmos.SDK_VERSION` | `'1.2.0'` (Atmos 0.17); `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
+| `atmos.SDK_VERSION` | `'1.3.0'` (Atmos 0.20); `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
 
 ### State and events
 
@@ -610,6 +615,106 @@ itself (`'plugin:<own id>'`) without declaring anything.
 | `atmos.notifications.show({ title, body?, tag?, silent? })` | **Experimental** (not yet seen working on Windows). A system notification, shown by Atmos for the frame (Chromium refuses the `Notification` API in frames). Resolves `true` once shown, `false` where the system has none | `"notifications"` in `permissions.browser` |
 | `atmos.notifications.onClick(fn)` | **Experimental.** The user clicked one of this extension's notifications: `fn({ tag })` in every frame of it, after Atmos comes to the front | — |
 
+### Commands in Atmos's bar (1.3)
+
+Atmos's command bar (Ctrl+\\ from anywhere, or the sidebar's ATMOS
+wordmark when it lives there) takes `rev/` commands: Atmos's own
+(`rev/sidebar`, `rev/settings [page]`, `rev/extensions`, `rev/switch
+<panel>`) and those extensions declare. It opens over the bottom bar of
+the panel you're in (Settings → Appearance → Sidebar → Command Bar can put
+it in the sidebar's footer instead). Commands are listed by what's
+showing: the panel the bar is for, other panels on screen, widgets on
+screen, Atmos's own, then the rest only once their name is typed. Once a
+name is typed: Atmos's commands, panels and pages of Settings whose name
+starts so, an extension's command called exactly that, panels and pages
+with a later word that starts so (`rev/play` finds Music), then
+extensions' commands that start so, so no command can push Atmos's own
+places down. A command's row says whose it is (a community extension's
+says so too). When two extensions declare one name, both are listed:
+typed in full, the one listed first runs (what's on screen first), or, in
+a bar an extension opened with its text, that extension's own; choosing
+the other's row runs that one, and its suggestions then say whose they
+are. What's typed after a command's name goes to its extension alone.
+
+Declare each command in `extension.json`, at most 30, beside the surfaces:
+
+```json
+"contributes": {
+  "panel": { "label": "Chat" },
+  "commands": [
+    { "name": "go", "args": "room or person", "about": "Open one of your rooms", "takesArgs": true, "suggests": true },
+    { "name": "mute", "about": "Mute this room" }
+  ]
+}
+```
+
+| Key | What it is |
+|---|---|
+| `name` | What's typed after `rev/`: a-z, digits and `-`, 30 at most. Atmos's own names (`sidebar`, `settings`, `extensions`, `switch`) aren't allowed |
+| `args`, `about` | A hint of what follows the name, and a line saying what it does (plain text) |
+| `takesArgs` | It takes something after its name: Enter on the command gives it a space to type it, rather than running it at once |
+| `suggests` | It lists choices as you type (below): Enter gives it a space too, then runs the row chosen |
+
+Settings shows a community extension's commands on its approval card
+("Adds commands to Atmos's command bar: rev/go, rev/mute").
+
+Then handle them, in the frame that can do them. A background frame's
+handlers work whatever is showing; a panel's while the panel is open, a
+widget's while it's in the sidebar. When several of your frames handle a
+command, the one on screen runs it; when none does (its panel isn't open),
+the bar says to open yours.
+
+```js
+atmos.commands.handle('go', async ({ args, value }) => {
+  await openRoom(value);
+  await atmos.panel.show();
+  return { done: 'Opened.' };
+}, {
+  suggest: ({ args }) => rooms.filter(room => room.name.includes(args)).map(room => ({
+    title: room.name, sub: room.topic, action: 'Open', value: room.id, complete: room.name,
+  })),
+});
+```
+
+| Call | What it does |
+|---|---|
+| `atmos.commands.handle(name, run, { suggest })` | `run({ args, value, options })` when the command is chosen: `args` is what follows its name, `value` the chosen row's, `options` your options' values as the user left them. Return nothing (the bar closes), `{ done }` (a line shown where the bar was), `{ keep: true, done? }` (it stays open), or `{ fill, options?, done? }` (the bar takes that text and option values: a next step), or throw (the bar shows the error). `suggest({ args, options })` returns rows, or `{ rows, options }`. 2 s to list, 15 s to run. Returns a function that stops handling it |
+| `atmos.commands.bar(element)` | Panels: the bar along the bottom of your panel (`.atmos-bar`, below). The command bar opens over it while the keyboard is in your panel; without one Atmos lays a bar of its own along the panel's bottom. One per frame. Returns `stop()` |
+| `atmos.commands.field(input, { options })` | A text field of yours that also takes commands (a message bar): `rev/` typed into it opens the bar there with what's typed, so commands have one list in one place. Keys typed before the bar has the keyboard follow it (while nothing has been typed in the bar), and Enter in that moment sends nothing from your field; when the bar closes, the field has the keyboard again. If the bar can't open, the text stays. To hand over text of your own (Enter in an empty view: `rev/go <what was typed>`), put it in the field and send an `input` event. `options` presets your command's option values. Returns `stop()` |
+| `atmos.commands.open(text, options?)` | Open the bar with `text` yourself. Only while your frame has focus and the user has just typed or clicked. `options` presets your command's option values |
+| `atmos.commands.refresh()` | Your suggestions changed (results arrived late): the bar asks again |
+
+Rows are `{ title, sub?, action?, value?, complete?, danger? }`, `{ heading }`
+or `{ note }`: plain text, at most 50. `value` comes back to `run`;
+`complete` is what Tab types after the name (without it, Tab moves on);
+`danger` marks a row that destroys something. Options are drawn above the
+rows, at most 8: `{ id, type: 'toggle', label, value }`,
+`{ id, type: 'select', label?, value, options: [{ value, label }], style: 'chips' | 'dropdown' }`
+or `{ id, type: 'text', label?, value, prefix?, suffix?, placeholder? }`.
+A change asks `suggest` again with the new values. While the user types,
+the bar shows your last answer (dimmed) until the next arrives; Enter
+waits for the answer to what's typed now (a click runs the row as shown).
+A `danger` row runs only once it has been in the list half a second, by
+Enter or a click: sooner, the bar says to press Enter (or click) again,
+and an Enter pressed before the row showed never runs it.
+
+What an extension puts in the bar (`field`, `open`, a result's `fill`) is
+text, kept as sent. While any of a command's name it typed is there (typed
+on, or partly backspaced), the bar chooses none of another extension's
+rows for the user, as the first row or by Tab; they pick one with ↑↓ or a
+click. In a bar an extension opened, or while text one put there is in
+it (even a bare `rev/`), another extension's `danger` rows are never
+chosen for the user, whoever typed the name. So an extension
+can't line up another's command (Matrix Chat's `rev/leave`) for the
+user's next Enter; the cost is that another extension's command typed fast
+into your field (or pasted) needs ↓ before Enter. Your preset options
+apply to your own commands only. Atmos cleans what a frame sends and draws
+it as text, never as markup; a row's `value` is only handed back to you,
+so it comes back as you sent it.
+
+A message bar that also takes commands needs the `rev/` prefix to tell the
+two apart; in Atmos's own bar it's optional (`switch finance`).
+
 ### Looking like Atmos: `ui.css` (1.1)
 
 The rows and controls of Atmos's own Settings → Appearance page are in a
@@ -637,6 +742,7 @@ sections without matching them by eye:
 | `atmos-slider` with `atmos-range` and an `<output>` | A slider and its value |
 | `atmos-select`, `atmos-input`, `atmos-button`, `atmos-segmented` | A dropdown, a text field, a button, a choice of a few buttons (`.active` or `aria-checked="true"` marks the chosen one) |
 | `atmos-status` (`.ok`, `.err`), `atmos-details` | A line of status; rows that fold away under a `<summary>` |
+| `atmos-bar`, `atmos-bar-input` (1.3) | A panel's bottom bar, as Atmos's own: 54 px, in line with the sidebar's footer, a hairline on top. Give it `data-atmos-glass="shell"` for Atmos's shell glass, and `atmos.commands.bar()` it |
 
 It styles only elements with these classes, and follows Atmos's theme.
 `/__atmos/ui.css` is served to every frame in Atmos 0.16 and later.
@@ -724,7 +830,8 @@ script them. `atmos.state` is kept in a file of its own
   across the workspace.
 
 Keys pressed inside a focused frame that aren't typing are passed on to
-Atmos: modifier combinations (Ctrl+` for Settings), F-keys, Escape, Space
+Atmos: modifier combinations (Ctrl+` for Settings, Ctrl+\ for the command
+bar), F-keys, Escape, Space
 outside fields and buttons, and Atmos's single-key shortcuts outside fields
 and buttons (Tab for the sidebar, Shift+Tab to move it). A key the frame handled itself (`preventDefault()`)
 stays its own.
@@ -1697,6 +1804,17 @@ Before sharing an extension:
     that check their arguments, shared only when they must be.
 
 ## 10. Compatibility
+
+**SDK 1.3 (Atmos 0.20).** Only additions; an SDK 1.2 extension runs
+unchanged.
+
+- Atmos's command bar (Ctrl+\\), and `"commands"` in the manifest with
+  `atmos.commands` (`handle`, `bar`, `field`, `open`, `refresh`) for an extension's
+  own `rev/` commands (section 4, "Commands in Atmos's bar"). An extension
+  that uses them needs `"engines": { "atmos": ">=0.20.0" }`.
+- `ui.css`'s `.atmos-bar`: a panel's bottom bar as Atmos draws its own.
+- Matrix Chat's `rev/` commands moved onto Atmos's bar; Audio Player has
+  `rev/play`, `rev/next`, `rev/previous`, `rev/song` and `rev/album`.
 
 **Atmos 0.18 (SDK 1.2, unchanged).** Atmos Browser is built in, and
 Atmos opens on it.

@@ -3,6 +3,62 @@ const BUCKET_STEPS_MS = [
   60 * 60_000, 4 * 60 * 60_000, 24 * 60 * 60_000,
 ];
 
+const DAY_MS = 86_400_000;
+// Timeframes that follow the calendar rather than a fixed length, as
+// exchanges and TradingView draw them: 1M/3M/6M/1Y candles open on the first
+// of a month (quarters on Jan/Apr/Jul/Oct, halves on Jan/Jul, years on Jan),
+// weekly ones on Monday, and Binance's 3-day ones a day after the epoch's.
+// Everything else is a fixed length from the epoch. All in UTC, like the
+// exchanges' own candles.
+export const CALENDAR_MONTHS = Object.freeze({ [30 * DAY_MS]: 1, [90 * DAY_MS]: 3, [180 * DAY_MS]: 6, [365 * DAY_MS]: 12 });
+function anchorMs(bucketMs) {
+  if (bucketMs % (7 * DAY_MS) === 0) return 4 * DAY_MS; // 1970-01-05, a Monday
+  if (bucketMs === 3 * DAY_MS) return DAY_MS;
+  return 0;
+}
+
+/** When the candle of this length holding `time` opens. */
+export function bucketStart(time, bucketMs) {
+  const months = CALENDAR_MONTHS[bucketMs];
+  if (months) {
+    const date = new Date(time);
+    const month = date.getUTCMonth();
+    return Date.UTC(date.getUTCFullYear(), month - (month % months), 1);
+  }
+  const anchor = anchorMs(bucketMs);
+  return Math.floor((time - anchor) / bucketMs) * bucketMs + anchor;
+}
+
+/** When the candle of this length opening at `start` closes. */
+export function bucketEnd(start, bucketMs) {
+  const months = CALENDAR_MONTHS[bucketMs];
+  if (!months) return start + bucketMs;
+  const date = new Date(start);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1);
+}
+
+/**
+ * Combine candles into longer ones (1h candles into 8h ones, daily into
+ * weekly): the first open, the highest high, the lowest low, the last close.
+ * Volumes add up; other fields come from the newest candle in each.
+ */
+export function mergeCandles(candles, bucketMs) {
+  const merged = [];
+  for (const candle of candles) {
+    const t0 = bucketStart(candle.t0, bucketMs);
+    const last = merged.at(-1);
+    const volume = Number(candle.volume);
+    if (last?.t0 === t0) {
+      merged[merged.length - 1] = { ...metadataOf(candle), t0, t1: last.t1, o: last.o, h: Math.max(last.h, candle.h), l: Math.min(last.l, candle.l), c: candle.c,
+        ...(last.volume != null && Number.isFinite(volume) ? { volume: last.volume + volume } : {}) };
+    } else {
+      merged.push({ ...metadataOf(candle), t0, t1: bucketEnd(t0, bucketMs), o: candle.o, h: candle.h, l: candle.l, c: candle.c,
+        ...(Number.isFinite(volume) && candle.volume != null ? { volume } : {}) });
+    }
+  }
+  return merged;
+}
+
 function metadataOf(point) {
   const { t, time, timestamp, v, value, price, close, c, start, end, t0, t1, open, o, high, h, low, l, ...metadata } = point || {};
   return metadata;
@@ -12,7 +68,7 @@ function metadataOf(point) {
 export function appendCandleSample(candle, point, bucketMs) {
   const value = Number(point.v ?? point.value ?? point.close);
   return { ...metadataOf(candle), ...metadataOf(point), t0: candle.t0,
-    t1: candle.t0 + bucketMs, o: candle.o,
+    t1: bucketEnd(candle.t0, bucketMs), o: candle.o,
     h: Math.max(candle.h, value), l: Math.min(candle.l, value), c: value };
 }
 
@@ -31,12 +87,12 @@ export function bucketHistory(points, bucketMs) {
     const t = Number(point.t ?? point.time ?? point.timestamp);
     const v = Number(point.v ?? point.value ?? point.close);
     if (!Number.isFinite(t) || !Number.isFinite(v)) continue;
-    const t0 = Math.floor(t / bucketMs) * bucketMs;
+    const t0 = bucketStart(t, bucketMs);
     let candle = buckets.get(t0);
     if (!candle) {
       // Keep consumer metadata on derived candles. Canonical chart fields win,
       // while later observations refresh metadata on the forming candle.
-      candle = { ...metadataOf(point), t0, t1: t0 + bucketMs, o: v, h: v, l: v, c: v };
+      candle = { ...metadataOf(point), t0, t1: bucketEnd(t0, bucketMs), o: v, h: v, l: v, c: v };
       buckets.set(t0, candle);
     } else {
       const open = candle.o;
@@ -44,7 +100,7 @@ export function bucketHistory(points, bucketMs) {
       const low = candle.l;
       Object.assign(candle, metadataOf(point));
       candle.t0 = t0;
-      candle.t1 = t0 + bucketMs;
+      candle.t1 = bucketEnd(t0, bucketMs);
       candle.o = open;
       candle.h = Math.max(high, v);
       candle.l = Math.min(low, v);

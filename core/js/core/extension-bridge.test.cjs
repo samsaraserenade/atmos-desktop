@@ -12,6 +12,7 @@ async function loadBridge(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
   fs.copyFileSync(path.join(__dirname, 'extension-bridge.js'), path.join(dir, 'extension-bridge.js'));
+  fs.copyFileSync(path.join(__dirname, 'command-list.js'), path.join(dir, 'command-list.js'));
   return import(pathToFileURL(path.join(dir, 'extension-bridge.js')).href);
 }
 
@@ -497,4 +498,68 @@ test('links.open: http(s) and mailto only, handed to Core (which decides whether
   assert.deepEqual(opened, ['https://example.com/a', 'mailto:me@example.com']);
   const noCore = harness(createExtensionBridge, {});
   assert.equal((await noCore.request('links.open', 'https://example.com/')).result, false);
+});
+
+test('commands: only declared ones are handled, a panel says where its bar is, and the bar opens with clean text', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const calls = [];
+  const commands = {
+    handle: (name, meta) => calls.push(['handle', name, meta]),
+    unhandle: name => calls.push(['unhandle', name]),
+    setBar: rect => calls.push(['bar', rect]),
+    open: (text, options, follow) => { calls.push(['open', text, options, follow]); return true; },
+    refresh: () => calls.push(['refresh']),
+  };
+  const extension = { frame: { commands: [{ name: 'roll', args: '', about: 'Roll a die', takesArgs: false, suggests: true }] } };
+  const { bridge, request } = harness(createExtensionBridge, { extension, deps: { commands } });
+  assert.equal((await request('commands.handle', 'roll', { suggests: true })).error, undefined);
+  const undeclared = await request('commands.handle', 'flip', {});
+  assert.equal(undeclared.error.name, 'TypeError');
+  assert.match(undeclared.error.message, /rev\/flip isn't a command plugin:probe declares \("contributes\.commands"/);
+  await bridge.receive({ method: 'commands.unhandle', args: ['roll'] });
+  assert.equal((await request('commands.bar', { x: 0.4, y: 746.6, width: 990, height: 54, extra: 'x' })).error, undefined);
+  assert.equal((await request('commands.bar', { x: 0, y: 0, width: 0, height: 54 })).error, undefined, 'an empty box is no bar');
+  assert.equal((await request('commands.bar', 'nope')).error.name, 'TypeError');
+  assert.equal((await request('commands.open', `rev/roll ${'x'.repeat(300)}`, { parent: '!space:example', encrypted: false, 'bad id!': 1, nested: { a: 1 } })).result, true);
+  assert.equal((await request('commands.open', 42)).error.name, 'TypeError');
+  assert.equal((await request('commands.open', 'rev/', 'not an object')).error.name, 'TypeError');
+  assert.equal((await request('commands.open', 'rev/ro', null, true)).result, true, 'keys that followed (atmos.commands.field)');
+  assert.equal((await request('commands.open', 'rev/ro', null, 'yes')).result, true, '…only when it says so exactly');
+  await bridge.receive({ method: 'commands.refresh', args: [] });
+  assert.deepEqual(calls, [
+    ['handle', 'roll', { suggests: true }],
+    ['unhandle', 'roll'],
+    ['bar', { x: 0, y: 747, width: 990, height: 54 }],
+    ['bar', null],
+    ['open', `rev/roll ${'x'.repeat(191)}`, { parent: '!space:example', encrypted: false }, false],
+    ['open', 'rev/ro', {}, true],
+    ['open', 'rev/ro', {}, false],
+    ['refresh'],
+  ]);
+  // Only a panel has a bar.
+  const widget = harness(createExtensionBridge, { extension, surface: { type: 'sidebar' }, deps: { commands } });
+  assert.match((await widget.request('commands.bar', { x: 0, y: 0, width: 10, height: 10 })).error.message, /only a panel/);
+});
+
+test('commands: Core asks the frame to run or suggest, and hears back once; a frame that goes rejects what was asked', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const { bridge, posted } = harness(createExtensionBridge, { extension: { frame: { commands: [{ name: 'roll' }] } } });
+  const asked = bridge.requestCommand('run', 'roll', { args: '2d6', value: null, options: {} });
+  const message = posted.at(-1);
+  assert.deepEqual({ ...message, command: typeof message.command }, { command: 'number', action: 'run', name: 'roll', input: { args: '2d6', value: null, options: {} } });
+  await bridge.receive({ commandReply: message.command, result: { done: 'Rolled 7' } });
+  assert.deepEqual(await asked, { done: 'Rolled 7' });
+  await bridge.receive({ commandReply: message.command, result: 'again' }); // a second answer is ignored
+
+  const failing = bridge.requestCommand('suggest', 'roll', { args: '' });
+  await bridge.receive({ commandReply: posted.at(-1).command, error: { name: 'Error', message: 'No dice here' } });
+  await assert.rejects(failing, /No dice here/);
+
+  const slow = bridge.requestCommand('suggest', 'roll', { args: '' }, 20);
+  await assert.rejects(slow, error => error.name === 'TimeoutError' && /didn't answer/.test(error.message));
+
+  const pending = bridge.requestCommand('run', 'roll', {});
+  bridge.dispose();
+  await assert.rejects(pending, /frame went away/);
+  await assert.rejects(bridge.requestCommand('run', 'roll', {}), /frame went away/);
 });

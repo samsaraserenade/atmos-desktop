@@ -193,6 +193,214 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   const panelNow = await frameFor(s.page, 'Finance');
   r.panelAfterWatchlistClick = await panelNow?.evaluate(() => ({ markets: !!document.querySelector('.mq-toolbar'), text: document.body.innerText.slice(0, 60) })).catch(e => e.message);
 
+  step('// The ticker picker in every chart of a multi-chart layout');
+  // Each chart's picker rises from its own toolbar. In two rows, the top
+  // charts' toolbars sit mid-panel: the sheet must still be drawn there,
+  // fully inside its chart, not placed by window coordinates and clipped.
+  r.pickerInLayouts = {};
+  for (const layout of [{ count: 4 }, { count: 2, orientation: 'vertical' }, { count: 3 }, { count: 1 }]) {
+    const frame = await frameFor(s.page, 'Finance');
+    await frame?.evaluate(({ count, orientation }) => {
+      document.querySelector('.finance-layout-button')?.click();
+      [...document.querySelectorAll('.finance-layout-menu button')].find(b => Number(b.dataset.count) === count && (!orientation || b.dataset.orientation === orientation))?.click();
+    }, layout);
+    await s.page.waitForTimeout(1800);
+    const charts = await frame?.evaluate(() => document.querySelectorAll('.finance-ticker-picker-button').length).catch(() => 0);
+    const results = [];
+    for (let i = 0; i < charts; i++) {
+      results.push(await frame.evaluate(async index => {
+        const button = document.querySelectorAll('.finance-ticker-picker-button')[index];
+        const picker = button.closest('.finance-ticker-picker');
+        const sheet = picker.querySelector('.finance-ticker-picker-panel');
+        const chart = picker.closest('.finance-extra-chart, .finance-chart-stage');
+        button.click();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const box = sheet.getBoundingClientRect();
+        const chartBox = chart.getBoundingClientRect();
+        const dock = picker.closest('.finance-portfolio-toolbar, .mq-toolbar').getBoundingClientRect();
+        // What's really drawn there: the sheet's search box, near its top, and the middle of its list.
+        const search = sheet.querySelector('.finance-ticker-picker-search').getBoundingClientRect();
+        const atSearch = document.elementFromPoint(search.left + search.width / 2, search.top + search.height / 2);
+        const atMiddle = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        const out = {
+          chart: { top: Math.round(chartBox.top), bottom: Math.round(chartBox.bottom), left: Math.round(chartBox.left) },
+          sheet: { top: Math.round(box.top), bottom: Math.round(box.bottom), left: Math.round(box.left), height: Math.round(box.height) },
+          dockTop: Math.round(dock.top),
+          searchVisible: sheet.contains(atSearch),
+          middleVisible: sheet.contains(atMiddle),
+          insideChart: box.top >= chartBox.top - 1 && box.bottom <= chartBox.bottom + 1 && box.left >= chartBox.left - 1,
+          flushWithDock: Math.abs(box.bottom - dock.top) <= 2,
+          rows: sheet.querySelectorAll('.finance-ticker-picker-row').length,
+        };
+        button.click(); // close it again
+        return out;
+      }, i).catch(e => ({ error: e.message })));
+    }
+    r.pickerInLayouts[`${layout.count}${layout.orientation ? '-' + layout.orientation : ''}`] = results;
+    if (layout.count === 4) {
+      // A picture of the top-right chart's picker open, for a look.
+      await frame.evaluate(() => document.querySelectorAll('.finance-ticker-picker-button')[1]?.click());
+      await s.page.waitForTimeout(300);
+      await s.page.screenshot({ path: path.join(out, '96-picker-top-chart.png') });
+      await frame.evaluate(() => document.querySelectorAll('.finance-ticker-picker-button')[1]?.click());
+    }
+  }
+
+  step('// Rearranging widgets keeps their frames running');
+  // A widget is moved within the sidebar (dragged, or docked and released):
+  // its frame must not reload, nor a docked widget's when another moves.
+  // Moving an element holding an iframe reloads the iframe unless it's
+  // moved with moveBefore().
+  {
+    const sectionOf = title => `iframe[data-extension="plugin:finance"][title="${title}"]`;
+    const mark = async title => (await frameFor(s.page, title))?.evaluate(() => { window.__notReloaded = true; }).catch(() => {});
+    const kept = async title => {
+      const frame = await (await s.page.$(sectionOf(title)))?.contentFrame();
+      return frame ? frame.evaluate(() => window.__notReloaded === true).catch(() => false) : false;
+    };
+    // Dock Balance to the bottom, as the sidebar's own menu does.
+    await s.page.evaluate(async selector => {
+      const { sidebarState } = await import('atmos-core/core/sidebar-state.js');
+      const section = document.querySelector(selector)?.closest('.fin-section');
+      const id = section?.dataset.sid;
+      if (!id) return;
+      sidebarState.dockedSections = [...sidebarState.dockedSections.filter(item => item !== id), id];
+      (await import('atmos-core/core/sidebar-shell.js')).restoreSidebarOrder();
+    }, sectionOf('Balance'));
+    await s.page.waitForTimeout(2500);
+    await mark('Balance');
+    await mark('Spot');
+    await mark('Performance');
+    // Drag Spot below Performance (dragstart, dragover, dragend), as a mouse does.
+    const moved = await s.page.evaluate(([spotSel, perfSel]) => {
+      const spot = document.querySelector(spotSel)?.closest('.fin-section');
+      const perf = document.querySelector(perfSel)?.closest('.fin-section');
+      if (!spot || !perf || spot.parentElement !== perf.parentElement) return 'not side by side';
+      const data = new DataTransfer();
+      spot.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: data }));
+      const box = perf.getBoundingClientRect();
+      perf.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: data, clientX: box.left + 10, clientY: box.bottom - 2 }));
+      spot.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: data }));
+      return [...spot.parentElement.querySelectorAll(':scope > .fin-section')].indexOf(spot) > [...perf.parentElement.querySelectorAll(':scope > .fin-section')].indexOf(perf) ? 'moved' : 'not moved';
+    }, [sectionOf('Spot'), sectionOf('Performance')]);
+    await s.page.waitForTimeout(1500);
+    r.rearranging = {
+      moved,
+      balanceDocked: await s.page.evaluate(selector => !!document.querySelector(selector)?.closest('#sidebar-bottom-dock'), sectionOf('Balance')),
+      dockedBalanceKept: await kept('Balance'),
+      draggedSpotKept: await kept('Spot'),
+      performanceKept: await kept('Performance'),
+    };
+    // Release Balance from the dock again.
+    await s.page.evaluate(async selector => {
+      const { sidebarState } = await import('atmos-core/core/sidebar-state.js');
+      const id = document.querySelector(selector)?.closest('.fin-section')?.dataset.sid;
+      sidebarState.dockedSections = sidebarState.dockedSections.filter(item => item !== id);
+      (await import('atmos-core/core/sidebar-shell.js')).restoreSidebarOrder();
+    }, sectionOf('Balance'));
+    await s.page.waitForTimeout(1500);
+    r.rearranging.releasedBalanceKept = await kept('Balance');
+  }
+
+  step('// Alt + double-click resets every chart');
+  // A double-click on a chart's plot snaps it to its optimal view (the
+  // charting service's own handler). With Alt, like the other Alt gestures,
+  // it must reach every chart's plot, each resetting itself. Plain, only the
+  // one clicked; with Ctrl too (which clears hidden ranges), every chart.
+  {
+    const frame = await frameFor(s.page, 'Finance');
+    await frame?.evaluate(() => {
+      document.querySelector('.finance-layout-button')?.click();
+      [...document.querySelectorAll('.finance-layout-menu button')].find(b => Number(b.dataset.count) === 4)?.click();
+    });
+    await s.page.waitForTimeout(2500);
+    const frameBox = await (await s.page.$('iframe[data-extension="plugin:finance"][title="Finance"]'))?.boundingBox();
+    const plotInfo = await frame.evaluate(() => {
+      const plots = [...document.querySelectorAll('.atmos-chart__price-host')];
+      window.__dbl = plots.map(() => []);
+      plots.forEach((plot, i) => plot.addEventListener('dblclick', event => window.__dbl[i].push({ alt: event.altKey, ctrl: event.ctrlKey })));
+      return plots.map(plot => { const box = plot.getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2 }; });
+    });
+    const at = i => ({ x: frameBox.x + plotInfo[i].x, y: frameBox.y + plotInfo[i].y });
+    const received = () => frame.evaluate(() => window.__dbl.map(list => list.length));
+    const reset = () => frame.evaluate(() => window.__dbl.forEach(list => { list.length = 0; }));
+    await s.page.mouse.dblclick(at(0).x, at(0).y);
+    await s.page.waitForTimeout(500);
+    const plain = await received();
+    await reset();
+    await s.page.keyboard.down('Alt');
+    await s.page.mouse.dblclick(at(1).x, at(1).y);
+    await s.page.keyboard.up('Alt');
+    await s.page.waitForTimeout(500);
+    const alt = await received();
+    await reset();
+    await s.page.keyboard.down('Alt'); await s.page.keyboard.down('Control');
+    await s.page.mouse.dblclick(at(2).x, at(2).y);
+    await s.page.keyboard.up('Control'); await s.page.keyboard.up('Alt');
+    await s.page.waitForTimeout(500);
+    const altCtrl = await frame.evaluate(() => window.__dbl.map(list => list.map(item => item.ctrl)));
+    r.altDoubleClick = { plots: plotInfo.length, plain, alt, altCtrl };
+
+    // Timeframes: TradingView's list, no range buttons. A click picks the
+    // candle; Ctrl+click shows that much time and keeps the candle; Alt+Ctrl
+    // does it on every chart. Real clicks, on the charts that have data (a
+    // market chart here has none: no exchanges in the test).
+    const views = () => frame.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter(key => key.startsWith('atmos:charting-instance:finance-extra'))
+      .sort().map(key => { const value = JSON.parse(localStorage.getItem(key)); return [key.split(':').pop(), { bucketMs: value.bucketMs, range: value.activeRangeKey }]; })));
+    const toolbars = await frame.evaluate(() => [...document.querySelectorAll('.finance-toolbar-scroll')].map((toolbar, index) => ({
+      index,
+      bound: !!toolbar.querySelector('[data-interval][aria-pressed="true"]'),
+      timeframes: [...toolbar.querySelectorAll('[data-interval]')].map(item => item.textContent),
+      ranges: toolbar.querySelectorAll('[data-range]').length,
+      title: toolbar.querySelector('[data-interval="1h"]')?.title,
+    })));
+    const [first, second] = toolbars.filter(item => item.bound).map(item => item.index);
+    const chartInfo = index => frame.evaluate(index => {
+      const toolbar = document.querySelectorAll('.finance-toolbar-scroll')[index];
+      const chart = toolbar?.closest('.finance-portfolio-chart, .mq-market');
+      return {
+        pressed: [...toolbar.querySelectorAll('[data-interval][aria-pressed="true"]')].map(item => item.dataset.interval),
+        visiblePoints: chart?.querySelector('.atmos-chart__stats')?.textContent.trim().split(/\s+/)[0],
+      };
+    }, index);
+    const button = async (index, value) => {
+      const box = await frame.evaluate(([index, value]) => {
+        const element = document.querySelectorAll('.finance-toolbar-scroll')[index]?.querySelector(`[data-interval="${value}"]`);
+        element?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        const rect = element?.getBoundingClientRect();
+        return rect && rect.width ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+      }, [index, value]);
+      return box && { x: frameBox.x + box.x, y: frameBox.y + box.y };
+    };
+    const click = async (index, value, keys = []) => {
+      const point = await button(index, value);
+      if (!point) return false;
+      for (const key of keys) await s.page.keyboard.down(key);
+      await s.page.mouse.click(point.x, point.y);
+      for (const key of [...keys].reverse()) await s.page.keyboard.up(key);
+      await s.page.waitForTimeout(600);
+      return true;
+    };
+    const before = { chart: await chartInfo(first), views: await views() };
+    const clicked = [await click(first, '1h')];
+    const afterClick = { chart: await chartInfo(first), views: await views() };
+    clicked.push(await click(first, '6h', ['Control']));
+    const afterCtrl = { chart: await chartInfo(first), views: await views() };
+    await s.page.screenshot({ path: path.join(out, '97-timeframes-ctrl.png') });
+    await frame.evaluate(() => { window.__tf = []; document.querySelectorAll('[data-interval="1w"]').forEach((item, i) => item.addEventListener('click', event => window.__tf.push({ i, ctrl: event.ctrlKey, alt: event.altKey }))); });
+    clicked.push(await click(second, '1w', ['Alt', 'Control']));
+    const afterAltCtrl = { first: await chartInfo(first), second: await chartInfo(second), views: await views(), events: await frame.evaluate(() => window.__tf) };
+    clicked.push(await click(first, 'auto', ['Control']));
+    const afterCtrlAuto = { chart: await chartInfo(first), views: await views() };
+    r.timeframes = { toolbars: toolbars.map(({ timeframes, ...rest }) => ({ ...rest, timeframes: timeframes.join(' ') })), charts: [first, second], clicked, before, afterClick, afterCtrl, afterAltCtrl, afterCtrlAuto };
+    await s.page.screenshot({ path: path.join(out, '97-timeframes.png') });
+    await frame.evaluate(() => {
+      document.querySelector('.finance-layout-button')?.click();
+      [...document.querySelectorAll('.finance-layout-menu button')].find(b => Number(b.dataset.count) === 1)?.click();
+    });
+    await s.page.waitForTimeout(1500);
+  }
+
   step('// The chart menu');
   // The chart's right-click menu: ticks and dropdowns drawn by Atmos.
   const panelBox = await (await s.page.$('iframe[data-extension="plugin:finance"][title="Finance"]'))?.boundingBox();

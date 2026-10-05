@@ -905,9 +905,8 @@
    icons already do. */
 
 /* ---- @mention autocomplete (room-view.js's mentionEl) ----
-   Opened by typing "@" in the composer. It is the same popover as the rev/
-   command list (.mx-palette, below): appended to document.body so
-   roomViewEl's backdrop-filter can't clip it, flush above the bar. */
+   Opened by typing "@" in the composer: the popover .mx-palette (below),
+   flush above the bar. */
 
 /* ---- Settings menu (settings-menu.js's openSettingsMenu) ----
    Opened from .mx-rail-settings-btn at the bottom of the sidebar. Same
@@ -1241,11 +1240,10 @@
   text-overflow: ellipsis;
 }
 
-/* ---- rev/ commands in the message bar (ui/command-bar.js) ----
-   A list that opens above the bar, in the same popover material as the
-   @mention list (room-view.js uses these classes too): the commands, then
-   what one can act on.
-   rev/room and rev/space add a row of option chips. */
+/* ---- The popover above the message bar (the @mention list) ----
+   room-view.js's mentionEl, appended to document.body so roomViewEl's
+   backdrop-filter can't clip it. rev/ commands are Atmos's command bar's,
+   which draws its own. */
 .mx-palette {
   position: fixed; z-index: 20; box-sizing: border-box; display: flex; flex-direction: column;
   max-height: min(60vh, 460px); color: var(--mx-fg); font-size: 12px;
@@ -1257,7 +1255,6 @@
 .mx-palette-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; scrollbar-width: none; }
 .mx-palette-list::-webkit-scrollbar { display: none; }
 .mx-palette-heading { padding: 8px 10px 4px; color: var(--mx-fg-faint); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; }
-.mx-palette-note { padding: 8px 10px; color: var(--mx-fg-muted); font-size: 11.5px; line-height: 1.45; }
 .mx-palette-item {
   box-sizing: border-box; display: flex; align-items: center; gap: 12px; width: 100%; padding: 7px 10px;
   border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
@@ -1265,35 +1262,13 @@
 .mx-palette-item:hover, .mx-palette-item.active { background: rgba(var(--ink-rgb, 255,255,255), .08); }
 .mx-palette-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .mx-palette-item-title { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
-.mx-palette-item-hint { color: var(--mx-fg-faint); font-size: 11px; }
 .mx-palette-item-sub { overflow: hidden; color: var(--mx-fg-faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .mx-palette-item-action {
   flex: 0 0 auto; padding: 2px 8px; border: 1px solid var(--mx-hairline-strong); border-radius: 5px;
   color: var(--mx-fg-muted); font-size: 10.5px; visibility: hidden;
 }
 .mx-palette-item.active .mx-palette-item-action, .mx-palette-item:hover .mx-palette-item-action { visibility: visible; }
-.mx-palette-item.danger .mx-palette-item-title, .mx-palette-item.danger .mx-palette-item-action { color: var(--mx-danger); }
-.mx-palette-item.danger .mx-palette-item-action { border-color: color-mix(in srgb, var(--mx-danger) 40%, transparent); }
-.mx-palette-status { padding: 8px 14px 0; color: var(--mx-fg-muted); font-size: 11px; }
-.mx-palette-status-error { color: var(--mx-danger); }
 .mx-palette-foot { padding: 5px 14px 6px; border-top: 1px solid var(--mx-hairline); color: var(--mx-fg-faint); font-size: 10px; }
-.mx-palette-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px 4px; }
-.mx-palette-chip-group { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--mx-hairline); border-radius: 999px; }
-.mx-palette-chip {
-  display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid var(--mx-hairline-strong);
-  border-radius: 999px; background: transparent; color: var(--mx-fg-muted); font: inherit; font-size: 10.5px; cursor: pointer; white-space: nowrap;
-}
-.mx-palette-chip-group .mx-palette-chip { border-color: transparent; }
-.mx-palette-chip:hover { color: var(--mx-fg); }
-.mx-palette-chip.on { background: rgba(var(--ink-rgb, 255,255,255), .1); color: var(--mx-fg); }
-.mx-palette-chip-select span, .mx-palette-chip-alias span { color: var(--mx-fg-faint); }
-.mx-palette-chip select, .mx-palette-chip input {
-  width: auto; padding: 0; border: 0; background: transparent; color: var(--mx-fg); font: inherit; font-size: 10.5px; outline: none; cursor: pointer;
-}
-.mx-palette-chip select option { background: #1b1c21; }
-.mx-palette-chip-alias { cursor: text; }
-/* The bar itself while it holds a command. */
-.mx-composer.mx-composer-command { box-shadow: inset 0 1px 0 rgba(var(--ink-rgb, 255,255,255), .22); }
 
 /* ---- No room open (ui/empty-view.js) ---- */
 .mx-empty-timeline { display: flex; align-items: center; justify-content: center; }

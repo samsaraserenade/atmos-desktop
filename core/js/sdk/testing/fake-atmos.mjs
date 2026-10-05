@@ -58,6 +58,7 @@ function toResponse(answer) {
  * @param {object|null} [options.location]  { lat, lon, label, mode } or null
  * @param {object|null} [options.wallpaper] { mode, opacity, thumbnail } to start from (a data URL thumbnail, say)
  * @param {object} [options.appearance]
+ * @param {Array<{ name: string }>} [options.commands]  as in extension.json "contributes.commands" (SDK 1.3)
  */
 export function createFakeAtmos(options = {}) {
   const extension = Object.freeze({ id: 'example', kind: 'plugin', tier: 'third-party', version: '0.0.0', ...options.extension });
@@ -102,6 +103,9 @@ export function createFakeAtmos(options = {}) {
   let exposed = {};
   const handlers = new Map(); // "target channel" -> fn
   const menuChoices = [];
+  // rev/ commands (SDK 1.3): those declared, and the handlers registered for them.
+  const declaredCommands = new Set((options.commands || []).map(command => String(command?.name || '').toLowerCase()).filter(Boolean));
+  const commandHandlers = new Map(); // name -> { run, suggest }
   const cleanups = new Set();
   const timers = new Set();
   const controller = new AbortController();
@@ -241,6 +245,26 @@ export function createFakeAtmos(options = {}) {
     clipboard: [],
     /** Times atmos.panel.show() was called. */
     panelShown: 0,
+    /** rev/ commands (SDK 1.3): the element atmos.commands.bar() was given (null after stop()). */
+    commandBar: null,
+    /** Each atmos.commands.open(), and each rev/ typed into an atmos.commands.field(): { text, options }. */
+    commandBarOpened: [],
+    /** Times atmos.commands.refresh() was called. */
+    commandRefreshes: 0,
+    /** The commands handled now, by name. */
+    get commandsHandled() { return [...commandHandlers.keys()]; },
+    /** Run a handled command as the bar would: input { args, value, options }. Resolves what it returned. */
+    async runCommand(name, input = {}) {
+      const handler = commandHandlers.get(name);
+      if (!handler) throw new Error(`rev/${name} isn't handled (atmos.commands.handle())`);
+      return clone(await handler.run({ args: '', value: null, options: {}, ...clone(input) }));
+    },
+    /** What a handled command lists for input { args, options }, as the bar would ask. */
+    async suggestCommand(name, input = {}) {
+      const handler = commandHandlers.get(name);
+      if (typeof handler?.suggest !== 'function') throw new Error(`rev/${name} lists nothing (atmos.commands.handle(name, run, { suggest }))`);
+      return clone(await handler.suggest({ args: '', options: {}, ...clone(input) }));
+    },
     /** The last image atmos.wallpaper.set() was given (null after restore()). */
     wallpaper: null,
     /** Change the wallpaper as the user would in Settings (onChange listeners hear it; restore() then does nothing). */
@@ -313,7 +337,7 @@ export function createFakeAtmos(options = {}) {
   }
 
   const atmos = {
-    SDK_VERSION: '1.2.0',
+    SDK_VERSION: '1.3.0',
     ready: Promise.resolve({ extension }),
     extension,
     surface: {
@@ -357,6 +381,40 @@ export function createFakeAtmos(options = {}) {
       writeImage: async (png, text) => { fake.clipboard.push({ image: png, text }); },
     },
     panel: { show: async () => { fake.panelShown += 1; } },
+    commands: {
+      handle(name, run, { suggest } = {}) {
+        if (typeof name !== 'string' || !name) throw new TypeError('atmos.commands.handle(name, run): name is a command declared in extension.json');
+        if (typeof run !== 'function') throw new TypeError('atmos.commands.handle(name, run): run must be a function');
+        if (suggest !== undefined && typeof suggest !== 'function') throw new TypeError('atmos.commands.handle(name, run, { suggest }): suggest must be a function');
+        if (!declaredCommands.has(name)) {
+          // Atmos refuses it after the call: the SDK logs why.
+          console.error(`[atmos-sdk] cannot handle rev/${name}:`, `rev/${name} isn't a command ${self} declares ("contributes.commands" in its extension.json)`);
+          return () => {};
+        }
+        const handler = { run, suggest };
+        commandHandlers.set(name, handler);
+        return () => { if (commandHandlers.get(name) === handler) commandHandlers.delete(name); };
+      },
+      bar(element) {
+        if (!element?.getBoundingClientRect) throw new TypeError('atmos.commands.bar(element): an element of this frame');
+        fake.commandBar = element;
+        return () => { if (fake.commandBar === element) fake.commandBar = null; };
+      },
+      field(element, { options: preset } = {}) {
+        if (!element || typeof element.addEventListener !== 'function' || !('value' in element)) throw new TypeError('atmos.commands.field(input): a text field of this frame');
+        // rev/ typed into it opens the bar (fake.commandBarOpened), and the field empties.
+        const onInput = () => {
+          const value = String(element.value ?? '');
+          if (!/^\s*rev\//i.test(value)) return;
+          element.value = '';
+          fake.commandBarOpened.push({ text: value.trimStart(), options: clone(preset ?? null) });
+        };
+        element.addEventListener('input', onInput);
+        return () => element.removeEventListener('input', onInput);
+      },
+      open: async (text = '', openOptions = undefined) => { fake.commandBarOpened.push({ text: String(text ?? ''), options: clone(openOptions ?? null) }); },
+      refresh: () => { fake.commandRefreshes += 1; },
+    },
     invoke: async (target, channel, ...args) => {
       if (!declared(target)) return refuse(`${self} is not permitted to invoke ${target}; declare it in extension.json "permissions.invokes"`);
       const fn = handlers.get(`${target} ${channel}`);

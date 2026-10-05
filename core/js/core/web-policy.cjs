@@ -465,6 +465,8 @@ function shortcutFor(input) {
   const key = String(input.key || '');
   const lower = key.toLowerCase();
   if (ctrl && !input.alt) {
+    // Atmos's command bar (command-bar.js), from a page as from anywhere.
+    if (key === '\\' || key === '|' || input.code === 'IntlBackslash') return 'command-bar';
     if (lower === 'l') return 'focus-address';
     if (lower === 't') return input.shift ? 'reopen-tab' : 'new-tab';
     if (lower === 'n' && input.shift) return 'new-private-tab';
@@ -489,6 +491,18 @@ function shortcutFor(input) {
   if (input.alt && !ctrl && !input.shift && key === 'ArrowLeft') return 'back';
   if (input.alt && !ctrl && !input.shift && key === 'ArrowRight') return 'forward';
   return null;
+}
+
+/**
+ * A mouse's own back and forward buttons (Electron's MouseInputEvent
+ * button "back" / "forward"), as Chrome has them: the tab goes back or
+ * forward when the button is released. Windows also reports these as an
+ * app command on the window ("browser-backward"); that one isn't used, so a
+ * press moves once, in the tab under the pointer.
+ */
+function mouseCommand(mouse) {
+  if (!mouse || mouse.type !== 'mouseUp') return null;
+  return mouse.button === 'back' || mouse.button === 'forward' ? mouse.button : null;
 }
 
 // ── Site icons ───────────────────────────────────────────────────────────────
@@ -731,7 +745,7 @@ module.exports = {
   ICON_PARTITION, ICON_SIZE, ICON_MAX_BYTES, imageDataUrlBytes, iconBitmap, iconFetchAllowed, iconLookup, isLocalAddress,
   chromeUserAgent, uaBrands, CLIENT_HINTS_FILTER, withClientHints, navigationPolicy, isLoadable, siteOf, requestContext,
   permissionNames, permissionSite, permissionDecision, permissionCheck,
-  USER_ACTIVATION_MS, activatesUser, createActivations, LEAVE_QUIET_MS, LEAVE_ACTED_MS, askBeforeLeaving,
+  USER_ACTIVATION_MS, activatesUser, mouseCommand, createActivations, LEAVE_QUIET_MS, LEAVE_ACTED_MS, askBeforeLeaving,
   downloadName, uniqueName, openableDownload, httpsUpgrade, httpsFallbackError, insecureDownload,
   shortcutFor, nextZoom, webviewAttachment,
 };

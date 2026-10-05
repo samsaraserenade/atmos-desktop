@@ -1,46 +1,12 @@
 /**
- * rev/ commands typed into a message bar. Pure: parsing and matching only;
- * ui/command-bar.js shows the suggestions and runs them.
+ * rev/ commands: what the message bars and the handlers share. The commands
+ * themselves are declared in extension.json ("contributes.commands") and
+ * answered by ui/command-handlers.js, in Atmos's command bar.
  */
-export const PREFIX = 'rev/';
 
-export const COMMANDS = Object.freeze([
-  { name: 'go', args: 'room or person', about: 'Open one of your rooms or chats', takesArgs: true },
-  { name: 'join', args: '#room:server, a link, or search', about: 'Join a room or space', takesArgs: true },
-  { name: 'dm', args: '@name:server', about: 'Message someone', takesArgs: true },
-  { name: 'create-room', args: 'name', about: 'Create a room', takesArgs: true },
-  { name: 'create-space', args: 'name', about: 'Create a space', takesArgs: true },
-  { name: 'notifications', args: 'on or off', about: 'Turn the ping for new messages on or off', takesArgs: true },
-  { name: 'invite', args: '@name:server', about: 'Invite someone to this room', takesArgs: true, needsRoom: true },
-  { name: 'leave', args: '', about: 'Leave this room', needsRoom: true },
-].map(Object.freeze));
-
-/** Whether the bar holds a command (a message starting with rev/). */
+/** Whether a message bar holds a command (text starting with rev/): Atmos's bar takes it. */
 export function isCommand(text) {
   return /^\s*rev\//i.test(String(text || ''));
-}
-
-/**
- * Split "rev/create-room Plugin Showcase" into { name: 'create-room', args: 'Plugin
- * Showcase', command, typingName }. typingName is true until a space
- * follows the name, while the command list is still being narrowed.
- */
-export function parseCommand(text) {
-  const body = String(text || '').trimStart().slice(PREFIX.length);
-  const match = /^(\S*)(\s+([\s\S]*))?$/.exec(body) || [];
-  const name = (match[1] || '').toLowerCase();
-  return {
-    name,
-    args: (match[3] || '').trim(),
-    typingName: match[2] === undefined,
-    command: COMMANDS.find(item => item.name === name) || null,
-  };
-}
-
-/** Commands whose names start with what's typed; room-only ones need a room. */
-export function matchCommands(name, { inRoom = false } = {}) {
-  const query = String(name || '').toLowerCase();
-  return COMMANDS.filter(item => item.name.startsWith(query) && (inRoom || !item.needsRoom));
 }
 
 export const isMatrixId = value => /^@[^\s:]+:[^\s]+$/.test(String(value || '').trim());

@@ -3,6 +3,7 @@
 import { load, forgetStateNamespaces }    from './js/persist.js';
 import './js/core/context-menu.js';
 import './js/core/sidebar-shell.js';
+import './js/core/command-bar.js';
 import './js/core/appearance.js';
 import { loadSystemState,
          loadSystemSettings,

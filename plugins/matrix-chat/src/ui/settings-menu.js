@@ -9,7 +9,7 @@
  *      (a new sign-in on an account that has encryption), or verified;
  *   4. log out (press and hold).
  *
- * The ping sound is the rev/notifications command (ui/command-bar.js).
+ * The ping sound is the rev/notifications command (ui/command-handlers.js).
  */
 
 import {

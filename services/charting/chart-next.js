@@ -1,6 +1,6 @@
-import { CHART_INTERVALS, CHART_RANGES } from './toolbar.js';
+import { CHART_INTERVALS, CHART_RANGES, intervalRangeKey, intervalTitle } from './toolbar.js';
 import { nearestSampleTime } from './series.js';
-import { appendCandleSample, bucketHistory, heikenAshi, heikenAshiStep, pickBucketMs, renderCandlesSVG, renderCandlesCanvas } from './candlesticks.js';
+import { appendCandleSample, bucketEnd, bucketHistory, bucketStart, heikenAshi, mergeCandles, heikenAshiStep, pickBucketMs, renderCandlesSVG, renderCandlesCanvas } from './candlesticks.js';
 import { renderSamsaraOverlayCanvas, renderSamsaraOverlaySVG, SAMSARA_DEFAULTS, mergedUtcSession, movingAverage, buildSamsaraStudy } from './indicators.js';
 import { smoothValues } from './smoothing.js';
 import { createChartViewport } from './viewport.js';
@@ -126,6 +126,7 @@ export function createTimeSeriesChart(container, options = {}) {
   });
   let sourceData = [], data = [], candleSamples = null;
   let effectiveBucketMs = settings.bucketMs || 60_000;
+  let mergeBucketMs = null; // set while OHLC data is merged into longer candles
   let destroyed = false, drag = null, selection = null, hover = null, measuredAxisEdgeOffset = 0;
   let responsiveDefaultDensity = false, responsivePlotWidth = 0;
   // Data refreshes may ask for a fresh viewport, but an explicit range,
@@ -347,14 +348,25 @@ export function createTimeSeriesChart(container, options = {}) {
   function capped(items) { return items.length > settings.maxPoints ? items.slice(-settings.maxPoints) : items; }
 
   function rebuildData({ resetViewport = false } = {}) {
-    stopAnimation();
+    stopAnimation(); mergeBucketMs = null;
+    // Kept in time order (an out-of-order append lands at the end), so the
+    // newest point is the one updateLatest() replaces and live candles can
+    // be rebuilt from the tail.
+    sourceData.sort((a, b) => (Number(pointTime(a)) || 0) - (Number(pointTime(b)) || 0));
     const visibleSource = sourceData.filter(point => !hidden(pointTime(point)));
     if (settings.type === 'line') {
       data = capped(visibleSource.map(normalizeLinePoint).filter(Boolean).sort((a, b) => a.time - b.time)); candleSamples = null;
     } else {
       const candles = visibleSource.map(normalizeCandle).filter(Boolean);
       if (candles.length === visibleSource.length && candles.length) {
-        candleSamples = null; data = capped(candles.sort((a, b) => a.t0 - b.t0)); effectiveBucketMs = settings.bucketMs || Math.max(1, data[0].t1 - data[0].t0);
+        candleSamples = null; data = candles.sort((a, b) => a.t0 - b.t0);
+        // Longer candles than the data's own (1h bars shown as 8h, daily as
+        // weekly) are merged here, before the cap, so the first one is whole;
+        // equal or shorter ones are shown as they are.
+        const nativeMs = Math.max(1, data[0].t1 - data[0].t0);
+        mergeBucketMs = settings.bucketMs > nativeMs ? settings.bucketMs : null;
+        data = capped(mergeBucketMs ? mergeCandles(data, mergeBucketMs) : data);
+        effectiveBucketMs = settings.bucketMs || nativeMs;
       } else {
         candleSamples = capped(visibleSource.map(normalizeLinePoint).filter(Boolean).sort((a, b) => a.time - b.time));
         const samples = candleSamples.map(point => ({ ...point, t: point.time, v: point.value }));
@@ -751,9 +763,29 @@ export function createTimeSeriesChart(container, options = {}) {
     // back to the live edge), so nothing here needs to force anything: if
     // pan.live is true the next render naturally shows the new tail; if
     // it's false the pinned offset is untouched and the view doesn't move.
-    const previousCandle = settings.type === 'line' ? null : data.at(-1); appendSource(point, replaceLatest); if (hidden(pointTime(point))) { rebuildData(); return; }
+    const previousCandle = settings.type === 'line' ? null : data.at(-1), replacedSource = replaceLatest ? sourceData.at(-1) : null; appendSource(point, replaceLatest); if (hidden(pointTime(point))) { rebuildData(); return; }
     if (settings.type === 'line') { const normalized = normalizeLinePoint(point); if (!normalized) throw new TypeError('invalid chart point'); if (replaceLatest && data.length) data[data.length - 1] = normalized; else data.push(normalized); }
-    else if (candleSamples) { const sample = normalizeLinePoint(point); if (!sample) throw new TypeError('invalid chart point'); if (replaceLatest && candleSamples.length) candleSamples[candleSamples.length - 1] = sample; else candleSamples.push(sample); const t0 = Math.floor(sample.time / effectiveBucketMs) * effectiveBucketMs, last = data.at(-1); if (last?.t0 === t0 && !replaceLatest) { data[data.length - 1] = appendCandleSample(last, { ...sample, v: sample.value }, effectiveBucketMs); } else if (last?.t0 === t0) { let start = candleSamples.length - 1; while (start > 0 && Math.floor(candleSamples[start - 1].time / effectiveBucketMs) * effectiveBucketMs === t0) start--; const samples = candleSamples.slice(start); data[data.length - 1] = bucketHistory(samples.map(item => ({ ...item, t: item.time, v: item.value })), effectiveBucketMs)[0]; } else data.push({ ...sample, t0, t1: t0 + effectiveBucketMs, o: sample.value, h: sample.value, l: sample.value, c: sample.value }); }
+    else if (candleSamples) { const sample = normalizeLinePoint(point); if (!sample) throw new TypeError('invalid chart point'); if (replaceLatest && candleSamples.length) candleSamples[candleSamples.length - 1] = sample; else candleSamples.push(sample); const t0 = bucketStart(sample.time, effectiveBucketMs), last = data.at(-1); if (last?.t0 === t0 && !replaceLatest) { data[data.length - 1] = appendCandleSample(last, { ...sample, v: sample.value }, effectiveBucketMs); } else if (last?.t0 === t0) { let start = candleSamples.length - 1; while (start > 0 && bucketStart(candleSamples[start - 1].time, effectiveBucketMs) === t0) start--; const samples = candleSamples.slice(start); data[data.length - 1] = bucketHistory(samples.map(item => ({ ...item, t: item.time, v: item.value })), effectiveBucketMs)[0]; } else data.push({ ...sample, t0, t1: bucketEnd(t0, effectiveBucketMs), o: sample.value, h: sample.value, l: sample.value, c: sample.value }); }
+    else if (mergeBucketMs) {
+      // The newest merged candle again, from the source candles it holds
+      // (hidden ones left out). Anything out of order -- a candle for an
+      // older bucket, or one replacing a candle of another bucket -- is
+      // rebuilt whole instead.
+      const normalized = normalizeCandle(point); if (!normalized) throw new TypeError('invalid chart point');
+      const t0 = bucketStart(normalized.t0, mergeBucketMs), members = [], replaced = replacedSource && normalizeCandle(replacedSource);
+      let rebuild = (data.at(-1)?.t0 ?? -Infinity) > t0 || (replaced != null && bucketStart(replaced.t0, mergeBucketMs) !== t0);
+      for (let index = sourceData.length - 1; !rebuild && index >= 0; index--) {
+        if (hidden(pointTime(sourceData[index]))) continue;
+        const candle = normalizeCandle(sourceData[index]); if (!candle) continue;
+        const bucket = bucketStart(candle.t0, mergeBucketMs);
+        if (bucket > t0 || (members.length && candle.t0 > members[0].t0)) rebuild = true;
+        else if (bucket < t0) break;
+        else members.unshift(candle);
+      }
+      if (rebuild) { rebuildData(); return; }
+      const merged = mergeCandles(members, mergeBucketMs)[0];
+      if (data.at(-1)?.t0 === t0) data[data.length - 1] = merged; else data.push(merged);
+    }
     else { const normalized = normalizeCandle(point); if (!normalized) throw new TypeError('invalid chart point'); if ((replaceLatest || data.at(-1)?.t0 === normalized.t0) && data.length) data[data.length - 1] = normalized; else data.push(normalized); }
     if (data.length > settings.maxPoints) { data.splice(0, data.length - settings.maxPoints); heikenCache.data = null; }
     dataRevision++; heikenCache.revision = -1;
@@ -841,6 +873,12 @@ export function createTimeSeriesChart(container, options = {}) {
   let toolbar = null; const toolbarRefs = new Map();
   function createButton(label, title, action) { const button = document.createElement('button'); button.type = 'button'; button.className = 'atmos-chart__tool'; button.textContent = label; button.title = title || label; button.style.cssText = "height:24px;padding:0 8px;border:1px solid transparent;border-radius:4px;color:rgba(var(--ink-rgb),.58);background:transparent;cursor:pointer;font:500 10px/1.35 var(--app-font-family, 'Segoe UI', Roboto, sans-serif)"; button.addEventListener('click', action, eventOptions); return button; }
   function createAxisControls() { const group = document.createElement('div'); group.className = 'atmos-chart__axes'; group.setAttribute('role', 'group'); group.setAttribute('aria-label', 'Chart axes'); group.style.cssText = 'display:flex;gap:2px'; const x = createButton('X', 'Toggle time axis', () => setOptions({ showTimeAxis: !settings.showTimeAxis })); const y = createButton('Y', 'Toggle price axis', () => setOptions({ showPriceAxis: !settings.showPriceAxis })); x.dataset.axisX = ''; y.dataset.axisY = ''; group.append(x, y); toolbarRefs.set('axisX', x); toolbarRefs.set('axisY', y); return group; }
+  // A click picks the candle; Ctrl (or Cmd) + click shows that much time
+  // instead and keeps the candle. This replaces separate range buttons.
+  function chooseInterval(interval, event) {
+    if (event?.ctrlKey || event?.metaKey) { userViewportPreference = true; setOptions({ activeRangeKey: intervalRangeKey(interval) }); }
+    else setOptions({ bucketMs: interval.ms });
+  }
   function buildToolbar() {
     const config = settings.toolbar === true ? {} : settings.toolbar; if (!config || toolbar) return;
     if (config.element) {
@@ -861,7 +899,7 @@ export function createTimeSeriesChart(container, options = {}) {
       toolbar.querySelectorAll('[data-interval]').forEach(button => {
         const interval = (config.intervals || DEFAULT_INTERVALS).find(item => item.value === button.dataset.interval);
         if (interval) button.dataset.bucketMs = interval.ms == null ? 'auto' : String(interval.ms);
-        button.addEventListener('click', () => { if (interval) setOptions({ bucketMs: interval.ms }); }, eventOptions);
+        button.addEventListener('click', event => { if (interval) chooseInterval(interval, event); }, eventOptions);
       });
       toolbarRefs.set('range', toolbar);
       toolbar.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click', () => setOptions({ activeRangeKey: button.dataset.range }), eventOptions));
@@ -870,7 +908,7 @@ export function createTimeSeriesChart(container, options = {}) {
     }
     toolbar = document.createElement('div'); toolbar.className = 'atmos-chart__toolbar'; toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', config.ariaLabel || 'Chart options');
     toolbar.style.cssText = "position:absolute;z-index:11;left:8px;bottom:8px;display:flex;align-items:center;flex-wrap:wrap;gap:3px;max-width:calc(100% - 16px);padding:3px;border:1px solid rgba(var(--ink-rgb),.075);border-radius:7px;background:rgba(var(--surface-rgb),var(--shell-opacity, .88));box-shadow:0 3px 14px rgba(0,0,0,.22);backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);-webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);font:500 10px/1.35 var(--app-font-family, 'Segoe UI', Roboto, sans-serif)";
-    const controls = new Set(config.controls || ['axes', 'timeline', 'scale', 'bridge', 'indicator', 'follow', 'type', 'timeframe', 'range', 'fit', 'hidden']), add = (key, element) => { toolbarRefs.set(key, element); toolbar.append(element); };
+    const controls = new Set(config.controls || ['axes', 'timeline', 'scale', 'bridge', 'indicator', 'follow', 'type', 'timeframe', 'fit', 'hidden']), add = (key, element) => { toolbarRefs.set(key, element); toolbar.append(element); };
     for (const element of config.prepend || []) toolbar.append(element);
     if (controls.has('timeline')) add('timeline', createButton('Gapless', 'Toggle real-time gaps', () => setOptions({ timelineMode: settings.timelineMode === 'gapless' ? 'gaps' : 'gapless' })));
     if (controls.has('scale')) add('scale', createButton('Linear', 'Toggle log/linear price scale', () => setOptions({ priceScale: settings.priceScale === 'log' ? 'linear' : 'log' })));
@@ -878,7 +916,7 @@ export function createTimeSeriesChart(container, options = {}) {
     if (controls.has('indicator')) add('indicator', createButton('SAR', 'Toggle indicator', () => setOptions({ indicator: settings.indicator ? null : {} })));
     if (controls.has('follow')) add('follow', createButton('Live', 'Follow newest data', () => setOptions({ followLatest: !settings.followLatest })));
     if (controls.has('type')) { const group = document.createElement('div'); group.style.cssText = 'display:flex;gap:2px'; for (const [type, label] of [['line', 'Line'], ['candlestick', 'Candle'], ['heiken-ashi', 'Heiken']]) { const button = createButton(label, label, () => setOptions({ type })); button.dataset.chartType = type; group.append(button); } add('type', group); }
-    if (controls.has('timeframe')) { const group = document.createElement('div'); group.style.cssText = 'display:flex;gap:2px'; for (const interval of config.intervals || DEFAULT_INTERVALS) { const button = createButton(interval.label, interval.label, () => setOptions({ bucketMs: interval.ms })); button.dataset.bucketMs = interval.ms == null ? 'auto' : String(interval.ms); group.append(button); } add('timeframe', group); }
+    if (controls.has('timeframe')) { const group = document.createElement('div'); group.style.cssText = 'display:flex;gap:2px'; for (const interval of config.intervals || DEFAULT_INTERVALS) { const button = createButton(interval.label, intervalTitle(interval), event => chooseInterval(interval, event)); button.dataset.bucketMs = interval.ms == null ? 'auto' : String(interval.ms); group.append(button); } add('timeframe', group); }
     if (controls.has('range')) { const group = document.createElement('div'); group.style.cssText = 'display:flex;gap:2px'; for (const range of config.ranges || DEFAULT_RANGES) { const button = createButton(range.label, `Show ${range.label}`, () => setOptions({ activeRangeKey: range.value })); button.dataset.range = range.value; group.append(button); } add('range', group); }
     if (controls.has('fit')) add('fit', createButton('Fit', 'Fit all data', fitContent));
     if (controls.has('hidden')) {
@@ -901,10 +939,8 @@ export function createTimeSeriesChart(container, options = {}) {
     active(toolbarRefs.get('bridge'), settings.bridgeFromPreviousClose); active(toolbarRefs.get('indicator'), !!settings.indicator); active(toolbarRefs.get('follow'), settings.followLatest);
     toolbarRefs.get('type')?.querySelectorAll?.('[data-chart-type]')?.forEach(button => active(button, button.dataset.chartType === settings.type));
     const timeframe = toolbarRefs.get('timeframe');
-    if (timeframe) timeframe.style.display = settings.type === 'line' ? 'none' : 'flex';
-    // External toolbars may have no interval wrapper; never hide their root.
+    // Shown for lines too: Ctrl+click on one sets how much time is shown.
     (timeframe || toolbar).querySelectorAll?.('[data-bucket-ms]')?.forEach(button => {
-      if (!timeframe) button.style.display = settings.type === 'line' ? 'none' : '';
       active(button, button.dataset.bucketMs === (settings.bucketMs == null ? 'auto' : String(settings.bucketMs)));
     });
     toolbarRefs.get('range')?.querySelectorAll?.('[data-range]')?.forEach(button => active(button, button.dataset.range === viewport.getState().activeRangeKey));

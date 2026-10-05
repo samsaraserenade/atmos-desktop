@@ -323,7 +323,12 @@ test('Coinbase history uses its granularity, converts seconds and reorders field
     [3_600_000, 98, 105, 90, 100, 2],
     [7_200_000, 100, 120, 95, 110, 3],
   ]);
-  await assert.rejects(() => getMarketHistory('BTCUSDT', { exchange: 'coinbase', interval: '4h' }, async () => ({ ok: true, json: async () => [] })), /unavailable for coinbase/);
+  // No 4h at Coinbase: hourly candles, for the chart to merge; or none when the caller needs 4h itself.
+  let fallback;
+  const hourly = await getMarketHistory('BTCUSDT', { exchange: 'coinbase', interval: '4h' }, async url => { fallback = new URL(String(url)); return { ok: true, json: async () => [] }; });
+  assert.equal(fallback.searchParams.get('granularity'), '3600');
+  assert.deepEqual([hourly.interval, hourly.intervalMs, hourly.requestedInterval, hourly.requestedIntervalMs], ['1h', 3_600_000, '4h', 14_400_000]);
+  await assert.rejects(() => getMarketHistory('BTCUSDT', { exchange: 'coinbase', interval: '4h', exact: true }, async () => ({ ok: true, json: async () => [] })), /unavailable for coinbase at 4h/);
 });
 
 test('a frame\'s subscription: unsubscribing drops its destroyed listener, a closed frame ends it', async () => {

@@ -774,6 +774,9 @@ function wire() {
   $('mp-track-name').addEventListener('click', event => { event.stopPropagation(); openSearch(); });
   $('mp-track-sub').addEventListener('click', event => { event.stopPropagation(); openSearch(); });
   const search = $('mp-lib-search');
+  // rev/ typed here goes to Atmos's command bar, which opens over this bar
+  // (atmos.commands.bar in mountPlayer); the search empties.
+  atmos.commands.field(search);
   search.addEventListener('input', event => {
     lastQuery = event.target.value.trim();
     applySearch(lastQuery);
@@ -887,6 +890,8 @@ export async function mountPlayer() {
   injectPanelMarkup(bar, content, extras);
   // The browser scrolls itself; wheel over it doesn't move the drawer.
   content.dataset.atmosDrawerScroll = '';
+  // Atmos's command bar (Ctrl+\) opens over this bar when the keyboard is here.
+  atmos.commands.bar(bar);
 
   applyDisplayPreferences();
   applyFullBarWaveform();

@@ -173,5 +173,5 @@ test('Kraken history uses its pair names and minute intervals', async () => {
   assert.equal(requested.searchParams.get('pair'), 'XBTUSDT');
   assert.equal(requested.searchParams.get('interval'), '240');
   assert.deepEqual(result.candles.map(bar => [bar.start, bar.open, bar.close, bar.volume]), [[0, 8, 10, 4], [14_400_000, 10, 11, 7]]);
-  await assert.rejects(getMarketHistory('BTCUSDT', { exchange: 'kraken', interval: '3m' }, async () => json(200, {})), /unavailable for kraken/);
+  await assert.rejects(getMarketHistory('BTCUSDT', { exchange: 'kraken', interval: '3m', exact: true }, async () => json(200, {})), /unavailable for kraken/);
 });

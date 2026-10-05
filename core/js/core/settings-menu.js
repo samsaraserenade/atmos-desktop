@@ -575,7 +575,7 @@ function _renderHome() {
         <div class="sm-home-updates">${_atmosHomeHtml()}</div>
       </div>
       <div class="sm-about-logo">
-        <img src="assets/Rev2.png" alt="Atmos mascot" id="sm-about-mascot">
+        <img src="assets/Grev.png" alt="Atmos mascot" id="sm-about-mascot">
       </div>
     </div>`;
 
@@ -600,8 +600,11 @@ function _renderHome() {
   // strand it on the click frame.
   const mascotImg = _listEl.querySelector('#sm-about-mascot');
   if (mascotImg) {
-    const restMascotSrc = 'assets/Rev2.png';
-    const clickMascotSrc = 'assets/RevClickTSP.png';
+    // Settings' own Rev (grey, horned); the boot splash keeps Rev2.
+    const restMascotSrc = 'assets/Grev.png';
+    const clickMascotSrc = 'assets/GrevClick.png';
+    // Loaded now, so the first press doesn't blink while it downloads.
+    new Image().src = clickMascotSrc;
     const press = () => { mascotImg.src = clickMascotSrc; };
     const release = () => { mascotImg.src = restMascotSrc; };
     mascotImg.addEventListener('mousedown', press);
@@ -1867,6 +1870,20 @@ export function openAtmosSettings() {
 /** Settings, opened on the extension manager (the footer's Extensions button). */
 export function openExtensionManager() {
   _activeCategory = _EXTENSIONS_PAGE_ID;
+  openSettingsMenu();
+}
+
+// Settings' pages by the names the command bar uses (command-list.js:
+// SETTINGS_PAGES). Browser shows only when Atmos Browser has settings.
+const _PAGES_BY_NAME = Object.freeze({
+  atmos: _HOME_PAGE_ID, appearance: _APPEARANCE_PAGE_ID, sidebar: _SIDEBAR_PAGE_ID, panels: _PANELS_PAGE_ID,
+  browser: _BROWSER_PAGE_ID, extensions: _EXTENSIONS_PAGE_ID, system: _SYSTEM_PAGE_ID,
+});
+
+/** Settings, opened on a page by name (rev/settings appearance); an unknown name opens where it was. */
+export function openSettingsPage(name) {
+  const page = _PAGES_BY_NAME[String(name || '').toLowerCase()];
+  if (page) _activeCategory = page;
   openSettingsMenu();
 }
 

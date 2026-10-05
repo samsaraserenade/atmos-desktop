@@ -330,6 +330,52 @@ function describeContributions(entry, files) {
   return out;
 }
 
+// ── Commands (SDK 1.3) ───────────────────────────────────────────────────────
+// rev/ commands an extension adds to Atmos's command bar, declared in
+// "contributes.commands" so Atmos can list them while the extension's frames
+// are away and show them before a community extension is approved. Core's
+// own names can't be taken.
+const CORE_COMMAND_NAMES = Object.freeze(['sidebar', 'settings', 'extensions', 'switch']);
+const COMMAND_NAME = /^[a-z][a-z0-9-]{0,29}$/;
+const MAX_COMMANDS = 30;
+
+/** Text for the bar: one line, no markup characters, at most `max` long. */
+function commandText(value, max) {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').replace(/[<>&"'`\u0000-\u001f\u007f]/g, '').trim().slice(0, max) : '';
+}
+
+/**
+ * An extension's commands as the bar uses them:
+ *   [{ name, args, about, takesArgs, suggests }]
+ *   name       what follows rev/ (lowercase letters, digits, -; not one of Atmos's)
+ *   args       a hint for what it takes ("room or person")
+ *   about      a line saying what it does
+ *   takesArgs  Enter on the command waits for something typed after it
+ *   suggests   the extension lists choices as you type (atmos.commands.handle's suggest)
+ */
+function describeCommands(entry) {
+  if (isLibrary(entry)) return [];
+  const manifest = entry.manifest && !entry.manifest.invalid ? entry.manifest : {};
+  const declared = manifest.contributes && typeof manifest.contributes === 'object' ? manifest.contributes.commands : null;
+  if (!Array.isArray(declared)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const def of declared) {
+    if (out.length >= MAX_COMMANDS) break;
+    const name = typeof def?.name === 'string' ? def.name.trim().toLowerCase() : '';
+    if (!COMMAND_NAME.test(name) || CORE_COMMAND_NAMES.includes(name) || seen.has(name)) continue;
+    seen.add(name);
+    out.push({
+      name,
+      args: commandText(def.args, 40),
+      about: commandText(def.about, 120),
+      takesArgs: def.takesArgs === true,
+      suggests: def.suggests === true,
+    });
+  }
+  return out;
+}
+
 const IMPORT_MAP = JSON.stringify({ imports: { 'atmos-sdk': '/__atmos/sdk.js' } });
 const IMPORT_MAP_HASH = sha256Base64(IMPORT_MAP);
 
@@ -346,6 +392,6 @@ module.exports = {
   SCHEME, FIRST_PARTY_HOST, IMPORT_MAP_HASH,
   isLibrary, resolveRuntime, frameHost, frameOrigin, extensionPath,
   sharedOriginCleanupPatterns, sharedOriginMove, moveDocument, moveCsp, storageHostScript,
-  frameCsp, framePermissionsPolicy, describeContributions, frameDocument,
+  frameCsp, framePermissionsPolicy, describeContributions, describeCommands, CORE_COMMAND_NAMES, frameDocument,
   safeRelative,
 };

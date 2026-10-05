@@ -1,8 +1,10 @@
 // Audio Player in frames and the background layer, end to end: the Wallpaper
 // service carrying over what Background saved, Audio Player carrying over
 // what the in-page version saved, the drawer Atmos moves, playback from the
-// Audio service surviving panel switches, Space, menus with controls and
-// icons, the three widgets, and state across a restart.
+// Audio service surviving panel switches, Space, rev/play, rev/next and
+// rev/song in Atmos's command bar (answered by the boot frame), the bar
+// lying on Music's own and rev/ typed in its search handing over, menus with
+// controls and icons, the three widgets, and state across a restart.
 // Usage: node scripts/e2e/audio-player.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), path = require('path'), zlib = require('zlib');
@@ -233,6 +235,36 @@ const r = {};
   await s.page.waitForTimeout(500);
   r.afterSecondSpace = (await channelState(s.page)).playing;
 
+  // rev/ commands in Atmos's command bar (Ctrl+\), from another panel:
+  // Audio Player's boot frame answers them.
+  const bar = () => s.page.evaluate(() => ({
+    rows: [...document.querySelectorAll('#command-bar-list .command-bar-item')].map(item => `${item.querySelector('.command-bar-item-title')?.firstChild?.textContent.trim()}${item.querySelector('.command-bar-item-source')?.textContent.trim() ? ` (${item.querySelector('.command-bar-item-source').textContent.trim()})` : ''}`),
+    flash: document.querySelector('.command-bar-flash')?.textContent.trim() || null,
+    open: !!document.getElementById('command-bar-field')?.isConnected,
+  }));
+  const command = async text => {
+    await s.page.keyboard.press('Control+Backslash');
+    await s.page.waitForTimeout(300);
+    await s.page.keyboard.type(text, { delay: 25 });
+    await s.page.waitForTimeout(600);
+  };
+  await command('play');
+  r.revPlayListed = (await bar()).rows;
+  await s.page.keyboard.press('Enter');
+  await s.page.waitForTimeout(700);
+  r.revPlay = { flash: (await bar()).flash, playing: (await channelState(s.page)).playing };
+  const sourceBefore = (await channelState(s.page)).source;
+  await command('next');
+  await s.page.keyboard.press('Enter');
+  await s.page.waitForTimeout(900);
+  const afterNext = await channelState(s.page);
+  r.revNext = { flash: (await bar()).flash, playing: afterNext.playing, moved: afterNext.source !== sourceBefore };
+  await command('song thr');
+  r.revSongRows = (await bar()).rows;
+  await s.page.keyboard.press('Enter');
+  await s.page.waitForTimeout(900);
+  r.revSong = { flash: (await bar()).flash, source: (await channelState(s.page)).source, playing: (await channelState(s.page)).playing };
+
   // Back to Music; the queue carries on.
   await activate(s.page, 'audio-player');
   const panel2 = await waitFrame(s.page, 'panel');
@@ -240,6 +272,44 @@ const r = {};
   await s.page.waitForFunction(() => document.querySelector('.atmos-drawer')?.classList.contains('open'), null, { timeout: 5000 }).catch(() => {});
   await s.page.waitForTimeout(800);
   r.panelAfterReturn = await panel2?.evaluate(() => document.getElementById('mp-track-name')?.textContent).catch(e => e.message);
+
+  // With the keyboard in Music, Atmos's command bar lies on Music's bar
+  // (atmos.commands.bar), its commands first; rev/ typed in the library
+  // search hands over to it.
+  const musicFrame = await s.page.locator('.atmos-drawer iframe').boundingBox();
+  const musicBar = await panel2?.evaluate(() => { const rect = document.getElementById('ap-bar').getBoundingClientRect(); return { y: rect.y, height: rect.height }; });
+  const timeAt = await panel2?.evaluate(() => { const rect = document.getElementById('mp-cur-fs').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; });
+  if (musicFrame && timeAt) await s.page.mouse.click(musicFrame.x + timeAt.x, musicFrame.y + timeAt.y);
+  await s.page.waitForTimeout(300);
+  await s.page.keyboard.press('Control+Backslash');
+  await s.page.waitForTimeout(500);
+  const overMusic = await s.page.evaluate(() => {
+    const field = document.getElementById('command-bar-field');
+    const list = document.getElementById('command-bar-list');
+    if (!field?.isConnected) return null;
+    const rect = field.getBoundingClientRect(), listRect = list?.getBoundingClientRect();
+    return { y: Math.round(rect.y), bottom: Math.round(rect.bottom), height: Math.round(rect.height), own: field.classList.contains('is-own'), listTop: listRect ? Math.round(listRect.top) : null, listBottom: listRect ? Math.round(listRect.bottom) : null, below: !!list?.classList.contains('is-below') };
+  });
+  r.barOverMusic = !!(overMusic && musicFrame && musicBar && !overMusic.own && Math.abs(overMusic.y - (musicFrame.y + musicBar.y)) <= 2 && Math.abs(overMusic.height - musicBar.height) <= 2
+    && (overMusic.below ? Math.abs(overMusic.listTop - overMusic.bottom) <= 1 : Math.abs(overMusic.listBottom - overMusic.y) <= 1));
+  if (!r.barOverMusic) r.barOverMusicDetail = { overMusic, musicFrame, musicBar };
+  r.musicCommandsFirst = (await bar()).rows.slice(0, 6);
+  await s.page.screenshot({ path: path.join(out, '80b-command-bar.png') });
+  await s.page.keyboard.press('Escape');
+  await s.page.waitForTimeout(300);
+  const nameAt = await panel2?.evaluate(() => { const rect = document.getElementById('mp-track-name').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; });
+  if (musicFrame && nameAt) await s.page.mouse.click(musicFrame.x + nameAt.x, musicFrame.y + nameAt.y);
+  await s.page.waitForTimeout(500);
+  await s.page.keyboard.type('rev/', { delay: 40 });
+  await s.page.waitForTimeout(600);
+  r.searchHandsOver = await s.page.evaluate(() => {
+    const input = document.getElementById('command-bar-input');
+    return { open: !!document.getElementById('command-bar-field')?.isConnected, value: input?.value ?? null, focused: document.activeElement === input };
+  });
+  r.searchCleared = await panel2?.evaluate(() => document.getElementById('mp-lib-search').value);
+  await s.page.keyboard.press('Escape');
+  await s.page.keyboard.press('Escape');
+  await s.page.waitForTimeout(300);
 
   // Album menu from the frame: icons and controls drawn by Atmos.
   const cardBox = await panel2?.evaluate(() => { const rect = document.querySelector('.mp-alb-card').getBoundingClientRect(); return { x: rect.x + 20, y: rect.y + 20 }; });

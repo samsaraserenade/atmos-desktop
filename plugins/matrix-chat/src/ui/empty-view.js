@@ -1,10 +1,12 @@
 /**
  * The Chat panel with no room open (first sign-in, or after leaving the
- * last one): an empty timeline and the message bar, which takes rev/
- * commands to open, join or create something.
+ * last one): an empty timeline and the message bar. rev/ commands are
+ * Atmos's command bar's, which opens over this bar (ui/command-handlers.js
+ * answers Matrix Chat's); anything else typed and entered is a room to open
+ * (rev/go).
  */
-import { showRoom } from './engine.js';
-import { attachCommandBar } from './command-bar.js';
+import atmos from 'atmos-sdk';
+import { isCommand } from './commands.js';
 
 export function renderEmptyView(contentEl, { opening = false } = {}) {
   contentEl.innerHTML = `
@@ -21,18 +23,20 @@ export function renderEmptyView(contentEl, { opening = false } = {}) {
     </div>`;
   const input = contentEl.querySelector('.mx-empty-view-input');
   const composerEl = contentEl.querySelector('.mx-composer');
-  const commandBar = attachCommandBar({ input, composerEl, onOpenRoom: roomId => showRoom(roomId) });
-  // Enter without a command: there's nowhere to send a message yet.
+  const stopCommandBar = atmos.commands.bar(composerEl);
+  const stopCommandField = atmos.commands.field(input);
+  // Enter: there's nowhere to send a message yet, so it's a room to open,
+  // handed over as if typed (atmos.commands.field): rev/go and the name.
   const onKeyDown = event => {
-    if (event.key !== 'Enter' || commandBar.active() || !input.value.trim()) return;
+    if (event.key !== 'Enter' || event.isComposing || !input.value.trim()) return;
     event.preventDefault();
-    commandBar.fill(`rev/go ${input.value.trim()}`);
+    if (!isCommand(input.value)) input.value = `rev/go ${input.value.trim()}`;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
   };
   input.addEventListener('keydown', onKeyDown);
-  const cleanup = () => {
-    commandBar.dispose();
+  return () => {
+    stopCommandBar();
+    stopCommandField();
     input.removeEventListener('keydown', onKeyDown);
   };
-  cleanup.fill = commandBar.fill;
-  return cleanup;
 }

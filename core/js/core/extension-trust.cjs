@@ -47,6 +47,7 @@ const { normalizePermissions, describePermissions, normalizeExports, permissions
 const { createHasher, readIntegrityList, compareFiles } = require('./extension-integrity.cjs');
 const { verifyExtension, verifyAuthorSignature, SIGNATURE_FILE } = require('./extension-signing.cjs');
 const { readJson, writeJson } = require('./json-files.cjs');
+const { describeCommands } = require('./extension-frames.cjs');
 
 const LOADABLE = new Set(['verified', 'unverified', 'approved', 'developer']);
 // Permissions only a main.cjs can use; third-party extensions cannot have one.
@@ -230,10 +231,23 @@ function createExtensionTrust({
       exports: shared,
       permissions: permissions || normalizePermissions(undefined),
       // Community extensions are approved on this list, so every host is named.
-      permissionSummary: describePermissions(permissions || {}, { hasMain, everyHost: entry.tier === 'third-party' }),
+      // The rev/ commands it adds are on it too (they run its own code).
+      permissionSummary: withCommands(describePermissions(permissions || {}, { hasMain, everyHost: entry.tier === 'third-party' }), commandLines(entry)),
       hasMain,
     };
     return full;
+  }
+
+  /** The permission lines and its commands' (no "No special permissions" above what it does add). */
+  function withCommands(lines, commands) {
+    return commands.length ? [...lines.filter(line => line !== 'No special permissions'), ...commands] : lines;
+  }
+
+  /** "Adds commands to Atmos's command bar: rev/go, rev/join" for what it declares, or nothing. */
+  function commandLines(entry) {
+    const names = describeCommands(entry).map(command => `rev/${command.name}`);
+    if (!names.length) return [];
+    return [`Adds ${names.length === 1 ? 'a command' : 'commands'} to Atmos's command bar: ${names.join(', ')}`];
   }
 
   function assessAll(catalog) {

@@ -11,8 +11,7 @@ import { createComposerController } from './composer-controller.js';
 // value changes, and client.js's buildMentionFields() for how they turn
 // into formatted_body + m.mentions on the wire.
 import { sendTextMessage, sendFileMessage, editTextMessage, getUserId, getReadReceipts, markRoomRead, onTimeline, onTimelineReset, onDecrypted, onLocalEcho, onReceipt, onAccountChange, paginateBack, invalidateEventCache, getIdentityChanges, acceptIdentityChange, onTrustChange } from './engine.js';
-import { showRoom } from './engine.js';
-import { attachCommandBar } from './command-bar.js';
+import { isCommand } from './commands.js';
 import { createFullscreenMedia } from './fullscreen-media.js';
 import { createContextMenu } from './context-menu.js';
 import { createEmojiBrowser } from './emoji-browser.js';
@@ -106,8 +105,12 @@ export function renderRoomView(contentEl, room) {
   const trayEl = contentEl.querySelector('#mx-pending-tray');
   const contextEl = contentEl.querySelector('#mx-composer-context');
   const composerEl = contentEl.querySelector('.mx-composer');
-  // rev/ commands (command-bar.js) share this bar with messages.
-  const commandBar = attachCommandBar({ input, composerEl, getRoom: () => room, onOpenRoom: roomId => showRoom(roomId) });
+  // rev/ commands are Atmos's command bar's (ui/command-handlers.js answers
+  // Matrix Chat's): it opens over this bar, and typing rev/ here hands what's
+  // typed across (keys typed before it has the keyboard too). A command is
+  // never sent as a message.
+  const stopCommandBar = atmos.commands.bar(composerEl);
+  const stopCommandField = atmos.commands.field(input);
 
   // Read once at mount rather than re-fetched on every reaction/toggle —
   // the local user's own id can't change mid-session (a change means a
@@ -922,7 +925,7 @@ export function renderRoomView(contentEl, room) {
   function renderMentionMenu() {
     if (!mentionEl) {
       mentionEl = document.createElement('div');
-      // The same popover as the rev/ command list (command-bar.js).
+      // Matrix Chat's popover (.mx-palette in assets/styles.css).
       mentionEl.className = 'mx-palette mx-mention-menu';
       mentionEl.setAttribute('role', 'listbox');
       // mousedown (not click) so this fires before the input would
@@ -998,8 +1001,7 @@ export function renderRoomView(contentEl, room) {
     // "@" only triggers at the very start of the message or right
     // after whitespace — same rule Discord/Slack use — so an email
     // address or an "@" typed mid-word doesn't pop this open.
-    // A rev/ command has its own list (command-bar.js).
-    const match = commandBar.active() ? null : /(?:^|\s)@([^\s@]*)$/.exec(textBeforeCursor);
+    const match = /(?:^|\s)@([^\s@]*)$/.exec(textBeforeCursor);
     if (!match) {
       closeMentionMenu();
       return;
@@ -1029,7 +1031,11 @@ export function renderRoomView(contentEl, room) {
   // so there's exactly one place responsible for tearing this down.
 
   async function send() {
-    if (commandBar.active()) return commandBar.run();
+    if (isCommand(input.value)) {
+      // Left here when the bar couldn't open: Enter hands it over again (atmos.commands.field).
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return undefined;
+    }
     return composer.run(async assertActive => {
     const text = input.value.trim();
     const attachments = [...composer.pending]; // snapshot — clearPending()/further picks shouldn't affect this in-flight send
@@ -1438,7 +1444,8 @@ export function renderRoomView(contentEl, room) {
   refreshIdentityNotice();
 
   function unmount() {
-    commandBar.dispose();
+    stopCommandBar();
+    stopCommandField();
     if (unmounted) return;
     unmounted = true;
     timeline.dispose();
@@ -1519,7 +1526,5 @@ export function renderRoomView(contentEl, room) {
   document.addEventListener('visibilitychange', onViewingStateChanged);
   markVisibleRoomRead();
 
-  /** Put text in the message bar (the sidebar's "+" and the like). */
-  unmount.fill = commandBar.fill;
   return unmount;
 }

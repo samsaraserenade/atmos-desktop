@@ -64,7 +64,7 @@ export async function runContract(atmos, { declared }) {
   // What the SDK has.
   report.sdkVersion = atmos.SDK_VERSION;
   report.api = members(atmos).filter(name => name !== 'fake');
-  report.members = Object.fromEntries(['audio', 'wallpaper', 'location', 'state', 'events', 'lifecycle', 'notifications', 'appearance', 'contextMenu', 'clipboard', 'panel']
+  report.members = Object.fromEntries(['audio', 'wallpaper', 'location', 'state', 'events', 'lifecycle', 'notifications', 'appearance', 'contextMenu', 'clipboard', 'panel', 'commands']
     .map(name => [name, members(atmos[name])]));
   report.extension = members(atmos.extension);
   report.surface = members(atmos.surface).filter(name => typeof atmos.surface[name] !== 'function');

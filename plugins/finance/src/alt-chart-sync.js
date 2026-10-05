@@ -78,7 +78,8 @@ export function installAltChartSync(grid, context) {
     for (const peer of peersFor(sourceRoot)) {
       const match = matchingControl(peer, control);
       if (!match || match.disabled) continue;
-      dispatchRelayed(match, new MouseEvent('click', { bubbles: true, cancelable: true, altKey: true }));
+      // Ctrl/Cmd come along: Ctrl+click on a timeframe sets the range instead.
+      dispatchRelayed(match, new MouseEvent('click', { bubbles: true, cancelable: true, altKey: true, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey }));
     }
   });
 
@@ -96,6 +97,25 @@ export function installAltChartSync(grid, context) {
         ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey,
         deltaX: event.deltaX, deltaY: event.deltaY, deltaZ: event.deltaZ,
         deltaMode: event.deltaMode, ...point,
+      }));
+    }
+  });
+
+  // A double-click on a plot snaps that chart to its optimal view (Ctrl:
+  // clears its hidden ranges). The browser never makes a dblclick out of the
+  // relayed pointer events, so it's relayed itself, like a click.
+  context.listen(grid, 'dblclick', event => {
+    if (!event.altKey || relayed.has(event)) return;
+    const sourcePlot = event.target.closest(PLOT_SELECTOR);
+    const sourceRoot = sourcePlot && chartRootFor(grid, sourcePlot);
+    if (!sourceRoot || chartRoots(grid).length < 2) return;
+    for (const peer of peersFor(sourceRoot)) {
+      const targetPlot = peer.querySelector(PLOT_SELECTOR);
+      if (!targetPlot) continue;
+      dispatchRelayed(targetPlot, new MouseEvent('dblclick', {
+        bubbles: true, cancelable: true, composed: true, detail: 2, button: event.button,
+        altKey: true, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey,
+        ...mappedPoint(event, sourcePlot, targetPlot),
       }));
     }
   });

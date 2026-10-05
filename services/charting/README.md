@@ -56,7 +56,17 @@ Line points accept `{ time, value }` (with `{ t, v }`, `timestamp`, and
 `price` aliases). Candles accept canonical `{ start, end, open, high, low,
 close }` or compact `{ t0, t1, o, h, l, c }` fields. Passing line samples to
 a candle chart derives OHLC buckets locally; subsequent `append()` calls can
-continue streaming those price samples into the forming candle.
+continue streaming those price samples into the forming candle. Candles
+with a `bucketMs` longer than their own (hourly candles shown as 8H, daily
+as weekly) are merged into it, and stay merged as `append()` and
+`updateLatest()` bring new ones.
+
+Buckets are in UTC. 30, 90, 180 and 365 days stand for calendar months,
+quarters, half years and years (opening on the 1st); multiples of a week
+open on Monday; 3 days opens where Binance opens them; everything else is a
+fixed length from the epoch. `bucketStart`, `bucketEnd` and
+`mergeCandles(candles, bucketMs)` are exported for consumers that need the
+same boundaries.
 
 The returned handle exposes `setData`, `append`, `appendMany`, `updateLatest`,
 `setHiddenRanges`, `setStatus`, `setType`, `setOptions`, `fitContent`, `resize`,
@@ -109,7 +119,13 @@ Use `chart.batch(() => { ... })` to group synchronous data, status, options, and
 `CHART_INTERVALS`, `CHART_RANGES`, and `chartControlMarkup(control, options)`
 provide the standard axes, timeline, bridge, scale, type, timeframe, and range
 controls for external toolbars. `options` accepts `buttonClass`, `intervals`,
-and `ranges`. Consumers retain their surrounding layout and business-specific
+and `ranges`. `CHART_INTERVALS` is TradingView's list (Auto, 1m to 1Y). A
+click on a timeframe picks the candle; Ctrl or Cmd + click shows that much
+time instead (`activeRangeKey: 'last:<ms>'`, or `'all'` for Auto), so a
+toolbar needs no separate range buttons; the built-in toolbar has none by
+default (`controls: [..., 'range']` brings them back). The timeframes stay
+visible for line charts. `intervalRangeKey(interval)` and
+`intervalTitle(interval)` give the range key and the tooltip. Consumers retain their surrounding layout and business-specific
 controls. `CHART_CONTROL_STYLES` supplies the optional flat control theme,
 scoped to `.atmos-chart-controls`. `setToolbarIcon` and `setChartTypeIcons`
 apply the shared accessible icons.

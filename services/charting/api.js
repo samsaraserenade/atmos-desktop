@@ -3,16 +3,20 @@
  * Resolve with getServiceFileUrl('charting', 'api.js').
  */
 export { createTimeSeriesChart } from './chart-next.js';
-export { CHART_CONTROL_STYLES, CHART_INTERVALS, CHART_RANGES, chartControlMarkup } from './toolbar.js';
+export { CHART_CONTROL_STYLES, CHART_INTERVALS, CHART_RANGES, chartControlMarkup, intervalRangeKey, intervalTitle } from './toolbar.js';
 export { setToolbarIcon, setChartTypeIcons } from './toolbar-icons.js';
 export { parseIntervalMs, formatIntervalMs, bindIntervalInput } from './intervals.js';
 export { areaPath, nearestSampleTime, clipToDomain, downsampleSeries } from './series.js';
 export { createChartViewport, computeAxisTicks, computePriceScale, niceNumber } from './viewport.js';
 export {
+  bucketEnd,
   bucketHistory,
+  bucketStart,
+  CALENDAR_MONTHS,
   computeCandleScale,
   heikenAshi,
   heikenAshiStep,
+  mergeCandles,
   pickBucketMs,
   renderCandlesSVG,
   renderCandlesCanvas,

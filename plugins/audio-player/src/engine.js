@@ -25,6 +25,7 @@ import {
 import { persistCover } from './cover-writer.js';
 import { createWaveformLoader } from './waveform-loader.js';
 import { restorePlayback } from './restore-playback.js';
+import { handleCommands } from './commands.js';
 
 const audio = atmos.audio;
 
@@ -158,6 +159,11 @@ export function playPrev() {
 
 export function playNext() {
   return playlist.length ? loadTrack(getNextIndex()) : false;
+}
+
+/** For rev/ commands (commands.js): what's playing, and how much is queued. */
+export function status() {
+  return { playing: !!now.playing, track: playlist[audioState.trackIdx]?.name || null, queued: playlist.length, position: Number(now.currentTime) || 0 };
 }
 
 export function seek(seconds) {
@@ -364,6 +370,8 @@ export async function start() {
 
   // Space anywhere in Atmos outside a text field (boot "keys" in extension.json).
   atmos.surface.onKey(({ code }) => { if (code === 'Space') void togglePlay(); });
+  // rev/play, rev/next and the rest, from Atmos's command bar.
+  handleCommands({ togglePlay, playNext, playPrev, playTrack, playAlbum, status });
 
   await atmos.expose({
     snapshot,

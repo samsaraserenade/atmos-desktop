@@ -60,7 +60,6 @@ export const onDeviceTrustChange = tracked(c.onDeviceTrustChange);
 export const onTrustChange = tracked(c.onTrustChange);
 export const onNotificationSoundChanged = tracked(p.onNotificationSoundChanged);
 export const onViewChange = tracked(engine.view.subscribe);
-export const onPanelRequest = tracked(engine.view.subscribeRequests);
 
 // Everything else is called straight through.
 export const {
@@ -82,8 +81,7 @@ export const {
 export const { relationsForEvent } = engine.relations;
 export const { matrixState, save } = engine.state;
 
-/** What the panel shows ({ type: 'none' } or { type: 'room', roomId }), shared by the panel and the sidebar widget. */
+/** What the panel shows ({ type: 'none' } or { type: 'room', roomId }), shared by the panel, the sidebar widget and rev/ commands. */
 export const currentView = () => engine.view.get();
 export const showRoom = roomId => engine.view.showRoom(roomId);
 export const showNone = () => engine.view.showNone();
-export const takePanelRequest = () => engine.view.takeRequest();

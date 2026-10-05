@@ -1,8 +1,9 @@
 // A tiny Matrix homeserver for matrix-chat.cjs: enough of the client-server
 // API for matrix-js-sdk to log in, sync one room, send, react and redact,
-// with the Rust crypto's key uploads accepted and ignored. Everything it is
-// asked is recorded in `requests`; `deliver(event)` puts an event from
-// someone else into the next sync.
+// invite and create a room (answered, not synced), with the Rust crypto's
+// key uploads accepted and ignored. Everything it is asked is recorded in
+// `requests`; `deliver(event)` puts an event from someone else into the
+// next sync.
 const http = require('http');
 
 function createHomeserver() {
@@ -116,6 +117,8 @@ function createHomeserver() {
       deliver(redaction);
       return [200, { event_id: redaction.event_id }];
     }
+    if (/^\/rooms\/[^/]+\/invite$/.test(route) && request.method === 'POST') return [200, {}];
+    if (route === '/createRoom' && request.method === 'POST') return [200, { room_id: `!created${++eventCounter}:test` }];
     if (/^\/rooms\/[^/]+\/messages$/.test(route)) return [200, { chunk: [], start: url.searchParams.get('from') || 'p0' }];
     if (/^\/rooms\/[^/]+\/members$/.test(route)) return [200, { chunk: state.filter(item => item.type === 'm.room.member') }];
     if (/^\/rooms\/[^/]+\/joined_members$/.test(route)) return [200, { joined: { [self]: { display_name: 'Tester' }, [other]: { display_name: 'Friend' } } }];

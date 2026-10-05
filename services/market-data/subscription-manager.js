@@ -6,17 +6,18 @@ const { symbol: normalizeSymbol } = require('./normalizer');
 // Consumer-facing feeds. Candles are built from trades, so both need only
 // the upstream trade stream.
 const FEEDS = new Set(['trades', 'candles']);
-const UNIT_MS = Object.freeze({ s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 });
+const UNIT_MS = Object.freeze({ s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000, mo: 30 * 86_400_000, y: 365 * 86_400_000 });
 
 // `intervals` limits which candle intervals a subscriber receives: '5m',
-// '1h', or milliseconds. Left out, every interval the engine builds is sent.
+// '1h', '1w', '1mo' (a calendar month), or milliseconds. Left out, every
+// interval the engine builds is sent.
 function parseIntervals(value) {
   if (value == null) return null;
   if (!Array.isArray(value)) throw new TypeError('intervals must be an array');
   const result = new Set();
   for (const item of value) {
     if (typeof item === 'number' && Number.isFinite(item) && item > 0) { result.add(item); continue; }
-    const match = /^(\d+)(s|m|h|d)$/i.exec(String(item).trim());
+    const match = /^(\d+)(mo|s|m|h|d|w|y)$/i.exec(String(item).trim());
     if (match && Number(match[1]) > 0) result.add(Number(match[1]) * UNIT_MS[match[2].toLowerCase()]);
   }
   if (!result.size) throw new TypeError('intervals has no valid interval');

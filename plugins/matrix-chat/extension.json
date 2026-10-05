@@ -1,7 +1,10 @@
 {
-  "apiVersion": 3,
+  "apiVersion": 4,
+  "engines": {
+    "atmos": ">=0.20.0"
+  },
   "tier": "first-party",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -43,7 +46,63 @@
     ],
     "boot": {
       "entry": "boot.js"
-    }
+    },
+    "commands": [
+      {
+        "name": "go",
+        "args": "room or person",
+        "about": "Open one of your rooms or chats",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "join",
+        "args": "#room:server, a link, or search",
+        "about": "Join a room or space",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "dm",
+        "args": "@name:server",
+        "about": "Message someone",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "create-room",
+        "args": "name",
+        "about": "Create a room",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "create-space",
+        "args": "name",
+        "about": "Create a space",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "notifications",
+        "args": "on or off",
+        "about": "Turn the ping for new messages on or off",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "invite",
+        "args": "@name:server",
+        "about": "Invite someone to the open room",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "leave",
+        "about": "Leave the open room",
+        "suggests": true
+      }
+    ]
   },
   "legacyStorage": {
     "deleteIndexedDB": [

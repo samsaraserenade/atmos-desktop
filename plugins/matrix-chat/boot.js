@@ -1,7 +1,9 @@
 /**
  * Matrix Chat's background frame: the Matrix connection (sync, encryption,
  * unread counts, the notification ping), alive for the whole session so
- * rooms are warm whenever the panel opens.
+ * rooms are warm whenever the panel opens, and Matrix Chat's rev/ commands
+ * in Atmos's command bar (src/ui/command-handlers.js), so they work with
+ * the panel closed.
  *
  * The panel and the Rooms widget are first-party frames on the same origin
  * as this one, so they use this frame's engine directly
@@ -72,26 +74,18 @@ async function signOut(session) {
 
 /**
  * What the Chat panel shows: a room, or nothing yet ({ type: 'none' }).
- * Shared so the sidebar widget can follow and change it. The room each
- * account had open is remembered, so the panel reopens it.
- *
- * Requests are for the panel to act on once it's there: the widget's "+"
- * puts rev/ in the message bar ({ action: 'command', text, parentSpaceId }).
+ * Shared so the sidebar widget (and rev/go) can follow and change it. The
+ * room each account had open is remembered, so the panel reopens it.
  */
 function createView() {
   let current = { type: 'none' };
   const listeners = new Set();
-  let request = null;
-  const requestListeners = new Set();
-  const notify = (set, ...args) => {
-    for (const fn of [...set]) {
-      try { fn(...args); } catch (error) { console.error('[matrix-chat] view listener failed:', error); }
-    }
-  };
   function set(next) {
     if (next.type === current.type && next.roomId === current.roomId) return;
     current = Object.freeze(next);
-    notify(listeners, current);
+    for (const fn of [...listeners]) {
+      try { fn(current); } catch (error) { console.error('[matrix-chat] view listener failed:', error); }
+    }
   }
   return {
     get: () => current,
@@ -113,21 +107,6 @@ function createView() {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
-    ask(next) {
-      request = Object.freeze({
-        action: String(next?.action || ''),
-        text: String(next?.text || ''),
-        section: String(next?.section || ''),
-        parentSpaceId: next?.parentSpaceId ? String(next.parentSpaceId) : '',
-      });
-      notify(requestListeners);
-    },
-    /** The pending request, once. */
-    takeRequest() { const next = request; request = null; return next; },
-    subscribeRequests(fn) {
-      requestListeners.add(fn);
-      return () => requestListeners.delete(fn);
-    },
   };
 }
 
@@ -146,6 +125,11 @@ Object.defineProperty(window, '__matrixEngine', {
 });
 
 initNotifications();
+
+// rev/go, rev/join and the rest, answered here (they use the engine through
+// src/ui/engine.js, which finds it on this window).
+import('./src/ui/command-handlers.js').then(commands => commands.handleCommands())
+  .catch(error => console.error('[matrix-chat] rev/ commands are unavailable:', error));
 
 if (matrixState.matrixSession?.accessToken) {
   try {

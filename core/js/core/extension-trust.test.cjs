@@ -71,6 +71,15 @@ test('third-party extensions need approval, and changes need it again', () => {
   assert.equal(gamma.status, 'pending');
   assert.equal(gamma.loadable, false);
   assert.deepEqual(gamma.permissionSummary, ['Connect to api.example.net']);
+  // The rev/ commands it adds are on the list it's approved on.
+  {
+    const { write: put, setup: start } = fixture();
+    put('installed/plugins/delta/extension.json', { apiVersion: 3, contributes: { commands: [{ name: 'roll', about: 'Roll a die' }, { name: 'switch' }, { name: 'flip' }] } });
+    put('installed/plugins/delta/panel.js', 'export default 1;');
+    const started = start();
+    assert.deepEqual(started.trust.get(started.catalog.find('plugins', 'delta')).permissionSummary,
+      ['Adds commands to Atmos\'s command bar: rev/roll, rev/flip'], 'what it adds, not "No special permissions" above it');
+  }
 
   assert.throws(() => trust.approve('plugins', catalog.find('plugins', 'gamma'), 'stale'), /changed while you were reviewing/);
   trust.approve('plugins', catalog.find('plugins', 'gamma'), gamma.fingerprint);

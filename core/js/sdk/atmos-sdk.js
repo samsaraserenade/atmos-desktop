@@ -1,5 +1,5 @@
 /**
- * Atmos SDK 1.2 — the only way a framed extension talks to Atmos.
+ * Atmos SDK 1.3 — the only way a framed extension talks to Atmos.
  *
  *   import atmos from 'atmos-sdk';
  *
@@ -19,7 +19,7 @@
  *                 setGlass, trackGlass), state, events, appearance,
  *                 contextMenu, clipboard, panel, invoke, listen, call,
  *                 expose, library, wallpaper, audio, fetch, location,
- *                 lifecycle, ready, SDK_VERSION
+ *                 lifecycle, commands (1.3), ready, SDK_VERSION
  *   experimental  notifications (not yet seen working on Windows)
  *   first-party   drawer, surface.onKey, background(), legacy.*, web — for
  *                 official extensions; Atmos refuses them to community
@@ -28,7 +28,7 @@
  * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = '1.2.0';
+export const SDK_VERSION = '1.3.0';
 
 let port = null;
 let nextId = 1;
@@ -39,6 +39,8 @@ const topics = new Map();       // topic -> Set<fn>
 let exposed = null;             // methods offered by a service's boot frame
 let menuActions = new Map();    // the open context menu's item id -> run()
 const headerActions = new Map(); // sidebar header menu item id -> run()
+const commandHandlers = new Map(); // rev/ command name -> { run, suggest } (atmos.commands.handle)
+let stopBar = null;                 // the frame's bar for the command bar, while one is declared (atmos.commands.bar)
 
 let resolveReady;
 /** Resolves once the frame is connected to Atmos. Entry files run after it. */
@@ -95,6 +97,18 @@ async function answerCall(message) {
   }
 }
 
+/** Atmos's command bar asks this frame to run a command, or what to list for it. */
+async function answerCommand(message) {
+  try {
+    const handler = commandHandlers.get(message.name);
+    const fn = message.action === 'suggest' ? handler?.suggest : handler?.run;
+    if (typeof fn !== 'function') throw new Error(`rev/${message.name} isn't handled in this frame`);
+    send({ commandReply: message.command, result: await fn({ ...(message.input || {}) }) });
+  } catch (error) {
+    send({ commandReply: message.command, error: { name: error?.name, message: error?.message } });
+  }
+}
+
 function onMessage(event) {
   const message = event.data;
   if (!message || typeof message !== 'object') return;
@@ -106,9 +120,12 @@ function onMessage(event) {
     else call.resolve(message.result);
   } else if (message.call !== undefined) {
     answerCall(message);
+  } else if (message.command !== undefined) {
+    answerCommand(message);
   } else if (message.topic) {
     if (message.topic === 'appearance') applyAppearance(message.payload);
     if (message.topic === 'measure') { measureSize?.(); return; }
+    if (message.topic === 'keyboardBack') { keyboardBack(); return; }
     if (message.topic === 'drawerVisible') { setDrawerVisible(message.payload); return; }
     if (message.topic === 'drawer') drawerState = Object.freeze({ ...drawerState, ...message.payload });
     if (message.topic === 'surfaceMenu') {
@@ -271,6 +288,44 @@ function forwardKeys() {
   });
   // Atmos closes its menus when the pointer is used elsewhere.
   document.addEventListener('pointerdown', () => notify('ui.pointerdown'), true);
+  // Which element had the keyboard here, for when Atmos gives it back (its
+  // command bar closing): focus leaving the frame doesn't come back to it by
+  // itself. Moved to nothing inside the frame, there's nothing to give back.
+  document.addEventListener('focusin', event => { keyboardWasAt = event.target; }, true);
+  document.addEventListener('focusout', () => setTimeout(() => {
+    if (document.hasFocus() && (!document.activeElement || document.activeElement === document.body)) keyboardWasAt = null;
+  }, 0), true);
+}
+
+let keyboardWasAt = null;
+const handOvers = new Set(); // field()s that just handed rev/ over: ended when the keyboard comes back
+let barOpenings = 0;         // asks to open the bar from here, not yet answered
+
+/**
+ * Ask Atmos to open its command bar with text. Until it answers, a
+ * keyboardBack is for a bar that closed before this ask reached it (the two
+ * come down one port, in order): not for the bar this opens.
+ */
+function openBar(...args) {
+  barOpenings += 1;
+  const answered = () => { barOpenings -= 1; };
+  return ask('commands.open', ...args).then(
+    value => { answered(); return value; },
+    error => { answered(); throw error; },
+  );
+}
+
+/** Atmos gave this frame the keyboard back: to the element that had it. */
+function keyboardBack() {
+  // An earlier bar's, arriving late (this frame was busy): taking the
+  // keyboard back now would close the bar it has just opened.
+  if (barOpenings > 0) return;
+  // The bar has closed: what's typed now is the field's own again.
+  for (const end of [...handOvers]) end();
+  const now = document.activeElement;
+  if ((!now || now === document.body) && keyboardWasAt?.isConnected && typeof keyboardWasAt.focus === 'function') {
+    keyboardWasAt.focus({ preventScroll: true });
+  }
 }
 
 // ── Drawer panels ────────────────────────────────────────────────────────────
@@ -778,6 +833,186 @@ export const lifecycle = Object.freeze({
   },
 });
 
+// ── atmos.commands (SDK 1.3) ─────────────────────────────────────────────────
+/**
+ * rev/ commands in Atmos's command bar (Ctrl+\, or rev/ typed into a field
+ * that hands it over). Declare each in extension.json:
+ *
+ *   "contributes": { "commands": [
+ *     { "name": "go", "args": "room or person", "about": "Open a room", "takesArgs": true, "suggests": true }
+ *   ] }
+ *
+ * The bar lists the commands of what's showing (your panel, your widgets)
+ * first, and the rest as they're typed. What's typed after a command's name
+ * goes to your extension only.
+ *
+ *   handle(name, run, { suggest })   run({ args, value, options }) when it's
+ *       chosen: args is what follows the name; value, the suggestion
+ *       chosen; options, the values of the options you offered. Return
+ *       nothing (the bar closes), or
+ *         { done: 'text' }              closes, saying so
+ *         { keep: true, done? }         stays open, saying so
+ *         { fill: 'rev/…', options? }   the bar takes this text (and options)
+ *       or throw: the bar shows the error.
+ *       suggest({ args, options }), for a command declaring "suggests": true,
+ *       lists choices as args are typed: rows, or { rows, options }, where
+ *         row      { title, sub?, action?, value?, complete?, danger? } | { heading } | { note }
+ *                  (complete: what Tab types after the name; without it Tab moves on)
+ *         option   { id, type: 'select' | 'toggle' | 'text', label?, value,
+ *                    options?: [{ value, label }], prefix?, suffix?, placeholder? }
+ *       Returns a function that stops handling it. Handle each command in the
+ *       frame that can do it: a boot frame's handlers work while nothing of
+ *       yours is showing.
+ *   bar(element)   panels: the bar at the bottom of your panel (54 px high:
+ *       ui.css's .atmos-bar). The command bar opens over it (Atmos keeps it
+ *       measured); panels without one get a bar of Atmos's own. One per
+ *       frame: another replaces it. Returns stop().
+ *   field(input, { options })   a text field of yours that also takes
+ *       commands (a message bar): rev/ typed into it opens the command bar
+ *       with what's typed, keys typed before the bar has the keyboard follow
+ *       it, and Enter in that moment sends nothing. Put rev/… in it yourself
+ *       and announce it (an input event) to hand that over too. Returns
+ *       stop().
+ *   open(text, options)   open the command bar with text (rev/go general):
+ *       only while your frame has focus and the user just did something.
+ *       While a command's name you typed is in the bar, Atmos chooses none
+ *       of another extension's rows for the user.
+ *   refresh()      ask for your suggestions again (results arrived late).
+ */
+const FOLLOW_MS = 1000; // field(): how long keys typed after the hand-over still follow it
+const commandsApi = Object.freeze({
+  handle(name, run, { suggest } = {}) {
+    if (typeof name !== 'string' || !name) throw new TypeError('atmos.commands.handle(name, run): name is a command declared in extension.json');
+    if (typeof run !== 'function') throw new TypeError('atmos.commands.handle(name, run): run must be a function');
+    if (suggest !== undefined && typeof suggest !== 'function') throw new TypeError('atmos.commands.handle(name, run, { suggest }): suggest must be a function');
+    const handler = { run, suggest };
+    commandHandlers.set(name, handler);
+    ask('commands.handle', name, { suggests: typeof suggest === 'function' }).catch(error => {
+      if (commandHandlers.get(name) === handler) commandHandlers.delete(name);
+      console.error(`[atmos-sdk] cannot handle rev/${name}:`, error.message);
+    });
+    return () => {
+      if (commandHandlers.get(name) !== handler) return;
+      commandHandlers.delete(name);
+      notify('commands.unhandle', name);
+    };
+  },
+  bar(element) {
+    if (!element?.getBoundingClientRect) throw new TypeError('atmos.commands.bar(element): an element of this frame');
+    // A frame has one bar: a new one (the next room's, say) takes over from the last.
+    stopBar?.();
+    let last = '';
+    let queued = false;
+    let stopped = false;
+    const report = () => {
+      queued = false;
+      if (stopped) return;
+      const rect = element.isConnected ? element.getBoundingClientRect() : null;
+      const box = rect && rect.width > 0 && rect.height > 0
+        ? { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+        : null;
+      const next = JSON.stringify(box);
+      if (next === last) return;
+      last = next;
+      notify('commands.bar', box);
+    };
+    const queue = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(report);
+    };
+    const resize = new ResizeObserver(queue);
+    resize.observe(element);
+    resize.observe(document.documentElement);
+    const mutations = new MutationObserver(queue);
+    mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
+    window.addEventListener('resize', queue);
+    document.addEventListener('scroll', queue, true);
+    let forget = null;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      if (stopBar === stop) stopBar = null;
+      forget?.(); // nothing of this bar (or its element) stays behind for the frame's end
+      resize.disconnect();
+      mutations.disconnect();
+      window.removeEventListener('resize', queue);
+      document.removeEventListener('scroll', queue, true);
+      notify('commands.bar', null);
+    };
+    stopBar = stop;
+    forget = onCleanup(stop);
+    report();
+    return stop;
+  },
+  field(element, { options } = {}) {
+    if (!element || typeof element.addEventListener !== 'function' || !('value' in element)) {
+      throw new TypeError('atmos.commands.field(input): a text field of this frame');
+    }
+    const preset = options && typeof options === 'object' ? options : null;
+    let handed = null;   // { text, until }: rev/ handed over a moment ago
+    const endHandOver = () => { handed = null; handOvers.delete(endHandOver); };
+    let clearing = false;
+    const clear = () => {
+      clearing = true;
+      element.value = '';
+      // The field's own listeners see it emptied (a mention list, a search).
+      try { element.dispatchEvent(new Event('input', { bubbles: true })); } finally { clearing = false; }
+    };
+    const onInput = event => {
+      if (clearing || event.isComposing) return;
+      const value = String(element.value ?? '');
+      if (handed && performance.now() < handed.until) {
+        // Typed before the bar had the keyboard: it follows what was handed over.
+        if (!value) return;
+        handed.text = `${handed.text}${value}`.slice(0, 200);
+        clear();
+        ask('commands.open', handed.text, null, true).catch(() => {
+          // Not taken (typed in the bar meanwhile, or it closed): the keys stay here.
+          endHandOver();
+          element.value = `${element.value}${value}`;
+        });
+        return;
+      }
+      endHandOver();
+      if (!/^\s*rev\//i.test(value)) return;
+      const text = value.trimStart().slice(0, 200);
+      handed = { text, until: performance.now() + FOLLOW_MS };
+      handOvers.add(endHandOver);
+      clear();
+      openBar(text, preset, false).catch(error => {
+        endHandOver();
+        // The bar didn't open (the frame lost focus, say): the text stays; Enter can try again.
+        if (!element.value) element.value = text;
+        console.warn('[atmos-sdk] the command bar did not open:', error.message);
+      });
+    };
+    // Enter typed before the bar had the keyboard isn't the field's (a message sent).
+    const onKeydown = event => {
+      if (!handed || performance.now() >= handed.until || event.key !== 'Enter') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    element.addEventListener('input', onInput);
+    element.addEventListener('keydown', onKeydown, true);
+    let stopped = false;
+    let forget = null;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      forget?.();
+      endHandOver();
+      element.removeEventListener('input', onInput);
+      element.removeEventListener('keydown', onKeydown, true);
+    };
+    forget = onCleanup(stop);
+    return stop;
+  },
+  open: (text = '', options = undefined) => openBar(String(text ?? ''), options && typeof options === 'object' ? options : null),
+  refresh: () => notify('commands.refresh'),
+});
+export { commandsApi as commands };
+
 // ── Experimental ─────────────────────────────────────────────────────────────
 
 /**
@@ -982,6 +1217,7 @@ export const web = Object.freeze({
 const atmos = Object.freeze({
   SDK_VERSION, ready, extension, surface, state, events, appearance, contextMenu, clipboard, panel,
   invoke, listen, call, expose, library, wallpaper, audio, fetch: atmosFetch, location: locationApi, lifecycle,
+  commands: commandsApi,
   notifications,
   drawer, legacy, background, web,
 });

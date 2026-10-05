@@ -510,10 +510,23 @@ function mountChartPanel(contentEl, context) {
       tickerList.replaceChildren(...items);
     };
     const fitToCorner = () => {
-      // Flush with the dock's top edge, whatever height the dock has.
+      // Placed against the picker itself (position: absolute), in this
+      // chart's own coordinates: flush with its dock's top edge and its
+      // chart's left edge, no taller than the room above the dock. Window
+      // coordinates only worked for a chart at the bottom of the panel: the
+      // dock's blur and the chart's container query make each chart the box
+      // a fixed-position sheet is placed in, so a top chart's sheet landed
+      // above the window and was clipped away.
       const dock = tickerPicker.closest('.finance-portfolio-toolbar, .mq-toolbar');
-      const top = dock?.getBoundingClientRect().top;
-      tickerPickerPanel.style.bottom = Number.isFinite(top) ? `${Math.max(0, window.innerHeight - top)}px` : '';
+      const chart = tickerPicker.closest('.finance-extra-chart, .finance-chart-stage');
+      if (!dock) return;
+      const own = tickerPicker.getBoundingClientRect();
+      const dockBox = dock.getBoundingClientRect();
+      const chartBox = chart?.getBoundingClientRect() || { top: 0, left: 0, width: window.innerWidth };
+      tickerPickerPanel.style.bottom = `${Math.round(own.bottom - dockBox.top)}px`;
+      tickerPickerPanel.style.left = `${Math.round(chartBox.left - own.left)}px`;
+      tickerPickerPanel.style.width = `${Math.round(Math.min(380, chartBox.width))}px`;
+      tickerPickerPanel.style.maxHeight = `${Math.round(Math.max(120, Math.min(560, dockBox.top - chartBox.top - 12)))}px`;
     };
     const openTickerPicker = () => {
       if (!tickerPickerPanel.hidden) return;

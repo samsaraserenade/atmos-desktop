@@ -1,7 +1,7 @@
 {
   "apiVersion": 2,
   "tier": "first-party",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "publisher": "atmos",
   "displayName": "Market Data",
   "description": "Exchange-independent live trades and candles for Atmos services and plugins.",

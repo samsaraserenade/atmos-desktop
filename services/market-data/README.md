@@ -62,7 +62,7 @@ What a subscription receives:
   gets no trade events.
 - `candles: true` → `market-data:candle` and `market-data:candle-history`,
   for every interval the engine builds unless `intervals` (names like
-  `'5m'`, or milliseconds) narrows it. A chart should pass the one interval
+  `'5m'`, `'1w'` or `'1mo'`, or milliseconds) narrows it. A chart should pass the one interval
   it shows; backfill is then fetched for that interval only.
 - Forming-candle updates are coalesced per subscriber to at most one per
   exchange and interval every 250 ms (`candleThrottleMs`), carrying the
@@ -198,10 +198,23 @@ on when one fails; `result.exchange` says which one answered. Coinbase has
 no 4h candles and serves USDT/USDC symbols from its USD books (BTCUSDT is
 BTC-USD); Kraken has no 3m, 2h, 6h or 12h.
 
+Intervals run from 1m to 1y, TradingView's list. One an exchange doesn't
+serve (Coinbase's 4h, anyone's 10m, 2d, 5d, 2w, 3mo, 6mo or 1y) is fetched
+as the longest one it does serve that fits into it evenly (1h, 5m, 1d, 1w,
+1mo), for the chart to merge: `result.interval`/`intervalMs` say what was
+fetched, `requestedInterval`/`requestedIntervalMs` what was asked for.
+A length with no name (a chart's custom 45m) is fetched the same way
+(15m). `exact: true` refuses that instead. Coinbase's 300 candles a request
+go back up to four pages when they're for merging (daily ones for 1W or
+1M), so a long timeframe gets more than a few candles there. Weekly candles open on Monday and
+monthly ones on the 1st (UTC), as the exchanges draw them
+(`bucket-time.js`).
+
 ## Extension points
 
 - Add an adapter that implements `id`, `supports(feed)` (`'trades'`),
   `setSubscriptions(requirements)`, `getHealth()`, and `close()`, then
   register it with `WebSocketManager`.
 - Candle intervals are a `MarketDataService` option (`candleIntervals`);
-  the default is 1m, 5m, 15m, 1h, 4h and 1d.
+  the default is 1m, 5m, 15m, 1h, 4h and 1d. A subscription that asks for
+  another one `getHistory()` can fetch (3m, 8h, 1w, 1mo...) adds it.

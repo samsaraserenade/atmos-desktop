@@ -128,6 +128,9 @@ export const appearanceState = registerCoreStateNamespace('appearance', {
     theme: DEFAULT_APP_THEME_ID,
     sidebarShadowVisible: true,
     sidebarPosition: 'right',
+    // Where the command bar (command-bar.js) opens: over the bottom bar of
+    // the panel you're in, or in the sidebar's footer.
+    commandBar: 'panel',
     shellBlur: DEFAULT_SHELL_BLUR,
     shellOpacity: DEFAULT_SHELL_OPACITY,
     defaultPanelBlur: DEFAULT_PANEL_BLUR,
@@ -143,6 +146,7 @@ export const appearanceState = registerCoreStateNamespace('appearance', {
     state.theme = typeof saved.theme === 'string' ? saved.theme : DEFAULT_APP_THEME_ID;
     state.sidebarShadowVisible = typeof saved.sidebarShadowVisible === 'boolean' ? saved.sidebarShadowVisible : true;
     state.sidebarPosition = saved.sidebarPosition === 'left' ? 'left' : 'right';
+    state.commandBar = saved.commandBar === 'sidebar' ? 'sidebar' : 'panel';
     state.shellBlur = normalizeShellBlur(
       Number.isFinite(saved.shellBlur) ? saved.shellBlur : saved.surfaceBlur,
     );
@@ -270,6 +274,7 @@ export function applyAppearance() {
   document.documentElement.style.setProperty('--default-panel-opacity', (normalizePanelOpacity(appearanceState.defaultPanelOpacity) / 100).toFixed(2));
   document.documentElement.dataset.sidebarShadow = appearanceState.sidebarShadowVisible === false ? 'hidden' : 'visible';
   document.documentElement.dataset.sidebarPosition = appearanceState.sidebarPosition === 'left' ? 'left' : 'right';
+  document.documentElement.dataset.commandBar = appearanceState.commandBar === 'sidebar' ? 'sidebar' : 'panel';
   document.documentElement.style.colorScheme = theme.id === 'atmos-light' ? 'light' : 'dark';
   window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 
@@ -341,6 +346,13 @@ function setPanelAppearanceOverride(id, values) {
 function clearPanelAppearanceOverride(id) {
   if (!appearanceState.panelOverrides?.[id]) return;
   delete appearanceState.panelOverrides[id];
+  scheduleSave();
+  applyAppearance();
+}
+
+/** Where the command bar opens: 'panel' (the default) or 'sidebar' (its footer). */
+export function setCommandBarPlace(place) {
+  appearanceState.commandBar = place === 'sidebar' ? 'sidebar' : 'panel';
   scheduleSave();
   applyAppearance();
 }
@@ -501,6 +513,8 @@ export function mountAppearanceControls(body, context, panels = []) {
       _row('Position', `<span class="sa-segmented" id="app-sidebar-position" role="radiogroup" aria-label="Sidebar position">
         <button type="button" data-value="left" role="radio">Left</button><button type="button" data-value="right" role="radio">Right</button></span>`),
       _row('Backdrop Shadow', _toggle('app-sidebar-shadow', 'Show sidebar backdrop shadow')),
+      _row('Command Bar', `<span class="sa-segmented" id="app-command-bar" role="radiogroup" aria-label="Where the command bar opens" title="Where Ctrl+\\ opens the command bar">
+        <button type="button" data-value="panel" role="radio">In the Panel</button><button type="button" data-value="sidebar" role="radio">In the Sidebar</button></span>`),
     ].join('')),
     _section('Glass', [
       _sliderRow('Interface Blur', 'app-shell-blur', 0, 60, 'Sidebar, Settings and menus'),
@@ -549,6 +563,22 @@ export function mountAppearanceControls(body, context, panels = []) {
   }
   context.onCleanup(onAppearanceChange(syncPosition));
   _syncOnStateLoaded(context, syncPosition);
+
+  const commandBar = body.querySelector('#app-command-bar');
+  const syncCommandBar = () => {
+    const value = appearanceState.commandBar === 'sidebar' ? 'sidebar' : 'panel';
+    for (const button of commandBar.querySelectorAll('button')) {
+      const on = button.dataset.value === value;
+      button.classList.toggle('active', on);
+      button.setAttribute('aria-checked', String(on));
+    }
+  };
+  syncCommandBar();
+  for (const button of commandBar.querySelectorAll('button')) {
+    context.listen(button, 'click', () => setCommandBarPlace(button.dataset.value));
+  }
+  context.onCleanup(onAppearanceChange(syncCommandBar));
+  _syncOnStateLoaded(context, syncCommandBar);
 
   const shadowToggle = body.querySelector('#app-sidebar-shadow');
   const syncShadowToggle = () => { shadowToggle.checked = appearanceState.sidebarShadowVisible !== false; };

@@ -260,6 +260,96 @@ html[data-sidebar-shadow="hidden"] #settings-drawer.open { box-shadow: none; }
 :is(#sidebar-footer-settings, #sidebar-footer-extensions) svg { width:16px; height:16px; }
 /* Something needs attention: an update, a restart, or an extension that failed to load. */
 #sidebar-footer-extensions.attention, #sidebar-footer-extensions.attention:hover { color:var(--color-negative, #f87171); }
+/* The command bar (command-bar.js). In the sidebar (Appearance → Command
+   Bar), the footer's wordmark opens it and the row becomes its field; in a
+   panel (the default), Atmos's bar lies over the panel's own bottom bar, or
+   along its bottom: 54 px of shell glass, like the footer and the panels'
+   bars. The list rises above either. */
+html[data-command-bar="sidebar"] .sidebar-footer-name { cursor:pointer; }
+.command-bar-field {
+  position:fixed; z-index:1160; box-sizing:border-box; display:flex; align-items:center;
+  padding:0 18px 0 14px;
+  background:rgba(var(--surface-rgb),var(--shell-opacity, .88));
+  backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%); -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
+  box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.22);
+}
+html[data-app-theme="amoled"] .command-bar-field { backdrop-filter:none; -webkit-backdrop-filter:none; background:rgb(var(--surface-rgb)); }
+.command-bar-input {
+  flex:1; min-width:0; height:100%; padding:0 4px; border:0; outline:none; background:transparent;
+  color:rgba(var(--ink-rgb),.92); font:inherit; font-size:13px; caret-color:rgba(var(--ink-rgb),.9);
+}
+.command-bar-input::placeholder { color:rgba(var(--ink-rgb),.34); }
+.command-bar-flash {
+  position:fixed; z-index:1160; box-sizing:border-box; display:flex; align-items:center; padding:0 18px 0 16px; pointer-events:none;
+  background:rgba(var(--surface-rgb),var(--shell-opacity, .88));
+  backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%); -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
+  box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.12);
+  color:rgba(var(--ink-rgb),.78); font-size:.76rem; opacity:1; transition:opacity .3s ease;
+}
+.command-bar-flash.is-leaving { opacity:0; }
+.sidebar-command-input { display:none; }
+#sidebar-footer.is-commanding { box-shadow:inset 0 1px 0 rgba(var(--ink-rgb),.22); }
+#sidebar-footer.is-commanding .sidebar-footer-brand { flex:1 1 auto; margin-right:8px; }
+#sidebar-footer.is-commanding :is(.sidebar-footer-name, .sidebar-footer-version) { display:none; }
+#sidebar-footer.is-commanding .sidebar-command-input {
+  display:block; box-sizing:border-box; width:100%; height:30px; padding:0 2px;
+  border:0; outline:none; background:transparent; color:rgba(var(--ink-rgb),.92);
+  font:inherit; font-size:.78rem; letter-spacing:.01em; caret-color:rgba(var(--ink-rgb),.9);
+}
+.sidebar-command-input::placeholder { color:rgba(var(--ink-rgb),.34); }
+.command-bar-list {
+  position:fixed; z-index:1160; box-sizing:border-box; display:flex; flex-direction:column;
+  max-height:min(60vh, 420px); color:rgba(var(--ink-rgb),.9); font-size:12px;
+  border:1px solid rgba(var(--ink-rgb),.1); border-bottom:0; border-radius:8px 8px 0 0;
+  background:rgba(var(--surface-rgb),var(--shell-opacity, .88));
+  backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%); -webkit-backdrop-filter:blur(var(--shell-blur, 30px)) saturate(180%);
+  box-shadow:0 -8px 32px rgba(0,0,0,.45);
+}
+/* Below a bar near the top (Music's, with its drawer up). */
+.command-bar-list.is-below { border-top:0; border-bottom:1px solid rgba(var(--ink-rgb),.1); border-radius:0 0 8px 8px; box-shadow:0 8px 32px rgba(0,0,0,.45); }
+.command-bar-rows { flex:1; min-height:0; overflow-y:auto; padding:4px; scrollbar-width:none; }
+.command-bar-rows::-webkit-scrollbar { display:none; }
+.command-bar-note { padding:8px 10px; color:rgba(var(--ink-rgb),.55); font-size:11.5px; line-height:1.45; }
+.command-bar-heading { padding:8px 10px 4px; color:rgba(var(--ink-rgb),.38); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; }
+.command-bar-status { padding:8px 14px 0; color:rgba(var(--ink-rgb),.6); font-size:11px; }
+.command-bar-status.is-error { color:var(--color-negative, #f87171); }
+.command-bar-item-source { flex:0 0 auto; color:rgba(var(--ink-rgb),.3); font-size:10px; letter-spacing:.02em; }
+.command-bar-item.danger .command-bar-item-title, .command-bar-item.danger .command-bar-item-action { color:var(--color-negative, #f87171); }
+.command-bar-item.danger .command-bar-item-action { border-color:color-mix(in srgb, var(--color-negative, #f87171) 40%, transparent); }
+/* An answer for what was typed before, until the one for what's typed now arrives. */
+.command-bar-item.is-stale { opacity:.55; }
+.command-bar-chips { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:10px 12px 4px; }
+.command-bar-chip-group { display:inline-flex; gap:2px; padding:2px; border:1px solid rgba(var(--ink-rgb),.08); border-radius:999px; }
+.command-bar-chip {
+  display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border:1px solid rgba(var(--ink-rgb),.16);
+  border-radius:999px; background:transparent; color:rgba(var(--ink-rgb),.6); font:inherit; font-size:10.5px; cursor:pointer; white-space:nowrap;
+}
+.command-bar-chip-group .command-bar-chip { border-color:transparent; }
+.command-bar-chip:hover { color:rgba(var(--ink-rgb),.92); }
+.command-bar-chip.on { background:rgba(var(--ink-rgb),.1); color:rgba(var(--ink-rgb),.92); }
+.command-bar-chip span { color:rgba(var(--ink-rgb),.4); }
+.command-bar-chip select, .command-bar-chip input {
+  width:auto; padding:0; border:0; background:transparent; color:rgba(var(--ink-rgb),.92); font:inherit; font-size:10.5px; outline:none; cursor:pointer;
+}
+.command-bar-chip select option { background:rgb(var(--surface-rgb)); }
+.command-bar-chip-text { cursor:text; }
+.command-bar-chip-text input { cursor:text; field-sizing:content; min-width:6ch; max-width:40ch; }
+.command-bar-item {
+  box-sizing:border-box; display:flex; align-items:center; gap:12px; width:100%; padding:7px 10px;
+  border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
+}
+.command-bar-item:hover, .command-bar-item.active { background:rgba(var(--ink-rgb),.08); }
+.command-bar-item-text { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.command-bar-item-title { overflow:hidden; font-size:12.5px; text-overflow:ellipsis; white-space:nowrap; }
+.command-bar-item-hint, .command-bar-item-sub { color:rgba(var(--ink-rgb),.4); }
+.command-bar-item-hint { font-size:11px; }
+.command-bar-item-sub { overflow:hidden; font-size:10.5px; text-overflow:ellipsis; white-space:nowrap; }
+.command-bar-item-action {
+  flex:0 0 auto; padding:2px 8px; border:1px solid rgba(var(--ink-rgb),.16); border-radius:5px;
+  color:rgba(var(--ink-rgb),.6); font-size:10.5px; visibility:hidden;
+}
+.command-bar-item.active .command-bar-item-action, .command-bar-item:hover .command-bar-item-action { visibility:visible; }
+.command-bar-foot { padding:5px 14px 6px; border-top:1px solid rgba(var(--ink-rgb),.07); color:rgba(var(--ink-rgb),.36); font-size:10px; }
 /* no backdrop — drawer is non-modal, UI stays fully interactive */
 /* ── Accordion sections ──────────────────────────────────────────────────── */
 .fin-section { position: relative; border-bottom: 1px solid rgba(var(--ink-rgb),.06); }

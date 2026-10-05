@@ -47,11 +47,12 @@ const APPEARANCE_VARS = [
 ];
 const BOOT_TIMEOUT_MS = 10000;
 // The SDK frames get (core/js/sdk/atmos-sdk.js SDK_VERSION; a test keeps them equal).
-export const SDK_VERSION = '1.2.0';
+export const SDK_VERSION = '1.3.0';
 
 const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>
 const _framed = new Map();   // "kind:id" -> the extension, as loadFramedExtensions() got it
+const _incompatible = new Set(); // "kind:id" of those made for another Atmos (never run here)
 const SERVICE_WAIT_MS = 15000;
 const _exposed = new Map();        // "kind:id" -> { methods, call, owner }
 const _serviceWaiters = new Map(); // "kind:id" -> [resolve]
@@ -225,7 +226,7 @@ window.atmosCore?.onDeveloperChange?.(({ kind, id, restart, extension: fresh }) 
   if (current && fresh?.frame) {
     current.manifest = fresh.manifest;
     current.permissions = fresh.permissions;
-    current.frame = { ...current.frame, allow: fresh.frame.allow, reach: fresh.frame.reach, resourceProviders: fresh.frame.resourceProviders };
+    current.frame = { ...current.frame, allow: fresh.frame.allow, reach: fresh.frame.reach, resourceProviders: fresh.frame.resourceProviders, commands: fresh.frame.commands || [] };
   }
   if (restart) console.warn(`[extensions] ${extensionKey}'s surfaces changed: restart Atmos to apply them`);
   _reloads += 1;
@@ -470,6 +471,18 @@ async function _wallpaperSummary(owner = null) {
   };
 }
 
+/**
+ * Whose a command is, as the command bar says: the name cleaned of
+ * characters that don't show (a blank name is its id in words), and a
+ * community extension marked as one, so none passes for Atmos or another.
+ */
+function _commandLabel(ref) {
+  const clean = _displayName(ref).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const id = String(ref).split(':')[1] || String(ref);
+  const name = clean || id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  return _framed.get(ref)?.tier === 'third-party' ? `${name} · community` : name;
+}
+
 /** What Settings calls an extension ("plugin:<id>"): its displayName, else its id in words. */
 function _displayName(ref) {
   const extension = _framed.get(ref);
@@ -582,7 +595,14 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
   if (hidden) iframe.setAttribute('aria-hidden', 'true');
   iframe.src = `${origin}/__atmos/frame.html?ext=${encodeURIComponent(key(extension))}&surface=${surface.type}`;
 
-  const record = { iframe, bridge: null, port: null, presentation, menuItems: [], drawer };
+  const record = {
+    iframe, bridge: null, port: null, presentation, menuItems: [], drawer,
+    // For the command bar (command-bar.js): what kind of surface it is and
+    // where, the commands it handles and its panel's bottom bar.
+    type: surface.type, container, extensionKey: key(extension),
+    commands: new Map(), // name -> { suggests }
+    bar: null,           // { x, y, width, height } in the frame's pixels
+  };
   let resolveReady;
   const ready = new Promise(resolve => { resolveReady = resolve; });
 
@@ -627,6 +647,38 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
       },
     },
     setSurfaceMenu(items) { record.menuItems = items; },
+    // rev/ commands this frame runs, and its panel's bottom bar (the
+    // bridge has checked the names against the manifest).
+    commands: {
+      handle(name, meta) {
+        record.commands.set(name, { suggests: meta?.suggests === true });
+        // The bar may have said "Open X…" before this frame got here: it asks again.
+        window.dispatchEvent(new CustomEvent('atmos:command-bar-refresh', { detail: { extension: key(extension) } }));
+      },
+      unhandle(name) { record.commands.delete(name); },
+      setBar(rect) {
+        record.bar = rect;
+        window.dispatchEvent(new CustomEvent('atmos:command-bar-moved'));
+      },
+      open(text, options, follow = false) {
+        if (follow) {
+          // Keys typed in this frame's field before the bar had the keyboard
+          // (atmos.commands.field): the bar takes them only if it opened from
+          // here a moment ago (command-bar.js).
+          const detail = { text, from: iframe, accepted: false };
+          window.dispatchEvent(new CustomEvent('atmos:command-bar-follow', { detail }));
+          if (!detail.accepted) throw new Error('the command bar isn\u2019t taking text from this frame now');
+          return;
+        }
+        // Typing in this frame, not a frame working on its own: it has the
+        // keyboard, and the user just did something (Chromium passes a
+        // frame's user activation up to this page).
+        if (document.activeElement !== iframe) throw new Error('only the frame you\u2019re typing in can open the command bar');
+        if (navigator.userActivation && !navigator.userActivation.isActive) throw new Error('the command bar opens as you type, not on its own');
+        window.dispatchEvent(new CustomEvent('atmos:command-bar-open', { detail: { text, options, from: iframe, extension: key(extension) } }));
+      },
+      refresh() { window.dispatchEvent(new CustomEvent('atmos:command-bar-refresh', { detail: { extension: key(extension) } })); },
+    },
     notify(options) {
       if (!window.atmosCore?.showExtensionNotification) return Promise.resolve(false);
       return window.atmosCore.showExtensionNotification(extension.kind, extension.id, options);
@@ -669,9 +721,12 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
 
   function onMessage(event) {
     if (event.source !== iframe.contentWindow || event.origin !== origin || event.data?.type !== 'atmos:frame-ready') return;
-    // A (re)loaded document gets a fresh port; the previous one is dropped.
+    // A (re)loaded document gets a fresh port; the previous one is dropped,
+    // with the commands it handled and the bar it declared.
     record.bridge?.dispose();
     record.port?.close();
+    record.commands.clear();
+    record.bar = null;
     const channel = new MessageChannel();
     record.port = channel.port1;
     record.bridge = createExtensionBridge({
@@ -892,7 +947,7 @@ function _mountDrawer(extension, surface, surfaceEl) {
   // Wheel on the workspace itself (the page, outside every frame).
   const onWheel = event => {
     if (event.ctrlKey) return;
-    if (event.target?.closest?.('#settings-drawer, .ctx-menu-surface, .panel-host-controls')) return;
+    if (event.target?.closest?.('#settings-drawer, .ctx-menu-surface, .panel-host-controls, #command-bar-field, #command-bar-list')) return;
     physics.wheel(event.deltaY, event.deltaMode);
   };
   // Escape arms, a second Escape within two seconds closes. With
@@ -903,6 +958,8 @@ function _mountDrawer(extension, surface, surfaceEl) {
     // An Escape that closes an Atmos menu is only that. (Listening in the
     // capture phase sees the menu before its own Escape handler closes it.)
     if (document.querySelector('body > .ctx-menu-surface:not(#ctx-menu), #ctx-menu.visible')) return;
+    // Keys typed in the command bar are its own: Esc there clears and closes it, not the drawer.
+    if (event.target?.closest?.('#command-bar-field, #command-bar-list, #sidebar-footer.is-commanding')) return;
     if (event.key === 'Escape') {
       if (drawerEl.classList.contains('pending-close')) commands.close();
       else setPending(true);
@@ -1081,9 +1138,11 @@ function _registerFramed({ plugins = [], services = [] }) {
     _framed.set(key(extension), extension);
     const compatibility = checkExtensionCompatibility(extension.manifest || {}, `${extension.kind} '${extension.id}'`);
     if (!compatibility.compatible) {
+      _incompatible.add(key(extension));
       console.warn(`[extension-frames] '${extension.id}' skipped: ${compatibility.reasons.join('; ')}`);
       continue;
     }
+    _incompatible.delete(key(extension));
     for (const surface of extension.frame.contributions) {
       try { _registerContribution(extension, surface); }
       catch (error) { console.error(`[extension-frames] ${extension.kind} '${extension.id}' ${surface.surface} failed to register:`, error); }
@@ -1114,6 +1173,130 @@ export function stopExtensions(refs = []) {
     }
   }
   return count;
+}
+
+// ── The command bar's view of extensions (command-bar.js) ──────────────────
+
+/**
+ * Whether a frame is on screen: in the page, not in a hidden widget
+ * section, with a size; a widget only while the sidebar is open.
+ */
+function _showing(record) {
+  if (!record.iframe.isConnected || record.iframe.closest('[hidden]')) return false;
+  if (record.type === 'sidebar' && !record.iframe.closest('#settings-drawer.open')) return false;
+  const rect = record.iframe.getBoundingClientRect();
+  // Some of it on screen: a drawer slid away (Music's) is still laid out, below the window.
+  return rect.width > 0 && rect.height > 0 && rect.top < innerHeight - 1 && rect.bottom > 1 && rect.left < innerWidth - 1 && rect.right > 1;
+}
+
+function _panelRecords() {
+  return [..._frames.values()].flatMap(records => [...records]).filter(record => record.type === 'panel' && _showing(record));
+}
+
+/**
+ * The panel the command bar is for: the one the keyboard was in, the one a
+ * focused web page sits over, else the main panel's.
+ */
+function _targetPanel(focused) {
+  const panels = _panelRecords();
+  if (focused) {
+    const own = panels.find(record => record.iframe === focused);
+    if (own) return own;
+    if (focused.tagName === 'WEBVIEW') {
+      const box = focused.getBoundingClientRect();
+      const x = box.left + box.width / 2, y = box.top + box.height / 2;
+      const under = panels.find(record => {
+        const rect = record.iframe.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      });
+      if (under) return under;
+    }
+  }
+  return panels.find(record => record.iframe.closest('#panel-primary')) || panels[0] || null;
+}
+
+const _rectOf = element => {
+  const rect = element.getBoundingClientRect();
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+};
+
+/**
+ * The command bar closed and gave `iframe` the keyboard back: its frame puts
+ * it where it was (the field rev/ was typed in), which a frame's own focus
+ * doesn't do by itself.
+ */
+export function giveKeyboardBack(iframe) {
+  for (const records of _frames.values()) {
+    for (const record of records) {
+      if (record.iframe === iframe) { record.bridge?.post({ topic: 'keyboardBack' }); return; }
+    }
+  }
+}
+
+/**
+ * Where the command bar opens: over the bar of the panel it's for, when
+ * that panel declared one and it's on screen (`bar`), else along the
+ * bottom of that panel (`area`); with no panel at all, the workspace.
+ * Coordinates are the window's. `extension` is the panel's extension.
+ */
+export function commandBarTarget(focused = null) {
+  const record = _targetPanel(focused);
+  if (!record) {
+    const host = document.getElementById('media-fullscreen');
+    return { extension: null, bar: null, area: host ? _rectOf(host) : { left: 0, top: 0, width: innerWidth, height: innerHeight } };
+  }
+  const frame = record.iframe.getBoundingClientRect();
+  let bar = null;
+  if (record.bar) {
+    // Within the panel's own frame: a frame says where its bar is, not where Atmos's field goes elsewhere.
+    const x = Math.min(Math.max(0, record.bar.x), frame.width);
+    const y = Math.min(Math.max(0, record.bar.y), Math.max(0, frame.height - record.bar.height));
+    const candidate = { left: frame.left + x, top: frame.top + y, width: Math.min(record.bar.width, frame.width - x), height: Math.min(record.bar.height, frame.height) };
+    const onScreen = candidate.top >= 0 && candidate.top + candidate.height <= innerHeight + 1 && candidate.left >= -1 && candidate.width > 40;
+    if (onScreen) bar = candidate;
+  }
+  const area = record.container?.isConnected ? _rectOf(record.container) : { left: frame.left, top: frame.top, width: frame.width, height: frame.height };
+  return { extension: record.extensionKey, bar, area };
+}
+
+/**
+ * The rev/ commands extensions declare, with how much of each is showing:
+ *   [{ extension: "plugin:<id>", label, rank, commands: [{ name, args, about, takesArgs, suggests }] }]
+ * rank: 0 the panel the bar is for, 1 another panel showing, 2 a widget
+ * showing, 4 nothing showing (Atmos's own commands sit at 3).
+ */
+export function extensionCommandSources(focused = null) {
+  const target = _targetPanel(focused);
+  const out = [];
+  for (const [ref, extension] of _framed) {
+    const commands = extension.frame?.commands || [];
+    if (!commands.length || _stopped.has(ref) || _incompatible.has(ref)) continue;
+    const records = [..._frames.get(ref) || []].filter(_showing);
+    let rank = 4;
+    if (target?.extensionKey === ref) rank = 0;
+    else if (records.some(record => record.type === 'panel')) rank = 1;
+    else if (records.some(record => record.type === 'sidebar')) rank = 2;
+    out.push({ extension: ref, label: _commandLabel(ref), rank, commands: commands.map(command => ({ ...command })) });
+  }
+  return out.sort((a, b) => a.rank - b.rank);
+}
+
+/**
+ * Ask the extension to run one of its commands, or what to list for it
+ * ('run' | 'suggest'). The frame that handles it: a panel or widget
+ * showing, else its background frame, else any. Rejects when none does
+ * (the extension isn't running, or handles it only in a surface that's away).
+ */
+export function requestExtensionCommand(ref, name, action, input, { timeout = action === 'suggest' ? 2000 : 15000 } = {}) {
+  const records = [..._frames.get(ref) || []].filter(record => record.bridge && record.commands.has(name));
+  const order = record => (_showing(record) ? (record.type === 'panel' ? 0 : record.type === 'sidebar' ? 1 : 2) : record.type === 'boot' ? 2 : 3);
+  const record = records.sort((a, b) => order(a) - order(b))[0];
+  if (!record) {
+    const what = _commandLabel(ref);
+    return Promise.reject(new Error(_framed.has(ref) && !_stopped.has(ref) && !_incompatible.has(ref) ? `Open ${what} to use rev/${name}.` : `${what} isn't running.`));
+  }
+  if (action === 'suggest' && !record.commands.get(name)?.suggests) return Promise.resolve(null);
+  return record.bridge.requestCommand(action, name, input, timeout);
 }
 
 /** For tests and diagnostics: the frames currently open, by extension. */

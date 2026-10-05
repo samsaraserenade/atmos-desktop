@@ -1325,6 +1325,8 @@ function _describeRuntime(entry) {
     base: frames.extensionPath(entry),
     allow: frames.framePermissionsPolicy(trust?.permissions),
     contributions: frames.describeContributions(entry, _walkRelativeFiles(entry.path)),
+    // rev/ commands for Atmos's command bar ("contributes.commands").
+    commands: frames.describeCommands(entry),
     // atmos-resource:// providers it may load (its audio channel checks these).
     resourceProviders: _resourceProvidersFor(entry),
     // What the extensions it declares share with it (the bridge checks these).

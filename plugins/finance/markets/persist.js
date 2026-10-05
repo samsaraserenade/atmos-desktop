@@ -9,7 +9,11 @@ const CHART_DEFAULTS = Object.freeze({
 });
 let chartDefaultsReset = false;
 const CHART_TYPES = new Set(['line', 'candlestick', 'heiken-ashi']);
-const INTERVALS = new Set(['auto', '1m', '5m', '15m', '1h', '4h', '1d', 'custom']);
+// Charting's CHART_INTERVALS values (services/charting/toolbar.js) and
+// 'custom'. One missing here is saved as 5m (tests/markets-persist.test.cjs
+// holds the two lists together).
+const INTERVALS = new Set(['auto', '1m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h',
+  '1d', '2d', '3d', '5d', '1w', '2w', '1mo', '3mo', '6mo', '1y', 'custom']);
 const RANGES = new Set(['1d', '1w', '1m', 'ytd', 'all']);
 
 function normalizeChartSettings(value = {}) {

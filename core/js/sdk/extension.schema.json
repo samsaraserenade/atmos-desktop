@@ -61,6 +61,23 @@
               "properties": { "keys": { "description": "First-party: KeyboardEvent.code values its frame hears anywhere in Atmos.", "type": "array", "items": { "type": "string" } } }
             }
           ]
+        },
+        "commands": {
+          "description": "SDK 1.3: rev/ commands it adds to Atmos's command bar (Ctrl+\\), run by its frames through atmos.commands.handle(). At most 30; Atmos's own names (sidebar, settings, extensions, switch) can't be used.",
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "description": "What follows rev/: lowercase letters, digits and -, starting with a letter.", "type": "string", "pattern": "^[a-z][a-z0-9-]{0,29}$" },
+              "args": { "description": "A hint for what it takes (\"room or person\"), at most 40 characters.", "type": "string", "maxLength": 40 },
+              "about": { "description": "What it does, in a line (at most 120 characters).", "type": "string", "maxLength": 120 },
+              "takesArgs": { "description": "Enter on the command waits for something typed after it.", "type": "boolean" },
+              "suggests": { "description": "Its frame lists choices as you type (atmos.commands.handle's suggest).", "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false

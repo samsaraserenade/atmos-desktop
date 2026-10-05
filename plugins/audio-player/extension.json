@@ -1,7 +1,10 @@
 {
-  "apiVersion": 3,
+  "apiVersion": 4,
+  "engines": {
+    "atmos": ">=0.20.0"
+  },
   "tier": "first-party",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -48,7 +51,36 @@
       "keys": [
         "Space"
       ]
-    }
+    },
+    "commands": [
+      {
+        "name": "play",
+        "args": "song or album",
+        "about": "Play or pause, or play one by name"
+      },
+      {
+        "name": "next",
+        "about": "Play the next song"
+      },
+      {
+        "name": "previous",
+        "about": "Play the previous song"
+      },
+      {
+        "name": "song",
+        "args": "title, artist or album",
+        "about": "Play a song from your library",
+        "takesArgs": true,
+        "suggests": true
+      },
+      {
+        "name": "album",
+        "args": "name or artist",
+        "about": "Play an album from your library",
+        "takesArgs": true,
+        "suggests": true
+      }
+    ]
   },
   "legacyStorage": {
     "indexedDB": [

@@ -377,6 +377,11 @@ api?.onEvent((guestId, type, payload) => {
     return;
   }
   const { owner, tabId } = tab;
+  // Ctrl+\ in a page: Atmos's command bar, not the browser's.
+  if (type === 'command' && payload?.command === 'command-bar') {
+    window.dispatchEvent(new Event('atmos:command-bar'));
+    return;
+  }
   if (type === 'mouse-down') {
     closeOpenMenu();
     // Whatever the Atmos page had selected goes, as a click elsewhere would

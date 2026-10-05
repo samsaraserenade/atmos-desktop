@@ -26,8 +26,6 @@ export const acceptDirectRequest = async () => {};
 export const getInvites = () => [];
 export const acceptInvite = async () => {};
 export const declineInvite = async () => {};
-export const onPanelRequest = subscribe('request');
-export const takePanelRequest = () => null;
 export const renderSettingsDashboard = () => () => {};
 export const renderEmptyView = element => { element.textContent = 'EMPTY'; return () => {}; };
 export const spaceChildren = { rooms: [] };

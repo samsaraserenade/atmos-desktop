@@ -82,16 +82,6 @@
    would otherwise win. */
 
 
-/* Roomy width: let the least-essential group (Visible range — the chart
-   already defaults to following the live edge) step aside first, rather
-   than letting the dock overflow and silently scroll it out of reach.
-   Scoped to .finance-chart-stage so it applies in both Portfolio and
-   Markets mode, not just whichever one happened to be active. */
-@container finance-chart (max-width:640px) {
-  .finance-portfolio-toolbar .finance-toolbar-scroll > div[aria-label="Visible range"],
-  .finance-chart-stage .mq-toolbar .mq-ranges { display:none; }
-}
-
 /* ── Ticker picker ─────────────────────────────────────────────────
    Pinned to the toolbar's far left (panel.js prepends it on every mode
    switch, same as indicatorButton/settingsButton are pinned at the right).
@@ -112,7 +102,9 @@
 .finance-ticker-picker-button:focus-visible { outline:2px solid #a8c7fa; outline-offset:-2px; }
 .finance-ticker-picker-label { max-width:140px; overflow:hidden; text-overflow:ellipsis; }
 .finance-ticker-picker-panel {
-  position:fixed; left:0; bottom:var(--finance-toolbar-h,54px); z-index:30;
+  /* Against the picker; panel.js (fitToCorner) sets bottom, left, width and
+     max-height on open from its own chart's dock and edges. */
+  position:absolute; left:0; bottom:100%; z-index:30;
   width:min(380px, 100vw); max-height:min(560px, calc(100vh - var(--finance-toolbar-h,54px) - 24px));
   display:flex; flex-direction:column; gap:8px;
   padding:12px 12px 10px; border-radius:0 12px 0 0;

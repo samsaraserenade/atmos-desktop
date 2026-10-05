@@ -1,7 +1,8 @@
 /*
  * Atmos UI for extension frames (SDK 1.1): the rows and controls of Atmos's
  * own Settings → Appearance page, so an extension's settings page looks like
- * the sections around it. Opt in from a stylesheet or a module:
+ * the sections around it, and (1.3) a panel's bottom bar. Opt in from a
+ * stylesheet or a module:
  *
  *   @import url("/__atmos/ui.css");
  *
@@ -118,6 +119,28 @@ input[type="range"].atmos-range:disabled { opacity: .35; cursor: default; }
 .atmos-status { padding: 0 14px; font-size: 10.24px; color: rgba(var(--ink-rgb), .4); }
 .atmos-status.ok { color: var(--color-positive, #34d399); }
 .atmos-status.err { color: var(--color-negative, #f87171); }
+
+/*
+ * A panel's bottom bar (SDK 1.3), as Atmos draws its own and the command
+ * bar: 54 px, in line with the sidebar's footer, a hairline on top. Give it
+ * Atmos's shell glass (data-atmos-glass="shell", with
+ * atmos.surface.trackGlass()) and tell Atmos where it is
+ * (atmos.commands.bar(element)), so the command bar (Ctrl+\) opens over it:
+ *
+ *   <footer class="atmos-bar" data-atmos-glass="shell">
+ *     <input class="atmos-bar-input" placeholder="Message, or rev/ for commands">
+ *   </footer>
+ */
+.atmos-bar {
+  box-sizing: border-box; display: flex; align-items: center; gap: 8px; flex: 0 0 54px;
+  height: 54px; min-height: 54px; margin: 0; padding: 0 18px 0 14px;
+  box-shadow: inset 0 1px 0 rgba(var(--ink-rgb), .09);
+}
+.atmos-bar-input {
+  flex: 1; min-width: 0; height: 100%; padding: 0 4px; border: 0; outline: none; background: transparent;
+  color: rgba(var(--ink-rgb), .92); font: inherit; font-size: 13px; caret-color: rgba(var(--ink-rgb), .9);
+}
+.atmos-bar-input::placeholder { color: rgba(var(--ink-rgb), .34); }
 
 /* Rows that fold away: <details class="atmos-details"><summary>More <small>…</small></summary>rows</details>. */
 .atmos-details > summary {

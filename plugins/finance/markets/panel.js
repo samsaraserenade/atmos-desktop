@@ -81,9 +81,6 @@ function panelMarkup() {
             <option value="1000">1s</option>
           </select>
         </label>
-        <div class="mq-tool-group mq-ranges" role="group" aria-label="Visible range">
-          ${chartControlMarkup('range', { buttonClass: 'mq-tool' })}
-        </div>
       </div>
     </div>
   </main>`;
@@ -161,7 +158,6 @@ function mountMarketChart(root, context, mountOptions = {}) {
     // (.mq-toolbar, wired up in ensureChart() below), so re-deriving it a
     // second time here was pure duplicate paint work. [data-source] stays
     // here because History/Stream isn't a charting-engine concept at all.
-    root.querySelector('.mq-timeframes').classList.toggle('is-hidden', chartType === 'line');
     root.querySelector('.mq-refresh-control').classList.toggle('is-hidden', dataSource === 'history');
     refreshSelect.value = String(refreshMs);
     if (activeInterval === 'custom' && customIntervalMs) customIntervalInput.value = formatIntervalMs(customIntervalMs);
@@ -331,7 +327,9 @@ function mountMarketChart(root, context, mountOptions = {}) {
         if (refetch && intervalChanged && dataSource === 'history' && activeQuery) runQuery(queryText());
       };
       chart.on('settings', syncFromChart);
-      syncFromChart(chart.getState(), false);
+      // The chart may restore a different timeframe than the one just
+      // fetched (its own saved view): fetch that one then.
+      syncFromChart(chart.getState(), true);
     }
     clearPendingPoints();
   };

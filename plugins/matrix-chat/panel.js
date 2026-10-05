@@ -1,15 +1,16 @@
 /**
  * Matrix Chat's panel frame ("Chat"): sign-in while logged out; then the
  * open room, straight away. Which room is kept by the engine (engine.view),
- * so the sidebar widget (sidebar.js) can open one here, and the panel
- * reopens the last one. With none open it shows an empty timeline and the
- * message bar (ui/empty-view.js). Creating, joining and the like are rev/
- * commands in the message bar (ui/command-bar.js); account settings are the
- * Matrix Account sidebar widget (sidebar-account.js).
+ * so the sidebar widget (sidebar.js) and rev/go can open one here, and the
+ * panel reopens the last one. With none open it shows an empty timeline and
+ * the message bar (ui/empty-view.js). Creating, joining and the like are
+ * rev/ commands in Atmos's command bar, which opens over the message bar
+ * (ui/command-handlers.js, run in the background frame); account settings
+ * are the Matrix Account sidebar widget (sidebar-account.js).
  */
 import atmos from 'atmos-sdk';
 import {
-  hasSession, getRooms, onAccountChange, onSync, onViewChange, currentView, onPanelRequest, takePanelRequest,
+  hasSession, getRooms, onAccountChange, onSync, onViewChange, currentView,
 } from './src/ui/engine.js';
 import { renderLogin } from './src/ui/login.js';
 import { renderRoomView } from './src/ui/room-view.js';
@@ -32,14 +33,6 @@ let mainCleanup = null;
 let loginCleanup = null;
 let shown = null; // what mainEl shows: { type: 'none' } | { type: 'room', roomId }
 let pendingRoomId = null; // a room to show once sync has it
-
-/** Act on what the sidebar widget (or a command) asked for. */
-function handleRequest() {
-  if (!mainEl) return;
-  const request = takePanelRequest();
-  if (!request) return;
-  if (request.action === 'command') mainCleanup?.fill?.(request.text, { parentSpaceId: request.parentSpaceId });
-}
 
 function teardownMain() {
   try { mainCleanup?.(); } catch (error) { console.error('[matrix-chat] view cleanup failed:', error); }
@@ -67,7 +60,6 @@ function enterLayout() {
   contentEl.appendChild(layoutEl);
   shown = null;
   follow(currentView());
-  handleRequest();
 }
 
 function showEmptyView({ opening = false } = {}) {
@@ -102,7 +94,6 @@ function follow(view) {
 }
 
 onViewChange(follow);
-onPanelRequest(handleRequest);
 
 onSync(state => {
   if (!['PREPARED', 'SYNCING'].includes(state) || !pendingRoomId || !mainEl) return;

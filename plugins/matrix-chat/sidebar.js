@@ -2,7 +2,7 @@
  * Matrix Chat's main sidebar widget ("Matrix Chat"): invites, then one list
  * of collapsible groups: Direct Messages, each space (its rooms, and the
  * ones you haven't joined), Other rooms. Creating and joining are rev/
- * commands in the message bar; your account is its own widget ("Matrix
+ * commands in Atmos's command bar; your account is its own widget ("Matrix
  * Account", sidebar-account.js). Choosing a room opens it in the Chat panel (through the
  * engine's shared view, then atmos.panel.show()).
  * Shows beside the Chat panel by default ("showIn"); the widget's header

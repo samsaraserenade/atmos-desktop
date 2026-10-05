@@ -73,7 +73,7 @@ async function loadChartModule(context) {
   return module;
 }
 
-test('external chart toolbars remain visible in line mode with and without an interval wrapper', async () => {
+test('external chart toolbars and their timeframes remain visible in line mode, with and without an interval wrapper', async () => {
   const module = await loadChartModule(makeContext());
   for (const wrapped of [true, false]) {
     const toolbar = new FakeElement();
@@ -99,7 +99,8 @@ test('external chart toolbars remain visible in line mode with and without an in
     line.dispatch('click');
     assert.equal(chart.getState().type, 'line');
     assert.equal(toolbar.style.display, 'flex');
-    assert.equal((group || interval).style.display, 'none');
+    // Timeframes stay for lines: Ctrl+click on one sets how much is shown.
+    assert.notEqual((group || interval).style.display, 'none');
     chart.setData([]);
     assert.equal(toolbar.style.display, 'flex');
     candle.dispatch('click');
@@ -109,6 +110,101 @@ test('external chart toolbars remain visible in line mode with and without an in
     assert.equal(interval.attrs['aria-pressed'], 'true');
     chart.destroy();
   }
+});
+
+test('a click on a timeframe picks the candle; Ctrl or Cmd + click shows that much time and keeps the candle', async () => {
+  const module = await loadChartModule(makeContext());
+  const toolbar = new FakeElement();
+  const buttons = Object.fromEntries(['auto', '1h', '1w'].map(value => { const button = new FakeElement(); button.dataset.interval = value; return [value, button]; }));
+  toolbar.querySelector = () => null;
+  toolbar.querySelectorAll = selector => selector === '[data-interval]' || selector === '[data-bucket-ms]' ? Object.values(buttons) : [];
+  const hour = 3_600_000;
+  const data = Array.from({ length: 48 }, (_, index) => ({ time: index * hour, value: 100 + index }));
+  const chart = module.namespace.createTimeSeriesChart(new FakeElement(), { type: 'candlestick', toolbar: { element: toolbar }, candleAnimation: false, data });
+  buttons['1h'].dispatch('click');
+  assert.equal(chart.getState().bucketMs, hour);
+  assert.equal(buttons['1h'].attrs['aria-pressed'], 'true');
+  buttons['1w'].dispatch('click', { ctrlKey: true });
+  assert.equal(chart.getState().bucketMs, hour, 'Ctrl+click keeps the candle');
+  assert.equal(chart.getState().viewport.activeRangeKey, `last:${7 * 24 * hour}`);
+  buttons.auto.dispatch('click', { metaKey: true });
+  assert.equal(chart.getState().viewport.activeRangeKey, 'all');
+  assert.equal(chart.getState().bucketMs, hour);
+  buttons['1w'].dispatch('click');
+  assert.equal(chart.getState().bucketMs, 7 * 24 * hour);
+  assert.equal(buttons['1w'].attrs['aria-pressed'], 'true');
+  assert.equal(buttons['1h'].attrs['aria-pressed'], 'false');
+  chart.destroy();
+});
+
+test('exchange candles are merged into a longer timeframe, and stay merged as live candles arrive', async () => {
+  const module = await loadChartModule(makeContext());
+  const hour = 3_600_000;
+  const bar = (index, extra = {}) => ({ start: index * hour, end: (index + 1) * hour, open: 100 + index, high: 110 + index, low: 90 - index, close: 101 + index, ...extra });
+  const chart = module.namespace.createTimeSeriesChart(new FakeElement(), { type: 'candlestick', bucketMs: 4 * hour, candleAnimation: false, data: Array.from({ length: 10 }, (_, index) => bar(index)) });
+  assert.equal(chart.getState().pointCount, 3, '10 hourly candles are 3 four-hour ones');
+  const maximum = () => chart.getState().viewport.priceDomain.maximum;
+  const before = maximum();
+  chart.updateLatest(bar(9, { high: 400, close: 300 }));
+  assert.equal(chart.getState().pointCount, 3);
+  assert.ok(maximum() > before, 'the forming 4h candle takes the new high');
+  chart.append(bar(10));
+  chart.append(bar(11));
+  assert.equal(chart.getState().pointCount, 3, 'hours 10 and 11 join the 8h candle');
+  // The forming candle is rebuilt from its members, so a lower high for
+  // hour 11 doesn't lose hour 9's.
+  chart.updateLatest(bar(11, { high: 50, low: 40, open: 45, close: 48 }));
+  assert.ok(maximum() > 300);
+  chart.append(bar(12));
+  assert.equal(chart.getState().pointCount, 4, 'hour 12 opens the next one');
+  // The data's own timeframe (or a shorter one) is shown as it is.
+  chart.setOptions({ bucketMs: hour });
+  assert.equal(chart.getState().pointCount, 13);
+  chart.setOptions({ bucketMs: 8 * hour });
+  assert.equal(chart.getState().pointCount, 2);
+  chart.destroy();
+});
+
+test('merged candles stay right through hidden candles, out-of-order ones and replacements, and the first one is whole', async () => {
+  const module = await loadChartModule(makeContext());
+  const hour = 3_600_000;
+  const bar = (index, extra = {}) => ({ start: index * hour, end: (index + 1) * hour, open: 100, high: 110, low: 90, close: 101, ...extra });
+  const make = (count, options = {}) => module.namespace.createTimeSeriesChart(new FakeElement(), { type: 'candlestick', bucketMs: 4 * hour, candleAnimation: false, data: Array.from({ length: count }, (_, index) => bar(index)), ...options });
+  const maximum = chart => chart.getState().viewport.priceDomain.maximum;
+
+  // A hidden spike stays hidden when the candle it's in is updated live.
+  let chart = make(10);
+  chart.updateLatest(bar(9, { high: 1_000 }));
+  chart.setHiddenRanges([{ from: 9 * hour, to: 9 * hour }]);
+  const hiddenMaximum = maximum(chart);
+  assert.ok(hiddenMaximum < 200);
+  chart.append(bar(10));
+  assert.equal(maximum(chart), hiddenMaximum, 'hour 9 is still left out');
+  chart.destroy();
+
+  // An out-of-order candle, then updates: the same as building it whole.
+  chart = make(10);
+  chart.append(bar(11));
+  chart.append(bar(10, { high: 500 }));            // late
+  chart.updateLatest(bar(11, { close: 102 }));     // the newest is still hour 11
+  chart.append(bar(12));
+  assert.equal(chart.getState().pointCount, 4);
+  const whole = make(13);
+  whole.setData([...Array.from({ length: 10 }, (_, index) => bar(index)), bar(10, { high: 500 }), bar(11, { close: 102 }), bar(12)]);
+  assert.equal(chart.getState().pointCount, whole.getState().pointCount);
+  assert.equal(maximum(chart), maximum(whole));
+  chart.destroy(); whole.destroy();
+
+  // A replacement in another bucket takes the old candle out of the old bucket.
+  chart = make(9); // hours 0-8: buckets 0-3, 4-7, 8
+  chart.updateLatest(bar(12, { high: 300 }));
+  assert.equal(chart.getState().pointCount, 3, 'hour 8 replaced by hour 12: buckets 0-3, 4-7, 12');
+  chart.destroy();
+
+  // Capped after merging: 26 hourly candles shown as 8H with room for 2.
+  chart = make(26, { bucketMs: 8 * hour, maxPoints: 2 });
+  assert.equal(chart.getState().pointCount, 2);
+  chart.destroy();
 });
 
 test('secondary panes: engine hosts pane svgs, exposes setPaneData/getPaneElement, and hands panes the real price layout', async () => {

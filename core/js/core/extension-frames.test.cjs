@@ -308,3 +308,26 @@ test('storage moves: Core serves its move pages with a policy that allows only i
   assert.match(script, /"atmos-ext:\/\/first-party-plugin-x"/);
   assert.doesNotThrow(() => new Function(`return ${script}`), 'the host script parses');
 });
+
+test('commands come from the manifest as plain text, never Atmos\'s own names, at most 30', () => {
+  const declared = (commands, extra = {}) => frames.describeCommands(entry('third-party', { manifest: { contributes: { commands } }, ...extra }));
+  assert.deepEqual(declared([
+    { name: 'Go', args: 'room or <person>', about: 'Open one of\nyour rooms', takesArgs: true, suggests: true },
+    { name: 'leave', about: 'Leave this room', suggests: 'yes' },
+  ]), [
+    { name: 'go', args: 'room or person', about: 'Open one of your rooms', takesArgs: true, suggests: true },
+    { name: 'leave', args: '', about: 'Leave this room', takesArgs: false, suggests: false },
+  ]);
+  // Atmos's own names, bad names and repeats are left out.
+  assert.deepEqual(declared([
+    { name: 'switch' }, { name: 'settings' }, { name: 'sidebar' }, { name: 'extensions' },
+    { name: 'two words' }, { name: '-x' }, { name: '9lives' }, { name: 'a'.repeat(31) }, { name: 42 }, null, 'go',
+    { name: 'ok' }, { name: 'OK' },
+  ]).map(command => command.name), ['ok']);
+  assert.equal(declared(Array.from({ length: 40 }, (_, index) => ({ name: `c${index}` }))).length, 30);
+  assert.equal(declared({ name: 'go' }).length, 0, 'not a list');
+  assert.deepEqual(frames.describeCommands(entry('third-party')), []);
+  assert.deepEqual(frames.describeCommands(entry('first-party', { kind: 'service', manifest: { library: true, contributes: { commands: [{ name: 'go' }] } } })), [], 'a library has no frames to run them');
+  assert.equal(declared([{ name: 'x', about: 'y'.repeat(200) }])[0].about.length, 120);
+  assert.deepEqual(frames.CORE_COMMAND_NAMES, ['sidebar', 'settings', 'extensions', 'switch']);
+});

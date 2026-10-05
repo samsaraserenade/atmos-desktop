@@ -59,6 +59,15 @@ display keys. The library lives in IndexedDB in Audio Player's own origin
 declares `"keys": ["Space"]`), except in a text field or in a panel that
 uses Space itself.
 
+**rev/ commands** in Atmos's command bar (Ctrl+\\, SDK 1.3), declared in
+`extension.json` and answered by the engine (`src/commands.js`), so they
+work whichever panel is showing: `rev/play` (play or pause; `rev/play
+<name>` plays that song or album), `rev/next`, `rev/previous`, `rev/song`
+and `rev/album` (your library, listed as you type). With the keyboard in
+Music the bar opens over Music's own (`atmos.commands.bar`), and `rev/`
+typed in the library search hands over to it. Needs Atmos 0.20.0
+(`engines`).
+
 **Carried over from the in-page version** (once): settings, via the shared
 state namespace; the library, waveform cache and opened files, from the
 Atmos page's database (`legacyStorage`); the drawer's position and "Dock
@@ -67,5 +76,5 @@ database in the shared first-party origin (where Audio Player kept it
 before 1.0.1) is moved into its own origin by Core, once, before the window
 opens (`legacyStorage.sharedOrigin`).
 
-Run the tests with `node --test tests/*.test.cjs`; end to end with
-`scripts/e2e/audio-player.cjs`.
+Run the tests with `node --test tests/*.test.cjs tests/*.test.mjs`; end to
+end with `scripts/e2e/audio-player.cjs`.

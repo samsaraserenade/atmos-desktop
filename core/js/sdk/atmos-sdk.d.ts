@@ -1,5 +1,5 @@
 /**
- * Types for the Atmos SDK 1.2 (`import atmos from 'atmos-sdk'`).
+ * Types for the Atmos SDK 1.3 (`import atmos from 'atmos-sdk'`).
  *
  * The SDK is what a framed extension uses to talk to Atmos; Atmos serves it
  * to every frame. These typings let an editor check and complete calls; point
@@ -307,6 +307,82 @@ export interface LifecycleApi {
 /** The frame's lifetime: Atmos removes a frame when its panel is switched away, its widget hidden, its layout changed. */
 export declare const lifecycle: LifecycleApi;
 
+/** SDK 1.3: what a command is given when it's run or asked what to list. */
+export interface CommandInput {
+  /** What was typed after the command's name (rev/go general → "general"). */
+  args: string;
+  /** The suggestion chosen (its `value`), or null. Only when running. */
+  value?: string | null;
+  /** The options' values, as the user left them. */
+  options: Record<string, string | boolean>;
+}
+/** What running a command can come back with. Nothing: the bar closes. */
+export interface CommandResult {
+  /** A line saying what happened: shown where the bar was, or in it with `keep`. */
+  done?: string;
+  /** Keep the bar open (with `done` as its status). */
+  keep?: boolean;
+  /** Put this in the bar instead (and preset these options), for a next step. */
+  fill?: string;
+  options?: Record<string, string | boolean>;
+}
+/**
+ * A row the command bar lists for a command declaring "suggests": true. Plain
+ * text; Atmos draws it. `value` comes back to run() when the row is chosen;
+ * `complete` is what Tab puts after the command's name (rev/go General),
+ * and without it Tab moves on to the next row.
+ */
+export type CommandRow =
+  | { title: string; sub?: string; action?: string; value?: string | number; complete?: string; danger?: boolean }
+  | { heading: string }
+  | { note: string };
+/** An option shown above the rows (Atmos draws it, as chips). */
+export interface CommandOption {
+  id: string;
+  type: 'select' | 'toggle' | 'text';
+  label?: string;
+  value: string | boolean;
+  /** select: its choices; style 'chips' shows them as a row of chips, else a dropdown. */
+  options?: Array<{ value: string; label: string }>;
+  style?: 'chips' | 'dropdown';
+  /** text: shown before and after the field ("#" … ":example.org"). */
+  prefix?: string;
+  suffix?: string;
+  placeholder?: string;
+}
+/**
+ * SDK 1.3: rev/ commands in Atmos's command bar (Ctrl+\). Declare each in
+ * extension.json "contributes.commands": [{ name, args?, about?, takesArgs?, suggests? }].
+ */
+export interface CommandsApi {
+  /** Run `name` when it's chosen; with `suggest`, list choices as it's typed. Returns a function that stops handling it. */
+  handle(
+    name: string,
+    run: (input: CommandInput) => CommandResult | void | Promise<CommandResult | void>,
+    options?: { suggest?: (input: CommandInput) => CommandRow[] | { rows: CommandRow[]; options?: CommandOption[] } | Promise<CommandRow[] | { rows: CommandRow[]; options?: CommandOption[] }> },
+  ): () => void;
+  /** Panels: the bar at the bottom of the panel, which the command bar opens over (ui.css .atmos-bar). One per frame: another replaces it. Returns stop(). */
+  bar(element: Element): () => void;
+  /**
+   * A text field of yours that also takes commands (a message bar): rev/ typed
+   * into it opens the command bar with what's typed; keys typed before the bar
+   * has the keyboard follow it, and Enter in that moment does nothing here.
+   * Put rev/… in it yourself and dispatch an input event to hand that over.
+   * `options` presets your command's option values. Returns stop().
+   */
+  field(input: HTMLInputElement | HTMLTextAreaElement, options?: { options?: Record<string, string | boolean> }): () => void;
+  /**
+   * Open the command bar with text (rev/go general). Only while this frame has
+   * focus and the user just did something. While a command name you typed is
+   * in the bar, no other extension's row is chosen for the user.
+   */
+  open(text?: string, options?: Record<string, string | boolean>): Promise<void>;
+  /** Ask Atmos to list this extension's suggestions again. */
+  refresh(): void;
+}
+/** SDK 1.3 */
+export declare const commands: CommandsApi;
+
 /** @experimental Not yet seen working on Windows. Needs "notifications" in "permissions.browser". */
 export interface NotificationsApi {
   /** Resolves true once shown, false where the system has none. */
@@ -512,6 +588,8 @@ export interface Atmos {
   readonly fetch: typeof fetch;
   readonly location: LocationApi;
   readonly lifecycle: LifecycleApi;
+  /** SDK 1.3 */
+  readonly commands: CommandsApi;
   /** @experimental */
   readonly notifications: NotificationsApi;
   /** @firstParty */

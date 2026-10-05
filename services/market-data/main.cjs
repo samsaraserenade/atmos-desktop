@@ -11,7 +11,7 @@ const { CoinbaseAdapter } = require('./exchanges/coinbase');
 const { SubscriptionManager } = require('./subscription-manager');
 const { CandleEngine } = require('./candle-engine');
 const { MarketState } = require('./market-state');
-const { getMarketHistory, resolveInterval, supportsInterval, isRegionBlock, HISTORY_EXCHANGES, REGION_PROBES } = require('./history');
+const { getMarketHistory, resolveInterval, fetchIntervalFor, isRegionBlock, INTERVALS, HISTORY_EXCHANGES, REGION_PROBES } = require('./history');
 
 const EVENT_NAMES = Object.freeze([
   'market-data:trade', 'market-data:candle', 'market-data:candle-history', 'market-data:connection-status',
@@ -148,7 +148,7 @@ class MarketDataService extends EventEmitter {
         const key = `${symbol}|${exchange}|${intervalMs}`;
         if (this.candleHistorySeeded.has(key)) continue;
         this.candleHistorySeeded.add(key);
-        this.getHistory(symbol, { exchange, intervalMs, limit: this.candleHistoryBackfillLimit })
+        this.getHistory(symbol, { exchange, intervalMs, exact: true, limit: this.candleHistoryBackfillLimit })
           .then(result => {
             const candles = result.candles.map(candle => ({
               symbol, exchange, interval: result.interval, intervalMs: result.intervalMs,
@@ -175,6 +175,11 @@ class MarketDataService extends EventEmitter {
 
   subscribe(consumerId, symbol, options = {}, listener) {
     const descriptor = this.subscriptions.subscribe(consumerId, symbol, options);
+    // An interval the engine doesn't build yet (8h, 1W, 1M...) is added
+    // when a chart asks for it: any one getHistory() can fetch, no others.
+    for (const intervalMs of descriptor.intervals || []) {
+      if (Object.values(INTERVALS).some(item => item.ms === intervalMs && HISTORY_EXCHANGES.some(id => item[id]))) this.candleEngine.addInterval(intervalMs);
+    }
     if (descriptor.feeds.includes('candles')) this._ensureCandleHistory(descriptor.symbol, descriptor.exchanges, descriptor.intervals);
     const forwards = [];
     const throttle = typeof listener === 'function' ? this._candleThrottle(listener) : null;
@@ -239,7 +244,8 @@ class MarketDataService extends EventEmitter {
   }
   getHistory(symbol, options = {}) {
     const normalized = normalizeSymbol(symbol);
-    const key = JSON.stringify([normalized, options.exchange || options.exchanges || [], options.interval || options.intervalMs || '5m', Number(options.limit) || 500]);
+    // By what will be fetched: every custom length is interval 'custom'.
+    const key = JSON.stringify([normalized, options.exchange || options.exchanges || [], resolveInterval(options), Number(options.intervalMs) || null, Number(options.limit) || 500, options.exact === true]);
     const cached = this.historyCache.get(key);
     if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value);
     if (this.historyRequests.has(key)) return this.historyRequests.get(key);
@@ -261,7 +267,8 @@ class MarketDataService extends EventEmitter {
     if (options.exchange) return getMarketHistory(symbol, options, this.fetchImpl);
     const interval = resolveInterval(options);
     const requested = Array.isArray(options.exchanges) ? options.exchanges.map(value => String(value).toLowerCase()) : HISTORY_EXCHANGES;
-    const candidates = HISTORY_EXCHANGES.filter(id => requested.includes(id) && supportsInterval(id, interval));
+    // Exchanges that serve the interval, or a shorter one that fits into it evenly.
+    const candidates = HISTORY_EXCHANGES.filter(id => requested.includes(id) && fetchIntervalFor(id, interval));
     const open = candidates.filter(id => !this.websockets.isBlocked(id));
     const order = open.length ? open : candidates;
     if (!order.length) throw new Error(`Historical candles are unavailable for ${requested.join(', ') || 'these exchanges'} at ${interval}.`);

@@ -11,6 +11,8 @@
  * everything it touches arrives through `deps`.
  */
 
+import { cleanOptionValues } from './command-list.js';
+
 const MAX_STATE_BYTES = 1024 * 1024;
 const MENU_TYPES = new Set([undefined, 'separator', 'heading', 'meta', 'select', 'toggle', 'range', 'number', 'text', 'colors', 'buttons']);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
@@ -125,6 +127,18 @@ function tabIdOf(value) {
   return value;
 }
 
+/** Where a panel's bottom bar is, in the frame's pixels (atmos.commands.bar). */
+function cleanBarRect(rect) {
+  if (rect === null) return null;
+  plainObject(rect, 'bar rect');
+  const box = {
+    x: Math.round(finiteOr(rect.x, 0)), y: Math.round(finiteOr(rect.y, 0)),
+    width: Math.max(0, Math.min(10000, Math.round(finiteOr(rect.width, 0)))),
+    height: Math.max(0, Math.min(200, Math.round(finiteOr(rect.height, 0)))),
+  };
+  return box.width > 0 && box.height > 0 ? box : null;
+}
+
 function parseTarget(target) {
   const match = typeof target === 'string' && target.match(/^(plugin|service):([a-z0-9][a-z0-9-]*)$/);
   if (!match) throw new BridgeError(`'${target}' is not an extension (use "plugin:<id>" or "service:<id>")`, 'TypeError');
@@ -144,6 +158,8 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
   const subscriptions = new Map(); // event name -> unsubscribe
   const mainListeners = new Map();  // "target channel" -> unsubscribe
   const outgoingCalls = new Map(); // call id -> { resolve, reject }
+  const commandRequests = new Map(); // command request id -> { resolve, reject, timer }
+  let nextCommand = 1;
   const fetches = new Set();       // this frame's atmos.fetch() requests in flight
   const serial = ++_bridgeSerial;  // request ids are per frame; this makes them per page
   let nextCall = 1;
@@ -618,6 +634,31 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       return deps.readLegacyLocalStorage(wanted);
     },
 
+    // rev/ commands (SDK 1.3): only those the extension declares in
+    // "contributes.commands"; Core asks the frame to run them (requestCommand).
+    'commands.handle': (name, meta) => {
+      if (typeof name !== 'string' || !(extension.frame?.commands || []).some(command => command.name === name)) {
+        throw new BridgeError(`rev/${String(name).slice(0, 40)} isn't a command ${self} declares ("contributes.commands" in its extension.json)`, 'TypeError');
+      }
+      deps.commands?.handle(name, { suggests: meta?.suggests === true });
+    },
+    'commands.unhandle': name => { if (typeof name === 'string') deps.commands?.unhandle(name); },
+    // Where the panel's bottom bar is, so the command bar opens over it.
+    'commands.bar': rect => {
+      if (surface.type !== 'panel') throw new BridgeError('only a panel has a bar for the command bar', 'Error');
+      deps.commands?.setBar(cleanBarRect(rect));
+    },
+    // rev/ typed into a field of the frame: Atmos's bar takes over, with the
+    // text so far. Only from the frame the user is typing in; `follow`, keys
+    // typed there before the bar had the keyboard (atmos.commands.field).
+    'commands.open': (text, options, follow) => {
+      if (typeof text !== 'string') throw new BridgeError('commands.open(text)', 'TypeError');
+      if (!deps.commands?.open) throw new BridgeError('the command bar is unavailable here', 'Error');
+      if (options != null) plainObject(options, 'options');
+      return deps.commands.open(text.slice(0, 200), cleanOptionValues(options), follow === true);
+    },
+    'commands.refresh': () => deps.commands?.refresh(),
+
     // Notifications (no reply expected).
     'surface.resize': height => deps.resize?.(Math.max(0, Math.min(4000, Number(height) || 0))),
     'ui.key': init => deps.dispatchKey?.(init),
@@ -626,6 +667,23 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       if (surface.drawer && Number.isFinite(deltaY)) deps.drawer?.wheel(deltaY, deltaMode);
     },
   };
+
+  /**
+   * Ask the frame to run one of its commands, or what to list for it
+   * (action 'run' or 'suggest'). Rejects if it doesn't answer in time.
+   */
+  function requestCommand(action, name, input, timeout = 15000) {
+    return new Promise((resolve, reject) => {
+      if (disposed) { reject(new BridgeError(`${self}'s frame went away`, 'Error')); return; }
+      const id = nextCommand++;
+      const timer = setTimeout(() => {
+        commandRequests.delete(id);
+        reject(new BridgeError(`${self} didn't answer`, 'TimeoutError'));
+      }, timeout);
+      commandRequests.set(id, { resolve, reject, timer });
+      post({ command: id, action, name, input });
+    });
+  }
 
   function callFrame(method, args) {
     return new Promise((resolve, reject) => {
@@ -638,6 +696,15 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
 
   async function receive(message) {
     if (disposed || !message || typeof message !== 'object') return;
+    if (message.commandReply !== undefined) {
+      const pending = commandRequests.get(message.commandReply);
+      commandRequests.delete(message.commandReply);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      if (message.error) pending.reject(new BridgeError(String(message.error.message || 'The command failed').slice(0, 300), 'Error'));
+      else pending.resolve(message.result);
+      return;
+    }
     if (message.callReply !== undefined) {
       const pending = outgoingCalls.get(message.callReply);
       outgoingCalls.delete(message.callReply);
@@ -678,9 +745,14 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     fetches.clear();
     for (const pending of outgoingCalls.values()) pending.reject(new BridgeError('service stopped', 'Error'));
     outgoingCalls.clear();
+    for (const pending of commandRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new BridgeError(`${self}'s frame went away`, 'Error'));
+    }
+    commandRequests.clear();
     if (deps.services.get(self)?.owner === bridge) deps.services.delete(self);
   }
 
-  const bridge = { extension, surface, receive, post, dispose };
+  const bridge = { extension, surface, receive, post, dispose, requestCommand };
   return bridge;
 }

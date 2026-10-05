@@ -24,11 +24,11 @@ import {
 import { activatePanelPlugin, activateDefaultPanelPlugin, getActivePanelPluginId } from './host/panel-registry.js';
 import { atmos, role } from './host/frame.js';
 import { MAX_HISTORY_POINTS } from './history-constants.js';
-import { createTimeSeriesChart, setChartSettings, lineColorForTrend, CHART_INTERVALS, CHART_RANGES, chartControlMarkup } from './chart-service.js';
+import { createTimeSeriesChart, setChartSettings, lineColorForTrend, CHART_INTERVALS, chartControlMarkup } from './chart-service.js';
 import { createCashInvestedPane, CASH_INVESTED_PANE_ID, prepareCashInvestedData, extendCashInvestedData } from './indicators/cash-invested-pane.js';
 
-const PORTFOLIO_INTERVALS = CHART_INTERVALS.filter(item => item.value !== '4h');
-const PORTFOLIO_RANGES = CHART_RANGES.filter(item => item.value !== 'ytd');
+// Every timeframe; Ctrl+click on one shows that much time (no range buttons).
+const PORTFOLIO_INTERVALS = CHART_INTERVALS;
 const POLL_MS = 15_000;
 const STARTUP_COLLECTION_BUFFER_MS = 0;
 const VIEW_TYPES = Object.freeze({ line: 'line', candles: 'candlestick', heiken: 'heiken-ashi' });
@@ -65,7 +65,7 @@ const extraPortfolioViews = new Set();
 function refreshExtraPortfolioViews(presentationOnly = false, appended = null) { for (const refresh of extraPortfolioViews) refresh(presentationOnly, appended); }
 
 export function mountPortfolioSection(host, context, selected = 'total', stateKey = 'portfolio-extra') {
-  host.innerHTML = '<div class="finance-portfolio-chart"><div class="finance-plot-surface"><div class="portfolio-chart-host"></div></div><div class="finance-portfolio-toolbar atmos-chart-controls"><div class="finance-toolbar-scroll">' + '<div role="group" aria-label="Timeline">' + chartControlMarkup('timeline') + chartControlMarkup('bridge') + chartControlMarkup('scale') + '</div><div role="group" aria-label="Chart type">' + chartControlMarkup('type') + '</div><div role="group" aria-label="Candle timeframe">' + chartControlMarkup('timeframe', { intervals: PORTFOLIO_INTERVALS }) + '</div><div role="group" aria-label="Visible range">' + chartControlMarkup('range', { ranges: PORTFOLIO_RANGES }) + '</div>' + '</div></div></div>';
+  host.innerHTML = '<div class="finance-portfolio-chart"><div class="finance-plot-surface"><div class="portfolio-chart-host"></div></div><div class="finance-portfolio-toolbar atmos-chart-controls"><div class="finance-toolbar-scroll">' + '<div role="group" aria-label="Timeline">' + chartControlMarkup('timeline') + chartControlMarkup('bridge') + chartControlMarkup('scale') + '</div><div role="group" aria-label="Chart type">' + chartControlMarkup('type') + '</div><div role="group" aria-label="Candle timeframe">' + chartControlMarkup('timeframe', { intervals: PORTFOLIO_INTERVALS }) + '</div>' + '</div></div></div>';
   const data = portfolioSectionHistory(selected);
   const options = currentOptions();
   const view = createTimeSeriesChart(host.querySelector('.portfolio-chart-host'), {
@@ -394,7 +394,6 @@ export function mount(contentEl, context) {
         <div role="group" aria-label="Timeline">${chartControlMarkup('timeline')}${chartControlMarkup('bridge')}${chartControlMarkup('scale')}</div>
         <div role="group" aria-label="Chart type">${chartControlMarkup('type')}</div>
         <div class="mq-timeframes" role="group" aria-label="Candle timeframe">${chartControlMarkup('timeframe', { intervals: PORTFOLIO_INTERVALS })}</div>
-        <div role="group" aria-label="Visible range">${chartControlMarkup('range', { ranges: PORTFOLIO_RANGES })}</div>
       </div>
     </div><div class="finance-plot-surface"><div class="portfolio-chart-host"></div></div></div>`;
   sectionButtons = [...contentEl.querySelectorAll('[data-portfolio-section]')];

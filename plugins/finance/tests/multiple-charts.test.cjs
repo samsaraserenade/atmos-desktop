@@ -31,13 +31,13 @@ console.log('Passed: extra charts keep query/settings independent and dispose st
 
 const altSync=fs.readFileSync(`${__dirname}/../src/alt-chart-sync.js`,'utf8');
 assert.match(altSync,/if \(!event\.altKey \|\| relayed\.has\(event\)\) return/);
-for (const action of ['click', 'wheel', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel'])
+for (const action of ['click', 'wheel', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'dblclick'])
   assert.match(altSync, new RegExp(`context\\.listen\\(grid, '${action}'`));
 assert.match(altSync,/peersFor\(sourceRoot\)/);
 assert.match(altSync,/matchingControl\(peer, control\)/);
 assert.match(altSync,/mappedPoint\(event, sourcePlot, target/);
 assert.doesNotMatch(altSync,/services\/charting|corev3|CoreV3/i);
-console.log('Passed: Alt broadcasts controls, zoom, and pan inside the Finance multichart grid');
+console.log('Passed: Alt broadcasts controls, zoom, pan and the double-click reset inside the Finance multichart grid');
 
 const portfolio=fs.readFileSync(__dirname+'/../src/total-chart.js','utf8');
 const markets=fs.readFileSync(__dirname+'/../markets/panel.js','utf8');
