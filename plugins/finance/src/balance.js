@@ -469,7 +469,7 @@ async function _refreshAttribution(period = _activePeriod()) {
       _attribution[period] = computeDailyAttribution(current, previous);
     }
   } catch (error) {
-    console.warn(`[portfolio-tracker] ${spec.label} attribution unavailable:`, error.message);
+    if (!error.unconfigured) console.warn(`[portfolio-tracker] ${spec.label} attribution unavailable:`, error.message);
     _attribution[period] = null;
   }
   _renderMovers();

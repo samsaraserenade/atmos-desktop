@@ -1,0 +1,30 @@
+{
+  "apiVersion": 4,
+  "engines": {
+    "atmos": ">=0.21.0"
+  },
+  "tier": "first-party",
+  "version": "1.0.0",
+  "publisher": "atmos",
+  "runtime": "frame",
+  "isolation": "origin",
+  "exports": {},
+  "displayName": "Now Playing",
+  "description": "What's playing in Atmos, from Music, Atmos Browser or any extension that plays something, with its controls.",
+  "requires": {
+    "extensions.manifest": 1,
+    "extensions.frames": 3
+  },
+  "permissions": {},
+  "contributes": {
+    "sidebar": [
+      {
+        "label": "Now Playing",
+        "icon": "icon.svg",
+        "order": 20,
+        "resizable": false,
+        "legacyId": "audio-player"
+      }
+    ]
+  }
+}

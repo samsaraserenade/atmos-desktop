@@ -50,8 +50,8 @@ function world(t) {
     fs.writeFileSync(path.join(ext, 'boot.js'), `export default 'bundled ${version}';`);
   }
 
-  /** One "start of Atmos": apply pending changes, then catalog + trust + manager. */
-  function start({ seed = false, appVersion = null, builtIn = undefined } = {}) {
+  /** One "start of Atmos": apply pending changes, then catalog + trust + manager. `off`: ids switched off. */
+  function start({ seed = false, appVersion = null, builtIn = undefined, off = [] } = {}) {
     let entries = [];
     const installedRoot = kind => root('installed', kind);
     const manager = createExtensionManager({
@@ -64,7 +64,7 @@ function world(t) {
     });
     const trust = createExtensionTrust({ approvalsFile: path.join(userData, 'approvals.json'), bundledRoot: kind => root('bundled', kind), trustedKeys, warn() {} });
     trust.assessAll(catalog);
-    entries = [...catalog.list('plugins'), ...catalog.list('services')].map(entry => ({ ...entry, loadable: trust.get(entry).loadable }));
+    entries = [...catalog.list('plugins'), ...catalog.list('services')].map(entry => ({ ...entry, loadable: trust.get(entry).loadable, active: !off.includes(entry.id) }));
     manager.confirmApplied((kind, id) => {
       const entry = catalog.find(`${kind}s`, id);
       return entry ? { entry, loadable: trust.get(entry).loadable } : null;
@@ -307,7 +307,7 @@ test('optional dependencies are offered, never pulled in, and stop being offered
   assert.equal(status.optional['plugin:finance'], undefined);
 });
 
-test('a recommended optional dependency comes with a first install, but not with an update, and is never required', async t => {
+test('a recommended optional dependency comes with a first install or the update that first recommends it, never once you removed or cancelled it, and is never required', async t => {
   const w = world(t);
   const deps = { charting: '^1.2.0', 'market-data': { version: '^0.4.0', optional: true, recommended: true } };
   w.publish('service', 'charting', '1.2.0');
@@ -329,6 +329,47 @@ test('a recommended optional dependency comes with a first install, but not with
   result = await s.manager.install('plugin', 'finance');
   assert.deepEqual(result.changes.map(c => `${c.id}:${c.reason}`), ['finance:update']);
   assert.equal(result.status.optional['plugin:finance'][0].id, 'market-data');
+
+  // An update that first recommends one brings it (it wasn't removed: it
+  // didn't exist); the next update doesn't, once it's removed.
+  w.publish('service', 'now-playing', '1.0.0');
+  w.publish('plugin', 'finance', '1.1.0', { dependencies: { ...deps, 'now-playing': { version: '^1.0.0', optional: true, recommended: true } } });
+  s = w.start();
+  await s.manager.checkForUpdates();
+  result = await s.manager.install('plugin', 'finance');
+  assert.deepEqual(result.changes.map(c => `${c.id}:${c.reason}`), ['now-playing:recommended', 'finance:update'], 'Market Data, removed before, stays removed');
+
+  // Its install cancelled: no other extension's recommendation brings it
+  // back (nor Market Data, removed), and planning Finance again doesn't either.
+  s.manager.cancel('service', 'now-playing');
+  w.publish('plugin', 'audio-player', '1.2.0', { dependencies: {
+    'now-playing': { version: '^1.0.0', optional: true, recommended: true },
+    'market-data': { version: '^0.4.0', optional: true, recommended: true },
+  } });
+  s = w.start();
+  await s.manager.checkForUpdates();
+  assert.deepEqual((await s.manager.install('plugin', 'audio-player')).changes.map(c => `${c.id}:${c.reason}`), ['audio-player:install']);
+  assert.deepEqual((await s.manager.install('plugin', 'finance')).changes.map(c => `${c.id}:${c.reason}`), ['finance:update']);
+  // Installed by hand, it's wanted again.
+  assert.deepEqual((await s.manager.install('service', 'now-playing')).changes.map(c => c.id), ['now-playing']);
+  s.manager.cancel('service', 'now-playing');
+  s.manager.cancel('plugin', 'audio-player');
+  s.manager.cancel('plugin', 'finance');
+  const declined = () => JSON.parse(fs.readFileSync(path.join(w.userData, 'extension-declined.json'), 'utf8')).declined;
+  assert.deepEqual(declined(), ['plugin:audio-player', 'service:market-data', 'service:now-playing'],
+    'a cancelled first install is declined, a cancelled update (Finance) isn\'t');
+
+  // A plain optional one that becomes recommended counts as new.
+  const w3 = world(t);
+  w3.publish('service', 'market-data', '0.4.0');
+  w3.publish('plugin', 'finance', '1.0.0', { dependencies: { 'market-data': { version: '^0.4.0', optional: true } } });
+  let s3 = w3.start();
+  await s3.manager.checkForUpdates();
+  assert.deepEqual((await s3.manager.install('plugin', 'finance')).changes.map(c => c.id), ['finance']);
+  s3 = w3.start();
+  w3.publish('plugin', 'finance', '1.0.1', { dependencies: { 'market-data': { version: '^0.4.0', optional: true, recommended: true } } });
+  await s3.manager.checkForUpdates();
+  assert.deepEqual((await s3.manager.install('plugin', 'finance')).changes.map(c => `${c.id}:${c.reason}`), ['market-data:recommended', 'finance:update']);
 
   // A source without it: Finance installs anyway.
   const w2 = world(t);
@@ -399,6 +440,88 @@ test('what Atmos ships with (Atmos Browser) is never offered in the picker, nor 
   const older = world(t);
   older.publish('plugin', 'browser', '1.0.3');
   assert.deepEqual((await older.start({ seed: true, builtIn }).manager.seedPackages()).map(p => p.id), ['browser']);
+});
+
+test('what Atmos Browser recommends comes once: with the first start\'s choice, or after an Atmos update; removed, it stays removed', async t => {
+  const builtIn = (kind, id) => kind === 'plugin' && id === 'browser';
+  const recommends = { dependencies: { 'now-playing': { version: '^1.0.0', optional: true, recommended: true } } };
+  const w = world(t);
+  w.bundle('plugin', 'browser', '1.2.0', recommends);
+  w.publish('service', 'now-playing', '1.0.0');
+  w.publish('plugin', 'finance', '1.0.0');
+  // The first start's choice (Finance): Now Playing comes with the browser, at the same restart.
+  let s = w.start({ seed: true, builtIn });
+  assert.deepEqual((await s.manager.installFromSeed([{ kind: 'plugin', id: 'finance' }])).map(c => `${c.id}:${c.reason}`), ['finance:install', 'now-playing:recommended']);
+  s = w.start({ seed: true, builtIn });
+  assert.equal(s.find('service', 'now-playing').source, 'installed');
+  // Removed: no later check brings it back.
+  s.manager.remove('service', 'now-playing');
+  s = w.start({ builtIn });
+  assert.equal(s.find('service', 'now-playing'), null);
+  await s.manager.checkForUpdates();
+  assert.deepEqual(await s.manager.installBuiltInRecommendations(), []);
+
+  // An Atmos update whose browser first recommends it: staged after the
+  // check, said to come with Atmos Browser, once.
+  const u = world(t);
+  u.bundle('plugin', 'browser', '1.1.0');
+  let su = u.start({ builtIn });
+  await su.manager.checkForUpdates();
+  assert.deepEqual(await su.manager.installBuiltInRecommendations(), []);
+  u.bundle('plugin', 'browser', '1.2.0', recommends);
+  su = u.start({ builtIn });
+  await su.manager.checkForUpdates();
+  assert.deepEqual(await su.manager.installBuiltInRecommendations(), [], 'no source has it yet: nothing, and looked at again next time');
+  u.publish('service', 'now-playing', '1.0.0');
+  await su.manager.checkForUpdates();
+  assert.deepEqual((await su.manager.installBuiltInRecommendations()).map(c => `${c.id}:${c.reason}`), ['now-playing:recommended']);
+  assert.deepEqual(await su.manager.installBuiltInRecommendations(), [], 'once');
+  su.manager.cancel('service', 'now-playing');
+  su = u.start({ builtIn });
+  await su.manager.checkForUpdates();
+  assert.deepEqual(await su.manager.installBuiltInRecommendations(), [], 'cancelled: not again');
+  assert.equal(su.find('service', 'now-playing'), null);
+});
+
+test('an extension that reads the location brings Location once, now that it is a package (0.21); removed, it stays removed', async t => {
+  const w = world(t);
+  w.bundle('plugin', 'weather', '1.0.0', { permissions: { invokes: ['service:location'] } });
+  w.bundle('plugin', 'clock', '1.0.0');
+  // One that names it chose already: an optional dependency is its call.
+  w.bundle('plugin', 'radar', '1.0.0', { permissions: { invokes: ['service:location'] }, dependencies: { location: { version: '^1.0.0', optional: true } } });
+  let s = w.start();
+  await s.manager.checkForUpdates();
+  assert.deepEqual(await s.manager.installBuiltInRecommendations(), [], 'no source has it yet: looked at again next time');
+  w.publish('service', 'location', '1.0.0');
+  await s.manager.checkForUpdates();
+  // Even after "Just Atmos Browser": the reader was installed since.
+  s.manager.finishSetup('skipped');
+  assert.deepEqual((await s.manager.installBuiltInRecommendations()).map(c => `${c.id}:${c.reason}`), ['location:recommended']);
+  assert.deepEqual(await s.manager.installBuiltInRecommendations(), [], 'once');
+  s = w.start();
+  assert.equal(s.find('service', 'location').source, 'installed');
+  s.manager.remove('service', 'location');
+  s = w.start();
+  await s.manager.checkForUpdates();
+  assert.deepEqual(await s.manager.installBuiltInRecommendations(), [], 'removed: not again');
+  assert.equal(s.find('service', 'location'), null);
+
+  // Nothing reads it (or only one that names it): nothing comes. Any
+  // version from the first does (readers talk to Core).
+  const quiet = world(t);
+  quiet.bundle('plugin', 'clock', '1.0.0');
+  quiet.bundle('plugin', 'radar', '1.0.0', { permissions: { invokes: ['service:location'] }, dependencies: { location: { version: '^1.0.0', optional: true } } });
+  quiet.publish('service', 'location', '2.0.0');
+  const sq = quiet.start();
+  await sq.manager.checkForUpdates();
+  assert.deepEqual(await sq.manager.installBuiltInRecommendations(), []);
+  quiet.bundle('plugin', 'weather', '1.0.0', { permissions: { invokes: ['service:location'] } });
+  const off = quiet.start({ off: ['weather'] });
+  await off.manager.checkForUpdates();
+  assert.deepEqual(await off.manager.installBuiltInRecommendations(), [], 'switched off: not until it runs');
+  const sq2 = quiet.start();
+  await sq2.manager.checkForUpdates();
+  assert.deepEqual((await sq2.manager.installBuiltInRecommendations()).map(c => `${c.id}:${c.version}`), ['location:2.0.0']);
 });
 
 test('first run from a web source: offline it says so and stays pending; online it installs', async t => {

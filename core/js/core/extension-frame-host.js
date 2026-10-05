@@ -28,6 +28,9 @@ import { onSemanticColorChange } from './semantic-colors.js';
 import { checkExtensionCompatibility } from './capabilities.js';
 import { getCapability, onCapabilityChange } from './renderer-capabilities.js';
 import { createExtensionBridge } from './extension-bridge.js';
+import { createNowPlayingHub, USED_RECENTLY_MS } from './now-playing.js';
+import { createLocationHub } from './location-hub.js';
+import { forgetEarlierLocation, takeEarlierLocation } from './location-legacy.js';
 import { createPanelDrawer } from './panel-drawer.js';
 import { panelState } from './panel-state.js';
 import { webFor } from './web-layer.js';
@@ -47,7 +50,7 @@ const APPEARANCE_VARS = [
 ];
 const BOOT_TIMEOUT_MS = 10000;
 // The SDK frames get (core/js/sdk/atmos-sdk.js SDK_VERSION; a test keeps them equal).
-export const SDK_VERSION = '1.3.0';
+export const SDK_VERSION = '1.4.0';
 
 const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>
@@ -58,6 +61,8 @@ const _exposed = new Map();        // "kind:id" -> { methods, call, owner }
 const _serviceWaiters = new Map(); // "kind:id" -> [resolve]
 const _withBootFrame = new Set();  // "kind:id" of framed extensions that have a boot.js
 const _stopped = new Set();        // "kind:id" stopped this session: its approval was removed (stopExtensions)
+const _sectionOwners = new Map();  // sidebar widget id -> "kind:id" of the extension it's registered for
+const _sectionIds = new WeakMap(); // a widget contribution -> the id it has in the sidebar
 // Methods exposed by boot frames. Callers that arrive before a boot frame
 // has started wait for it (awaitService) instead of failing.
 const _services = {
@@ -196,6 +201,12 @@ function _appFontData(id) {
   return font && font.id === id ? font.dataUrl : null;
 }
 
+// What each extension plays, passed to the Now Playing service (atmos.nowPlaying).
+const _nowPlaying = createNowPlayingHub({
+  send: (owner, control) => _broadcast(owner, 'nowPlaying.control', control),
+  clickedJustNow: ref => _clickedJustNow(ref),
+});
+
 function _broadcast(extensionKey, topic, payload, except = null) {
   for (const record of _frames.get(extensionKey) || []) {
     if (record.bridge && record.bridge !== except) record.bridge.post({ topic, payload });
@@ -295,8 +306,12 @@ function _stateFor(extension) {
     } else {
       // First use since 0.12: take what the Atmos page saved for it (the
       // same namespace id, or kind-qualified after a clash), and write its
-      // file. The blob's copy stays until a later start.
-      value = readSavedNamespace(extension.id) ?? readSavedNamespace(`${extension.kind}-${extension.id}`) ?? {};
+      // file. The blob's copy stays until a later start. Not the Location
+      // service's: the `location` namespace is the location Atmos kept
+      // itself before 0.21, which the service takes over by asking
+      // (location-legacy.js), and clears.
+      value = k === LOCATION_SERVICE ? {}
+        : readSavedNamespace(extension.id) ?? readSavedNamespace(`${extension.kind}-${extension.id}`) ?? {};
       if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
       _states.set(k, { extension, value });
       _writeState(k, 0);
@@ -316,6 +331,15 @@ function _writeState(k, delay = STATE_WRITE_DELAY_MS) {
     _stateApi.save(record.extension.kind, record.extension.id, record.value)
       .catch(error => console.warn(`[extensions] ${k}'s state could not be saved:`, error.message));
   }, delay));
+}
+
+/** Write an extension's state now, if a write is waiting; resolves once it's on disk. */
+async function _saveStateNow(k) {
+  if (!_stateTimers.has(k)) return;
+  clearTimeout(_stateTimers.get(k));
+  _stateTimers.delete(k);
+  const record = _states.get(k);
+  if (record && _stateApi) await _stateApi.save(record.extension.kind, record.extension.id, record.value);
 }
 
 /** Write what is still waiting, synchronously (the page is going away). */
@@ -397,19 +421,32 @@ const _deps = {
   // checked the host; the main process checks everything again).
   fetch: (caller, requestId, request) => window.atmosCore.extensionFetch(caller, requestId, request),
   fetchAbort: (caller, requestId) => window.atmosCore.abortExtensionFetch?.(caller, requestId),
-  // atmos.location: read-only, from the Location system service.
+  // atmos.location: what the Location service (services/location) last
+  // published; the bridge checks who may read it, and that only the
+  // official service publishes.
   location: {
-    async get() {
-      return _locationSummary((await _locationService()).getLocation());
-    },
+    get: () => _location.get(),
     /** Calls fn with the location whenever it changes. Returns the unsubscribe. */
-    subscribe(fn) {
-      let off = null;
-      let alive = true;
-      _locationService().then(service => {
-        if (alive) off = service.onLocationChange(value => fn(_locationSummary(value)));
-      }).catch(error => console.warn('[extensions] location unavailable:', error.message));
-      return () => { alive = false; off?.(); };
+    subscribe: fn => _location.subscribe(fn),
+    publish: value => _location.publish(value),
+    /** The location Atmos kept before 0.21 (location-legacy.js). */
+    takeEarlier: () => takeEarlierLocation(),
+    /**
+     * The service has saved it: Atmos's copy goes, once the service's state
+     * is on disk (a crash in between would otherwise lose both).
+     */
+    async forgetEarlier() {
+      await _saveStateNow(LOCATION_SERVICE);
+      forgetEarlierLocation();
+    },
+    /**
+     * Its Detect button was pressed: the service's frame may use the
+     * browser's location for a moment (location-gate.cjs). Only after a
+     * real click in its frame, which the main process saw land there.
+     */
+    async allowDetect() {
+      if (!(await _clickedJustNow(LOCATION_SERVICE))) throw new Error('Detect works from a click on its button');
+      return (await window.atmosCore?.allowLocationDetect?.()) === true;
     },
   },
   readLegacyIndexedDB: _readLegacyIndexedDB,
@@ -434,19 +471,13 @@ const _deps = {
   },
 };
 
-// The Location system service (core/system/location), loaded by Core at
-// startup; imported here by the same URL, so it is the same module.
-let _locationModule = null;
-function _locationService() {
-  _locationModule ||= import(new URL('../../system/location/index.js', import.meta.url).href);
-  return _locationModule;
-}
-
-/** What a frame may know of the location: { lat, lon, label, mode }, or null when none is set. */
-function _locationSummary(value) {
-  if (!value || !Number.isFinite(value.lat) || !Number.isFinite(value.lon)) return null;
-  return { lat: value.lat, lon: value.lon, label: typeof value.label === 'string' ? value.label : null, mode: value.mode === 'manual' ? 'manual' : 'auto' };
-}
+// The Location service, official (services/location): what it publishes
+// goes to readers through here. Without it running, a read is null at once.
+const LOCATION_SERVICE = 'service:location';
+const _location = createLocationHub({
+  running: () => _framed.get(LOCATION_SERVICE)?.tier !== undefined && _framed.get(LOCATION_SERVICE).tier !== 'third-party'
+    && !_stopped.has(LOCATION_SERVICE) && !_incompatible.has(LOCATION_SERVICE),
+});
 
 /**
  * What a frame may know about the wallpaper: its mode and a small copy of
@@ -475,6 +506,20 @@ function _commandLabel(ref) {
   const id = String(ref).split(':')[1] || String(ref);
   const name = clean || id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
   return _framed.get(ref)?.tier === 'third-party' ? `${name} · community` : name;
+}
+
+/**
+ * Whether you just clicked in this extension: the Atmos window's last
+ * mouse-button press, as Chromium reported it to the main process (a frame
+ * can't make one up, as it can take the focus), was on one of its frames a
+ * moment ago. What a community extension starts in Now Playing counts as
+ * started only then (or after you used its controls there).
+ */
+async function _clickedJustNow(ref) {
+  const press = await window.atmosCore?.lastClick?.().catch(() => null);
+  if (!press || !(press.ago >= 0 && press.ago < USED_RECENTLY_MS)) return false;
+  const hit = document.elementFromPoint(press.x, press.y);
+  return hit instanceof HTMLIFrameElement && [...(_frames.get(ref) || [])].some(record => record.iframe === hit);
 }
 
 /** What Settings calls an extension ("plugin:<id>"): its displayName, else its id in words. */
@@ -642,6 +687,13 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
         }
       },
     },
+    // atmos.nowPlaying: this extension's sessions (the bridge checks who may).
+    nowPlaying: {
+      set: (sessionId, session) => _nowPlaying.set({ id: key(extension), name: _displayName(key(extension)), community: extension.tier === 'third-party' }, sessionId, session),
+      clear: sessionId => _nowPlaying.clear(key(extension), sessionId),
+      watch: fn => _nowPlaying.watch(fn),
+      control: (id, action, value) => _nowPlaying.control(id, action, value),
+    },
     setSurfaceMenu(items) { record.menuItems = items; },
     // rev/ commands this frame runs, and its panel's bottom bar (the
     // bridge has checked the names against the manifest).
@@ -790,6 +842,12 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
     record.bridge?.dispose();
     record.port?.close();
     _frames.get(key(extension))?.delete(record);
+    // Its last frame gone (stopped, turned off): what it played goes too.
+    if (!_frames.get(key(extension))?.size) {
+      _nowPlaying.forget(key(extension));
+      // The Location service gone (its last frame): nothing to read until it's back.
+      if (key(extension) === LOCATION_SERVICE) _location.forget();
+    }
     iframe.remove();
     if (glassLayer) {
       glassLayer.remove();
@@ -1021,7 +1079,14 @@ function _registerContribution(extension, surface) {
     });
   } else if (surface.surface === 'sidebar') {
     const mounted = new Map();
-    registerSection(surface.id, {
+    // Two extensions with the same widget id (Now Playing keeps Audio
+    // Player's old one, which an Audio Player older than 1.2 still uses):
+    // the second gets an id of its own rather than being dropped.
+    const holder = _sectionOwners.get(surface.id);
+    const sectionId = holder && holder !== key(extension) ? `${extension.id}-${surface.id}` : surface.id;
+    _sectionOwners.set(sectionId, key(extension));
+    _sectionIds.set(surface, sectionId);
+    registerSection(sectionId, {
       label: surface.label,
       // Which extension it comes from, for Settings → Sidebar's groups.
       owner: extension.manifest?.displayName || extension.id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
@@ -1130,6 +1195,11 @@ function _registerFramed({ plugins = [], services = [] }) {
     ...plugins.map(plugin => ({ ...plugin, kind: 'plugin' })),
   ].filter(extension => extension.runtime === 'frame'
     && extension.active !== false && extension.enabled !== false && extension.frame);
+  const register = (extension, surface) => {
+    try { _registerContribution(extension, surface); }
+    catch (error) { console.error(`[extension-frames] ${extension.kind} '${extension.id}' ${surface.surface} failed to register:`, error); }
+  };
+  const communityWidgets = [];
   for (const extension of framed) {
     _framed.set(key(extension), extension);
     const compatibility = checkExtensionCompatibility(extension.manifest || {}, `${extension.kind} '${extension.id}'`);
@@ -1140,10 +1210,13 @@ function _registerFramed({ plugins = [], services = [] }) {
     }
     _incompatible.delete(key(extension));
     for (const surface of extension.frame.contributions) {
-      try { _registerContribution(extension, surface); }
-      catch (error) { console.error(`[extension-frames] ${extension.kind} '${extension.id}' ${surface.surface} failed to register:`, error); }
+      // A community extension's widgets after every official one's: on an
+      // id both want, the official one keeps it (and its saved place).
+      if (surface.surface === 'sidebar' && extension.tier === 'third-party') { communityWidgets.push([extension, surface]); continue; }
+      register(extension, surface);
     }
   }
+  for (const [extension, surface] of communityWidgets) register(extension, surface);
   return framed.length;
 }
 
@@ -1165,7 +1238,10 @@ export function stopExtensions(refs = []) {
     for (const record of [...(_frames.get(ref) || [])]) record.stop?.();
     _exposed.delete(ref);
     for (const surface of extension.frame?.contributions || []) {
-      if (surface.surface === 'sidebar') unregisterSection(surface.id);
+      if (surface.surface !== 'sidebar') continue;
+      const sectionId = _sectionIds.get(surface) ?? surface.id;
+      unregisterSection(sectionId);
+      if (_sectionOwners.get(sectionId) === ref) _sectionOwners.delete(sectionId);
     }
   }
   return count;

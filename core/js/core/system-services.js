@@ -1,6 +1,7 @@
 /**
- * The system services: Wallpaper, Audio and Location, part of Atmos itself
- * (core/system/<id>). Core loads their modules directly, in the same phases
+ * The system services: Wallpaper and Audio, part of Atmos itself
+ * (core/system/<id>). (Location is an official service since 0.21,
+ * services/location; Core keeps only what hands it to readers.) Core loads their modules directly, in the same phases
  * as the rest of the page starts: their state before the saved state is
  * read, their Appearance settings once it is, and their boot hooks (the
  * background layer) with Core's own. They are listed with the extensions
@@ -20,14 +21,19 @@ async function _load(files) {
   }
 }
 
-/** Register their state namespaces; call before persist.js load(). */
-export function loadSystemState() {
-  return _load(['location/persist.js', 'wallpaper/persist.js']);
+/**
+ * Register their state namespaces; call before persist.js load(). With the
+ * location Atmos kept before Location was a service, so the service can
+ * take it over (location-legacy.js).
+ */
+export async function loadSystemState() {
+  try { await import('./location-legacy.js'); } catch (error) { console.error('[system] location-legacy.js failed to load:', error); }
+  return _load(['wallpaper/persist.js']);
 }
 
 /** Their controls on Settings → Appearance. */
 export function loadSystemSettings() {
-  return _load(['location/settings.js', 'wallpaper/settings.js']);
+  return _load(['wallpaper/settings.js']);
 }
 
 /** Register their boot hooks (Audio, then Wallpaper: the background layer). */

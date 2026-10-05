@@ -1,5 +1,5 @@
 /**
- * Atmos SDK 1.3 — the only way a framed extension talks to Atmos.
+ * Atmos SDK 1.4 — the only way a framed extension talks to Atmos.
  *
  *   import atmos from 'atmos-sdk';
  *
@@ -19,16 +19,20 @@
  *                 setGlass, trackGlass), state, events, appearance,
  *                 contextMenu, clipboard, panel, invoke, listen, call,
  *                 expose, library, wallpaper, audio, fetch, location,
- *                 lifecycle, commands (1.3), ready, SDK_VERSION
+ *                 lifecycle, commands (1.3), nowPlaying (1.4), ready,
+ *                 SDK_VERSION
  *   experimental  notifications (not yet seen working on Windows)
- *   first-party   drawer, surface.onKey, background(), legacy.*, web — for
+ *   first-party   drawer, surface.onKey, background(), legacy.*, web,
+ *                 nowPlaying.sessions/control (the Now Playing service's),
+ *                 location.publish/takeEarlier/forgetEarlier/allowDetect
+ *                 (the Location service's) — for
  *                 official extensions; Atmos refuses them to community
  *                 ones, and they may change in a minor version
  *
  * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = '1.3.0';
+export const SDK_VERSION = '1.4.0';
 
 let port = null;
 let nextId = 1;
@@ -279,7 +283,10 @@ function forwardKeys() {
     // Atmos's single-key shortcut (Tab for the sidebar), outside fields and
     // buttons, where Tab moves focus.
     const atmosKey = !typing && !control && (init?.shortcutKeys || []).includes(event.key);
-    if (atmosKey) event.preventDefault();
+    // Alt+` (the sidebar) is Atmos's even while typing, and an Alt key
+    // nothing takes would make Windows chime.
+    const sidebarKey = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === 'Backquote';
+    if (atmosKey || sidebarKey) event.preventDefault();
     if (!(shortcut || space || atmosKey || (event.key === 'Escape' && !typing))) return;
     notify('ui.key', {
       key: event.key, code: event.code,
@@ -765,6 +772,13 @@ const locationApi = Object.freeze({
     ask('location.subscribe').catch(error => { unsubscribe(); console.error('[atmos-sdk] cannot follow the location:', error.message); });
     return unsubscribe;
   },
+  // 1.4, the Location service's own (official): where you are, for readers;
+  // the location Atmos kept before 0.21, and clearing it once saved; and
+  // leave to detect it, after a click on its Detect button.
+  publish: location => ask('location.publish', location ?? null),
+  takeEarlier: () => ask('location.takeEarlier'),
+  forgetEarlier: () => ask('location.forgetEarlier'),
+  allowDetect: () => ask('location.allowDetect'),
 });
 export { locationApi as location };
 
@@ -1136,6 +1150,7 @@ export async function background({ timeout = 15000 } = {}) {
  *   close(tabId)                    its page goes (the tab is the extension's to keep)
  *   show(tabId | null)              which tab's page the panel shows
  *   navigate/back/forward/reload/stop/zoom/find/stopFind/print/mute/edit/download/copyImage/focus/state
+ *   media(tabId, action, value)     what plays in the page (1.4): toggle, next, previous, seek
  *   shield(tabId, on)               the site's shield: block its ads and trackers, or not
  *   blocked(tabId)                  what was blocked on the tab's page
  *   setSurface({ x, y, width, height, over })   the panel: where the page goes, in
@@ -1171,6 +1186,8 @@ export const web = Object.freeze({
   copyImage: (tabId, x, y) => webAsk(tabId, 'copyImage', x, y),
   focus: tabId => webAsk(tabId, 'focus'),
   state: tabId => webAsk(tabId, 'state'),
+  /** 1.4: what plays in the page: 'toggle', 'next', 'previous', 'seek' (value: seconds). Its 'media' events say which it takes. */
+  media: (tabId, action, value) => webAsk(tabId, 'media', action, value ?? null),
   /** The site's shield: true blocks its ads and trackers (the default), false allows them. Kept per site. */
   shield: (tabId, on) => webAsk(tabId, 'shield', on !== false),
   /** { count, hosts: [{ host, count }] }: what was blocked on the tab's page. */
@@ -1214,10 +1231,53 @@ export const web = Object.freeze({
   clearData: what => ask('web.clearData', what),
 });
 
+// ── atmos.nowPlaying (1.4) ──────────────────────────────────────────────────
+/**
+ * What this extension is playing, shown in Atmos's Now Playing widget (the
+ * Now Playing service). Needs "invokes": ["service:now-playing"]. Atmos
+ * shows the session you started last; with several, dots switch between
+ * them. Atmos checks every field: text is shown as text, artwork is an
+ * image (no SVG, nothing it would fetch), and a control reaches only this
+ * extension, and only one listed in `actions`.
+ *
+ *   set(session, key?)   { title, artist?, album?, from?, artwork?, duration?,
+ *                        position?, playing, actions?, volume? }: artwork a
+ *                        PNG/JPEG/WebP/GIF Blob or data: URL (1 MB at most);
+ *                        duration and position in seconds (set again when
+ *                        playback jumps; Atmos moves the position on while
+ *                        playing); actions some of toggle, next, previous,
+ *                        seek, volume; volume 0–100. `key` names one of
+ *                        several (a tab, say): 'main' by default
+ *   clear(key?)          that session ends; no key: all of this extension's
+ *   onControl(fn)        fn({ key, action, value }) when you use the widget:
+ *                        value is seconds for seek, 0–100 for volume
+ *
+ * A session ends by itself when the extension's frames stop.
+ */
+const nowPlayingApi = Object.freeze({
+  set: (session, key) => ask('nowPlaying.set', session, key ?? null),
+  clear: key => ask('nowPlaying.clear', key ?? null),
+  onControl: fn => {
+    if (typeof fn !== 'function') throw new TypeError('atmos.nowPlaying.onControl(fn)');
+    return subscribe('nowPlaying.control', fn);
+  },
+  /** The Now Playing service only: fn(sessions) now and whenever one changes. */
+  sessions(fn) {
+    if (typeof fn !== 'function') throw new TypeError('atmos.nowPlaying.sessions(fn)');
+    const unsubscribe = subscribe('nowPlaying.sessions', fn);
+    ask('nowPlaying.sessions').catch(error => { unsubscribe(); console.error('[atmos-sdk] cannot follow Now Playing:', error.message); });
+    return unsubscribe;
+  },
+  /** The Now Playing service only: ask a session's extension to do something it takes. */
+  control: (id, action, value) => ask('nowPlaying.control', id, action, value ?? null),
+});
+
+export { nowPlayingApi as nowPlaying };
+
 const atmos = Object.freeze({
   SDK_VERSION, ready, extension, surface, state, events, appearance, contextMenu, clipboard, panel,
   invoke, listen, call, expose, library, wallpaper, audio, fetch: atmosFetch, location: locationApi, lifecycle,
-  commands: commandsApi,
+  commands: commandsApi, nowPlaying: nowPlayingApi,
   notifications,
   drawer, legacy, background, web,
 });

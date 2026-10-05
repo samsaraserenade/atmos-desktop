@@ -75,6 +75,13 @@ function moveFolder(from, to) {
 
 const ref = (kind, id) => `${kind}:${id}`;
 
+// Services that were part of Atmos before they were packages, with the
+// versions that do what Atmos did: an extension written then, which uses
+// one (its "invokes") without naming it as a dependency, brings it
+// (installBuiltInRecommendations). Readers talk to Core, not to the
+// service, so any version from the first will do.
+const LEFT_CORE = Object.freeze({ location: '>=1.0.0' });
+
 /** A validated index entry, or null. */
 function readIndexEntry(item) {
   if (!item || typeof item !== 'object') return null;
@@ -166,6 +173,8 @@ function createExtensionManager({
     setup: path.join(userData, 'extension-setup.json'),
     community: path.join(userData, 'extension-community.json'),
     officialIds: path.join(userData, 'extension-official-ids.json'),
+    declined: path.join(userData, 'extension-declined.json'),
+    recommended: path.join(userData, 'extension-recommended.json'),
   };
   const dirs = {
     staging: path.join(userData, 'extension-staging'),
@@ -453,7 +462,8 @@ function createExtensionManager({
    * dependencies a source has that are neither installed (in range) nor
    * about to be. "plugin:finance" → [{ kind, id, version, displayName, description, size }].
    * Installing one is the user's choice; install() pulls in only those marked
-   * "recommended" (and only on install, so one removed later stays offered).
+   * "recommended" (on a first install, or the update that first recommends
+   * one; never one the user removed or cancelled, which stays offered).
    */
   function optionalOffers(best, present, pending) {
     const coming = new Set(pending.filter(change => change.action === 'install').map(change => ref(change.kind, change.id)));
@@ -541,16 +551,33 @@ function createExtensionManager({
   // ── Install and update ─────────────────────────────────────────────────
 
   /**
+   * Extensions the user removed, or whose install they cancelled
+   * ("service:now-playing"): a recommended dependency never brings one back,
+   * whichever extension recommends it; installing it by hand does.
+   */
+  function declined() {
+    const list = readJson(files.declined, null)?.declined;
+    return new Set(Array.isArray(list) ? list.filter(item => typeof item === 'string') : []);
+  }
+  function setDeclined(key, on) {
+    const set = declined();
+    if (set.has(key) === on) return;
+    if (on) set.add(key); else set.delete(key);
+    try { writeJson(files.declined, { format: 1, declined: [...set].sort() }); } catch (error) { warn(`[extensions] couldn't record ${key} as removed by you: ${error.message}`); }
+  }
+
+  /**
    * The packages installing kind:id needs: itself and any required
    * dependency that is missing or too old, from the sources, plus the
    * recommended optional ones a source has.
    */
-  function plan(kind, id) {
+  function plan(kind, id, { recommendedBy = null } = {}) {
     const best = bestPackages(lastCheck.packages);
     const present = installedByRef();
     const pending = new Map(pendingChanges().filter(change => change.action === 'install').map(change => [ref(change.kind, change.id), change]));
     const steps = [];
     const visiting = new Set();
+    const removedByYou = declined();
     const visit = (targetKind, targetId, range, neededBy, recommended = false, officialParent = false) => {
       const key = ref(targetKind, targetId);
       if (visiting.has(key) || steps.some(step => ref(step.kind, step.id) === key)) return;
@@ -567,12 +594,18 @@ function createExtensionManager({
           : `No source has ${targetId}`);
       }
       visiting.add(key);
+      // What the version it has (staged, else installed) already recommended.
+      const current = staged ? readJson(path.join(userData, staged.staged || '', 'extension.json'), null) : entry?.manifest;
+      const before = have && current ? normalizeDependencies({ dependencies: current.dependencies }).list : [];
+      const isNew = dep => !before.some(old => old.kind === dep.kind && old.id === dep.id && old.recommended);
       for (const dep of normalizeDependencies({ dependencies: item.dependencies }).list) {
         if (!dep.optional) visit(dep.kind, dep.id, dep.range, item.displayName || item.id, false, !item.community);
         // A recommended optional dependency comes too on a first install,
-        // when a source has it (not on an update: the user may have removed
-        // it); without it the extension still installs.
-        else if (dep.recommended && !have) {
+        // or with the update that first recommends it (Now Playing with
+        // Audio Player 1.2.0), when a source has it; not with a later
+        // update, and never one the user removed or cancelled (declined()).
+        // Without it the extension still installs.
+        else if (dep.recommended && !removedByYou.has(ref(dep.kind, dep.id)) && (!have || isNew(dep))) {
           const offered = best.get(ref(dep.kind, dep.id));
           if (offered && satisfies(offered.version, dep.range) && (item.community || !offered.community)) visit(dep.kind, dep.id, dep.range, item.displayName || item.id, true, !item.community);
         }
@@ -580,7 +613,10 @@ function createExtensionManager({
       visiting.delete(key);
       steps.push({ ...item, reason: neededBy ? (recommended ? 'recommended' : 'dependency') : (have ? 'update' : 'install') });
     };
-    visit(kind, id, null, null);
+    // A built-in extension's recommendation (installBuiltInRecommendations):
+    // that extension's range, and said to come with it.
+    if (recommendedBy) visit(kind, id, recommendedBy.range, recommendedBy.name, true, true);
+    else visit(kind, id, null, null);
     return steps;
   }
 
@@ -660,11 +696,12 @@ function createExtensionManager({
 
   /**
    * Install or update kind:id (and what it needs) at the next start.
-   * Returns { changes, status }.
+   * Returns { changes, status }. `recommendedBy` ({ name, range }): one a
+   * built-in extension recommends, not installed by hand.
    */
-  async function install(kind, id) {
+  async function install(kind, id, { recommendedBy = null } = {}) {
     if (!lastCheck.checkedAt) await checkForUpdates();
-    const steps = plan(kind, id);
+    const steps = plan(kind, id, { recommendedBy });
     const staged = [];
     for (const item of steps) staged.push({ item, ...(await stage(item)) });
     const changes = pendingChanges().filter(change => !staged.some(({ item }) => change.kind === item.kind && change.id === item.id));
@@ -676,10 +713,92 @@ function createExtensionManager({
       });
     }
     writePending(changes);
+    // Installed by hand: recommendations may bring it back again later.
+    if (!recommendedBy) setDeclined(ref(kind, id), false);
     return {
       changes: staged.map(({ item, community }) => ({ kind: item.kind, id: item.id, version: item.version, reason: item.reason, ...(community ? { community } : {}) })),
       status: status(),
     };
+  }
+
+  /**
+   * What Atmos itself brings, the first time each is due: installed as an
+   * update that first recommends one brings it (plan()).
+   *  - What the extensions Atmos comes with (Atmos Browser) recommend:
+   *    Atmos ships them inside its own updates, so the manager never plans
+   *    one; this is that step for them. Not after a first start that chose
+   *    "Just Atmos Browser": that choice stands (Settings offers them instead).
+   *  - A service that was part of Atmos before it was a package (Location,
+   *    0.21), for an installed extension that runs and uses it (its
+   *    "invokes") without naming it as a dependency: one written when Atmos
+   *    had it, which would find nothing there. One that names it chose
+   *    already (a required one came with it; an optional one is its call).
+   *    Whatever its tier, and whatever the first start chose.
+   * Each is looked at once (extension-recommended.json): one the user
+   * removed, or removes later, stays removed; one no source has yet
+   * (offline) is looked at again next time. Only an official package, from
+   * the last check's. Returns the changes staged.
+   */
+  let recommending = null;
+  function installBuiltInRecommendations() {
+    // One at a time: two checks at once (the timer's and a click) stage it once.
+    if (!recommending) recommending = recommendBuiltIns().finally(() => { recommending = null; });
+    return recommending;
+  }
+  async function recommendBuiltIns() {
+    if (!lastCheck.checkedAt) return [];
+    const skipped = readJson(files.setup, null)?.how === 'skipped';
+    const stored = readJson(files.recommended, null)?.looked;
+    const looked = stored && typeof stored === 'object' ? { ...stored } : {};
+    const present = installedByRef();
+    const pending = new Set(pendingChanges().filter(change => change.action === 'install').map(change => ref(change.kind, change.id)));
+    const best = bestPackages(lastCheck.packages);
+    const removedByYou = declined();
+    const changes = [];
+    let changed = false;
+    // `entry` recommends `dep`: staged once, said to come with it.
+    const bring = async (entry, dep) => {
+      const by = ref(entry.kind, entry.id);
+      const key = ref(dep.kind, dep.id);
+      const done = new Set(Array.isArray(looked[by]) ? looked[by] : []);
+      if (done.has(key)) return;
+      if (!present.get(key) && !pending.has(key) && !removedByYou.has(key)) {
+        const offered = best.get(key);
+        // No source has it yet: next time.
+        if (!offered || offered.community || !satisfies(offered.version, dep.range)) return;
+        try {
+          const result = await install(dep.kind, dep.id, { recommendedBy: { name: entry.manifest?.displayName || entry.id, range: dep.range } });
+          changes.push(...result.changes);
+          pending.add(key);
+        } catch (error) {
+          warn(`[extensions] ${key}, which ${by} ${dep.reads ? 'uses' : 'recommends'}, can't be installed: ${error.message}`);
+          return;
+        }
+      }
+      done.add(key);
+      looked[by] = [...done].sort();
+      changed = true;
+    };
+    for (const entry of present.values()) {
+      if (skipped || !builtIn(entry.kind, entry.id) || entry.tier === 'third-party') continue;
+      for (const dep of normalizeDependencies({ dependencies: entry.manifest?.dependencies }).list) {
+        if (dep.optional && dep.recommended) await bring(entry, dep);
+      }
+    }
+    for (const entry of present.values()) {
+      const invokes = entry.manifest?.permissions?.invokes;
+      if (!Array.isArray(invokes) || entry.active === false) continue;
+      const named = normalizeDependencies(entry.manifest).list;
+      for (const [id, range] of Object.entries(LEFT_CORE)) {
+        if ((entry.kind === 'service' && entry.id === id) || !invokes.includes(`service:${id}`)) continue;
+        if (named.some(dep => dep.kind === 'service' && dep.id === id)) continue;
+        await bring(entry, { kind: 'service', id, range, reads: true });
+      }
+    }
+    if (changed) {
+      try { writeJson(files.recommended, { format: 1, looked }); } catch (error) { warn(`[extensions] couldn't record what was recommended: ${error.message}`); }
+    }
+    return changes;
   }
 
   // ── Remove ────────────────────────────────────────────────────────────
@@ -712,6 +831,7 @@ function createExtensionManager({
       displayName: entry?.manifest?.displayName || null, requestedAt: new Date().toISOString(),
     });
     writePending(changes);
+    setDeclined(ref(kind, id), true);
     return status();
   }
 
@@ -721,6 +841,10 @@ function createExtensionManager({
     for (const change of pendingChanges()) {
       if (change.kind === kind && change.id === id) {
         if (change.staged) fs.rmSync(path.join(userData, change.staged), { recursive: true, force: true });
+        // A first install cancelled: not wanted, like one removed. A removal
+        // cancelled: wanted after all. (An update cancelled: neither.)
+        if (change.action === 'remove') setDeclined(ref(kind, id), false);
+        else if (change.reason !== 'update') setDeclined(ref(kind, id), true);
       } else keep.push(change);
     }
     writePending(keep);
@@ -929,6 +1053,8 @@ function createExtensionManager({
           warn(`[extensions] could not install ${item.kind} '${item.id}' for setup: ${error.message}`);
         }
       }
+      // And what Atmos Browser recommends (Now Playing), with the same restart.
+      changes.push(...await installBuiltInRecommendations());
     } finally {
       lastCheck = saved;
     }
@@ -941,7 +1067,7 @@ function createExtensionManager({
   }
 
   return {
-    sources, addSource, removeSource, checkForUpdates, status, plan, install, remove, cancel, communityOrigin,
+    sources, addSource, removeSource, checkForUpdates, status, plan, install, remove, cancel, communityOrigin, installBuiltInRecommendations,
     applyPending, confirmApplied, takeDataCleanup,
     setupDone, setupPending, beginSetup, finishSetup, seedPackages, installFromSeed,
     previousRoot: kind => path.join(dirs.previous, kind),

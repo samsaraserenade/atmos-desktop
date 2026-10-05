@@ -55,8 +55,9 @@ panel (a socket, a poller) goes in a `boot.js`, which runs all session.
 `permissions.network` lists the hosts it may reach, from its frames and
 through `atmos.fetch()`, which also works for APIs that send no CORS
 headers. Add `"invokes": ["service:location"]` to read the user's location
-with `atmos.location`, `"notifications"` under `browser` to show
-notifications, and so on. Atmos refuses anything undeclared, and people see
+with `atmos.location` (and `"dependencies": { "location": "^1.0.0" }`, so
+the Location service comes with your extension), `"notifications"` under
+`browser` to show notifications, and so on. Atmos refuses anything undeclared, and people see
 the list before they approve the extension.
 
 ## Publish it

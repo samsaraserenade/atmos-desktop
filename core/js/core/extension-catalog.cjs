@@ -6,7 +6,7 @@
  * Extensions come from three places:
  *
  *   core      — the system services, part of Atmos itself (core/system/<id>:
- *               Wallpaper, Audio, Location). Core loads their code directly.
+ *               Wallpaper, Audio). Core loads their code directly.
  *   bundled   — shipped with Atmos (resources/extensions in a build, or the
  *               repo's plugins/ and services/ when running from source).
  *   installed — %APPDATA%/atmos/{plugins,services}: anything added later.

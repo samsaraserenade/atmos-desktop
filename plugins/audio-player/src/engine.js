@@ -10,7 +10,8 @@
  * The panel and widgets are views: they call the methods exposed below
  * (atmos.call('plugin:audio-player', …)), follow the 'engine' event for the
  * playlist and settings, and follow atmos.audio directly for time and
- * play/pause.
+ * play/pause. What plays also goes to Atmos's Now Playing widget
+ * (atmos.nowPlaying), which sends its controls back here.
  */
 import atmos from 'atmos-sdk';
 import { audioState, save, flush } from './state.js';
@@ -61,7 +62,78 @@ function announce() {
     snapshotQueued = false;
     snapshotRevision++;
     atmos.events.emit('engine', snapshot());
+    publishNowPlaying();
   });
+}
+
+// ── Now Playing (SDK 1.4) ───────────────────────────────────────────────────
+// What plays, for Atmos's Now Playing widget (the Now Playing service). Set
+// again when the track, play/pause, length or volume changes, or the
+// position jumps (a seek): the widget moves the position on itself, so the
+// audio's time ticks aren't sent on.
+const NOW_PLAYING_ACTIONS = ['toggle', 'next', 'previous', 'seek', 'volume'];
+// What Atmos takes as artwork (a cover kept as some other kind of image isn't sent).
+const ARTWORK = /^data:image\/(?:png|jpeg|webp|gif);base64,/;
+let published = null; // { fingerprint, position, at, playing }
+let albumOf = { trackKey: undefined, album: null };
+
+function albumFor(track) {
+  if (albumOf.trackKey !== track.key) {
+    albumOf = { trackKey: track.key, album: track.key ? getAlbums().find(album => album.tracks.some(item => item.key === track.key)) || null : null };
+  }
+  return albumOf.album;
+}
+
+let rejectedCover = null; // a cover Atmos turned down (too large a picture, say): sent without it
+let untitledKey = null;   // a track whose name Atmos found nothing to show in: sent as "Untitled"
+
+function publishNowPlaying() {
+  if (!atmos.nowPlaying) return;
+  const track = playlist[audioState.trackIdx] || null;
+  if (!track) {
+    if (published) { published = null; atmos.nowPlaying.clear().catch(() => {}); }
+    return;
+  }
+  const album = albumFor(track);
+  const cover = typeof album?.cover === 'string' && ARTWORK.test(album.cover) && album.cover.length < 1_300_000 && album.cover !== rejectedCover ? album.cover : null;
+  // Not loaded yet (a queue restored at start): where it will start.
+  const position = Math.max(0, Number(now.source ? now.currentTime : audioState.trackPos) || 0);
+  const duration = Number(now.duration) > 0 ? Number(now.duration) : null;
+  const playing = !!now.playing;
+  const volume = Math.max(0, Math.min(100, Number(audioState.vol) || 0));
+  const fingerprint = [track.key || track.name, album?.artist || '', album?.album || '', cover?.length || 0, duration, playing, volume].join('|');
+  const expected = published ? published.position + (published.playing ? (Date.now() - published.at) / 1000 : 0) : null;
+  if (published?.fingerprint === fingerprint && Math.abs(position - expected) < 2) return;
+  const mine = published = { fingerprint, position, at: Date.now(), playing };
+  atmos.nowPlaying.set({
+    // A name with nothing to show (a file called ".mp3") would be refused.
+    title: (track.key || track.name) !== untitledKey && /[\p{L}\p{N}\p{S}\p{P}]/u.test(track.name || '') ? track.name : 'Untitled',
+    artist: album?.artist || null,
+    album: album?.album || null,
+    artwork: cover,
+    duration,
+    position: duration == null ? position : Math.min(position, duration),
+    playing,
+    actions: NOW_PLAYING_ACTIONS,
+    volume,
+  }).catch(error => {
+    if (published !== mine) return;
+    // What Atmos turned down is sent again at once without it: a cover it
+    // won't show, a name with nothing to show. Anything else waits for the
+    // next change (sending the same again would only be refused again).
+    if (cover && /artwork/i.test(error.message)) { rejectedCover = cover; published = null; publishNowPlaying(); return; }
+    if (/has a title/.test(error.message) && untitledKey !== (track.key || track.name)) { untitledKey = track.key || track.name; published = null; publishNowPlaying(); return; }
+    console.warn('[audio-player] Now Playing:', error.message);
+  });
+}
+
+/** The Now Playing widget's controls, for this extension's session. */
+function onNowPlayingControl({ action, value }) {
+  if (action === 'toggle') void togglePlay();
+  else if (action === 'next') void playNext();
+  else if (action === 'previous') void playPrev();
+  else if (action === 'seek' && Number.isFinite(value)) void seek(value);
+  else if (action === 'volume' && Number.isFinite(value)) setVolume(value);
 }
 
 // ── Waveform ────────────────────────────────────────────────────────────────
@@ -349,6 +421,7 @@ export async function start() {
       save('trackPos');
     }
     if (value.playing !== previous.playing || value.type === 'source' || value.type === 'loaded') announce();
+    else publishNowPlaying(); // a seek or the volume: only if Now Playing should hear it
   });
   now = await audio.state();
   await audio.setVolume((Number(audioState.vol) || 0) / 100);
@@ -366,7 +439,8 @@ export async function start() {
     void flush();
   });
 
-  onLibraryUpdate(() => { pruneWaveformCache(); announce(); });
+  onLibraryUpdate(() => { pruneWaveformCache(); albumOf = { trackKey: undefined, album: null }; announce(); });
+  atmos.nowPlaying?.onControl(onNowPlayingControl);
 
   // Space anywhere in Atmos outside a text field (boot "keys" in extension.json).
   atmos.surface.onKey(({ code }) => { if (code === 'Space') void togglePlay(); });

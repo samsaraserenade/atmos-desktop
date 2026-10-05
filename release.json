@@ -1,5 +1,5 @@
 {
-  "$comment": "What is released: the extensions a release packs and lists (npm run pack:extensions; an installer bundles none, scripts/after-pack.cjs drops them all) and what scripts/export-release.cjs copies into the public repo. Add a plugin, and any service only it uses, when you release it. The system services (audio, location, wallpaper) are part of Core (core/system) and always go with it.",
+  "$comment": "What is released: the extensions a release packs and lists (npm run pack:extensions; an installer bundles none, scripts/after-pack.cjs drops them all) and what scripts/export-release.cjs copies into the public repo. Add a plugin, and any service only it uses, when you release it. The system services (audio, wallpaper) are part of Core (core/system) and always go with it; Location and Now Playing are official services, installed with what uses them.",
   "plugins": [
     "audio-player",
     "matrix-chat",
@@ -11,6 +11,8 @@
     "fullscreen-viewer",
     "charting",
     "currency",
-    "market-data"
+    "market-data",
+    "now-playing",
+    "location"
   ]
 }

@@ -18,7 +18,7 @@ const contractFile = path.join(repo, 'scripts', 'sdk-contract', 'contract.js');
 const expected = JSON.parse(fs.readFileSync(path.join(repo, 'scripts', 'sdk-contract', 'expected.json'), 'utf8'));
 
 const PERMISSIONS = {
-  all: { invokes: ['service:audio', 'service:wallpaper', 'service:location'], browser: ['notifications'] },
+  all: { invokes: ['service:audio', 'service:wallpaper', 'service:location', 'service:now-playing'], browser: ['notifications'] },
   none: {},
 };
 

@@ -1,7 +1,7 @@
 {
   "all": {
     "declared": "all",
-    "sdkVersion": "1.3.0",
+    "sdkVersion": "1.4.0",
     "api": [
       "SDK_VERSION",
       "appearance",
@@ -23,6 +23,7 @@
       "listen",
       "location",
       "notifications",
+      "nowPlaying",
       "panel",
       "ready",
       "state",
@@ -48,8 +49,12 @@
         "set"
       ],
       "location": [
+        "allowDetect",
+        "forgetEarlier",
         "get",
-        "onChange"
+        "onChange",
+        "publish",
+        "takeEarlier"
       ],
       "state": [
         "get",
@@ -93,6 +98,13 @@
         "handle",
         "open",
         "refresh"
+      ],
+      "nowPlaying": [
+        "clear",
+        "control",
+        "onControl",
+        "sessions",
+        "set"
       ]
     },
     "extension": [
@@ -189,6 +201,46 @@
     "location": {
       "ok": "null"
     },
+    "nowPlaying": {
+      "set": {
+        "ok": "undefined"
+      },
+      "control": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": false
+      },
+      "noTitle": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "svg": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "anAddress": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "svgAsPng": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "huge": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "unknownAction": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "badKey": {
+        "error": "TypeError",
+        "saysWhatToDeclare": false
+      },
+      "clear": {
+        "ok": "undefined"
+      }
+    },
     "notifications": {
       "ok": "boolean"
     },
@@ -219,7 +271,7 @@
   },
   "none": {
     "declared": "none",
-    "sdkVersion": "1.3.0",
+    "sdkVersion": "1.4.0",
     "api": [
       "SDK_VERSION",
       "appearance",
@@ -241,6 +293,7 @@
       "listen",
       "location",
       "notifications",
+      "nowPlaying",
       "panel",
       "ready",
       "state",
@@ -266,8 +319,12 @@
         "set"
       ],
       "location": [
+        "allowDetect",
+        "forgetEarlier",
         "get",
-        "onChange"
+        "onChange",
+        "publish",
+        "takeEarlier"
       ],
       "state": [
         "get",
@@ -311,6 +368,13 @@
         "handle",
         "open",
         "refresh"
+      ],
+      "nowPlaying": [
+        "clear",
+        "control",
+        "onControl",
+        "sessions",
+        "set"
       ]
     },
     "extension": [
@@ -376,6 +440,16 @@
     "location": {
       "error": "AtmosPermissionError",
       "saysWhatToDeclare": true
+    },
+    "nowPlaying": {
+      "set": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": true
+      },
+      "control": {
+        "error": "AtmosPermissionError",
+        "saysWhatToDeclare": false
+      }
     },
     "notifications": {
       "error": "AtmosPermissionError",

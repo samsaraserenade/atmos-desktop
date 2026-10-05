@@ -377,9 +377,13 @@ api?.onEvent((guestId, type, payload) => {
     return;
   }
   const { owner, tabId } = tab;
-  // Ctrl+\ in a page: Atmos's command bar, not the browser's.
+  // Ctrl+\ in a page: Atmos's command bar, not the browser's. Alt+`: the sidebar.
   if (type === 'command' && payload?.command === 'command-bar') {
     window.dispatchEvent(new Event('atmos:command-bar'));
+    return;
+  }
+  if (type === 'command' && payload?.command === 'sidebar') {
+    window.dispatchEvent(new Event('atmos:toggle-sidebar'));
     return;
   }
   if (type === 'mouse-down') {

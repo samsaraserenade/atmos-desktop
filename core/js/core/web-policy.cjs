@@ -486,6 +486,9 @@ function shortcutFor(input) {
     if (key === '0') return 'zoom-reset';
     if (lower === 'p' && !input.shift) return 'print';
   }
+  // Atmos's sidebar (sidebar-shell.js), from a page as from anywhere: Alt
+  // and the key left of 1, whatever it types.
+  if (input.alt && !ctrl && !input.shift && (input.code === 'Backquote' || key === '`')) return 'sidebar';
   if (!ctrl && !input.alt && key === 'F5') return input.shift ? 'hard-reload' : 'reload';
   if (!ctrl && !input.alt && !input.shift && key === 'F6') return 'focus-address';
   if (input.alt && !ctrl && !input.shift && key === 'ArrowLeft') return 'back';
@@ -703,6 +706,67 @@ function iconBitmap(rgba, size = ICON_SIZE) {
   return out;
 }
 
+// ── What a page plays (Now Playing) ─────────────────────────────────────────
+//
+// A page's preload (web-page-preload.cjs) reports what plays in it: the
+// Media Session's metadata the page set, and its media elements' state.
+// All of it is the page's to make up, so Core takes only plain, bounded
+// values, and fetches the artwork itself (as a site icon is fetched: no
+// cookies, public addresses only) and draws it again as its own JPEG.
+
+const ARTWORK_SIZE = 384;               // pixels a side, as Core draws it again
+const ARTWORK_MAX_BYTES = 1024 * 1024;  // what Core fetches of one
+const MEDIA_ACTIONS = Object.freeze(['toggle', 'next', 'previous', 'seek']);
+
+const mediaText = (value, max) => (typeof value === 'string'
+  ? value.slice(0, max * 2).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, max) || null
+  : null);
+const seconds = value => (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1e9 ? value : null);
+
+/**
+ * A page's report, as Core keeps it: { title, artist, album, artwork:
+ * [{ src, sizes }], playing, position, duration, actions }, or null.
+ */
+function cleanMediaReport(report) {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+  const artwork = [];
+  for (const item of Array.isArray(report.artwork) ? report.artwork.slice(0, 10) : []) {
+    const src = typeof item?.src === 'string' && item.src.length <= 4096 && /^(https?:|data:image\/)/i.test(item.src) ? item.src : null;
+    if (src && !src.startsWith('data:') && !/^https?:\/\/[^\s]+$/i.test(src)) continue;
+    if (src) artwork.push({ src, sizes: typeof item.sizes === 'string' ? item.sizes.slice(0, 100) : '' });
+  }
+  const duration = seconds(report.duration);
+  const position = seconds(report.position);
+  return {
+    title: mediaText(report.title, 300),
+    artist: mediaText(report.artist, 300),
+    album: mediaText(report.album, 300),
+    artwork,
+    playing: report.playing === true,
+    position: position == null ? null : duration == null ? position : Math.min(position, duration),
+    duration: duration && duration > 0 ? duration : null,
+    actions: MEDIA_ACTIONS.filter(action => Array.isArray(report.actions) && report.actions.includes(action)),
+  };
+}
+
+/**
+ * Which of a page's artwork to fetch: the smallest at least ARTWORK_SIZE a
+ * side, else the largest; one without sizes counts as large enough only
+ * when nothing says its size.
+ */
+function pickArtwork(artwork) {
+  if (!Array.isArray(artwork) || !artwork.length) return null;
+  const side = item => {
+    const sizes = String(item.sizes || '').toLowerCase().split(/\s+/).map(size => /^(\d+)x(\d+)$/.exec(size)).filter(Boolean);
+    return sizes.length ? Math.max(...sizes.map(match => Math.min(Number(match[1]), Number(match[2])))) : null;
+  };
+  const sized = artwork.map(item => ({ item, side: side(item) }));
+  const known = sized.filter(entry => entry.side != null);
+  if (!known.length) return artwork.at(-1).src;
+  const bigEnough = known.filter(entry => entry.side >= ARTWORK_SIZE).sort((a, b) => a.side - b.side);
+  return (bigEnough[0] || known.sort((a, b) => b.side - a.side)[0]).item.src;
+}
+
 // ── Zoom ─────────────────────────────────────────────────────────────────────
 
 const ZOOM_FACTORS = Object.freeze([0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]);
@@ -748,4 +812,5 @@ module.exports = {
   USER_ACTIVATION_MS, activatesUser, mouseCommand, createActivations, LEAVE_QUIET_MS, LEAVE_ACTED_MS, askBeforeLeaving,
   downloadName, uniqueName, openableDownload, httpsUpgrade, httpsFallbackError, insecureDownload,
   shortcutFor, nextZoom, webviewAttachment,
+  ARTWORK_SIZE, ARTWORK_MAX_BYTES, MEDIA_ACTIONS, cleanMediaReport, pickArtwork,
 };

@@ -442,6 +442,21 @@ setTimeout(() => {
     const afterBar = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify({ value: document.getElementById("field").value })'));
     check('…Esc closes it and the page has the keyboard again, the sidebar as it was', barClosed && afterBar.value.includes('z')
       && await page.evaluate(() => document.body.classList.contains('drawer-open')) === sidebarOpen, { barClosed, afterBar, active: await page.evaluate(() => document.activeElement?.tagName) });
+    // Alt+` is Atmos's sidebar from anywhere: typing in a page (which never
+    // gets it), and from the address bar, where Tab can't be.
+    const drawerOpen = () => page.evaluate(() => document.body.classList.contains('drawer-open'));
+    const keysBeforeAlt = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)')).length;
+    await x.key('alt+grave');
+    const toggledInPage = await until(async () => (await drawerOpen()) !== sidebarOpen, { timeout: 3000 });
+    const keysAfterAlt = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)')).slice(keysBeforeAlt);
+    await x.key('ctrl+l');
+    await wait(300);
+    await x.key('alt+grave');
+    const backFromAddress = await until(async () => (await drawerOpen()) === sidebarOpen, { timeout: 3000 });
+    await x.key('Escape');
+    await wait(200);
+    check('Alt+` opens and closes the sidebar while typing in a page (the page doesn\'t get it) and from the address bar',
+      !!toggledInPage && !!backFromAddress && !keysAfterAlt.includes('`'), { toggledInPage, backFromAddress, keysAfterAlt });
     // The browser's rev/ commands (src/commands.js), typed in Atmos's bar:
     // a new tab going somewhere, a tab by name, closing one.
     const tabsBefore = (await tabs()).length;
@@ -978,6 +993,54 @@ setTimeout(() => {
     grab('16-sidebar');
     await page.evaluate(async () => (await import('atmos-core/core/sidebar-shell.js')).closeSidebar?.());
     await wait(500);
+
+    // ── Now Playing ───────────────────────────────────────────────────────
+    // A page that plays: in Now Playing with what its Media Session says and
+    // its artwork (fetched and drawn again by Core); the widget's play/pause
+    // and "next" reach the page; a new page ends it.
+    step('now playing');
+    const M = pages.http('media.test');
+    await go(`${M}/media`);
+    await clickIn(`${M}/media`, '#play');
+    await page.evaluate(async () => {
+      (await import('atmos-core/core/sidebar-shell.js')).openSidebar();
+      const section = document.getElementById('fin-section-audio-player');
+      if (section && !section.classList.contains('open')) section.querySelector('.fin-section-label')?.click();
+      section?.scrollIntoView({ block: 'center' });
+    });
+    const nowPlayingFrame = () => page.frames().find(f => f.url().includes('ext=service%3Anow-playing') && f.url().includes('surface=sidebar')) || null;
+    const nowPlaying = () => nowPlayingFrame()?.evaluate(() => ({
+      title: document.getElementById('np-track')?.textContent,
+      artist: document.getElementById('np-artist')?.textContent,
+      hint: document.getElementById('np-cover')?.title,
+      art: document.querySelector('#np-cover-img img')?.naturalWidth || 0,
+      icon: document.getElementById('np-cover-img')?.classList.contains('np-cover-icon'),
+    })).catch(() => null);
+    const playingShown = await until(async () => { const seen = await nowPlaying(); return seen?.title === 'Tone' && seen.art > 0 ? seen : null; }, { timeout: 12000 });
+    const audibleNow = await engine(e => e.selected().audible);
+    check('a page playing is in Now Playing: its Media Session\'s title, artist (and the site) and artwork (Core\'s 384-pixel drawing), with play/pause and next',
+      !!playingShown && /^Pages · media\.test/.test(playingShown.artist) && playingShown.art === 384 && !playingShown.icon && /play\/pause/.test(playingShown.hint) && /next/.test(playingShown.hint),
+      { playingShown, audibleNow, last: await nowPlaying() });
+    grab('16b-now-playing');
+    // Its cover, clicked: the page's audio pauses.
+    const coverAt = await nowPlayingFrame()?.evaluate(() => { const b = document.getElementById('np-cover').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; }).catch(() => null);
+    const npBox = await page.evaluate(() => document.querySelector('#fin-section-audio-player iframe')?.getBoundingClientRect().toJSON() ?? null);
+    if (coverAt && npBox) {
+      await wait(700); // a press just after it changed is ignored
+      await x.click(npBox.x + coverAt.x, npBox.y + coverAt.y);
+    }
+    const pausedByWidget = await until(async () => JSON.parse(await inPage(`${M}/media`, 'JSON.stringify(document.getElementById("audio").paused)')), { timeout: 5000 });
+    // Next: the page's own handler (the widget's drag right sends the same).
+    const tabId = await engine(e => e.selectedId());
+    await nowPlayingFrame()?.evaluate(async id => (await import('atmos-sdk')).default.nowPlaying.control(`plugin:browser|${id}`, 'next'), tabId).catch(error => error.message);
+    const nexted = await until(async () => JSON.parse(await inPage(`${M}/media`, 'JSON.stringify(window.__next)')) === 1, { timeout: 4000 });
+    check('…its play/pause and next reach the page (the page\'s own handler for next)', !!pausedByWidget && !!nexted, { pausedByWidget, nexted });
+    await go(`${A}/solid?title=After`);
+    const ended = await until(async () => (await nowPlaying())?.title !== 'Tone', { timeout: 6000 });
+    check('…and a new page in the tab ends it', !!ended, await nowPlaying());
+    await x.move(W / 2, H / 2);
+    await page.evaluate(async () => (await import('atmos-core/core/sidebar-shell.js')).closeSidebar?.());
+    await wait(400);
 
     // ── Private tabs ──────────────────────────────────────────────────────
     step('private tabs');

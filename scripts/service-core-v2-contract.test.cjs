@@ -47,7 +47,8 @@ serviceTest('installed services declare compatible Core API v2 manifests', () =>
 
   for (const id of installed) {
     const manifest = JSON.parse(read(path.join(id, 'extension.json')));
-    assert.equal(manifest.apiVersion, 2, `${id} must target Core API v2`);
+    // A framed service (Now Playing: a widget, SDK 1.x) is apiVersion 4, as framed plugins are.
+    assert.equal(manifest.apiVersion, manifest.runtime === 'frame' ? 4 : 2, `${id} must target Core API v2 (or 4, framed)`);
     assert.equal(manifest.requires?.['extensions.manifest'], 1, `${id} must require manifest support`);
   }
 });
@@ -88,21 +89,22 @@ serviceTest('privileged services use scoped Core handlers and capabilities', () 
   assert.equal(JSON.parse(read('media-metadata/extension.json')).library, true);
 });
 
-test('the Location system service uses namespaced persistence and lifecycle cleanup', () => {
-  const locationPersist = readSystem('location/persist.js');
-  assert.match(locationPersist, /registerStateNamespace\('location'/);
-  assert.match(locationPersist, /location-legacy-v1/);
-
-  const location = readSystem('location/index.js');
-  assert.match(location, /createEventScope\('location'/);
-  assert.doesNotMatch(location, /state\.userLocation/);
-
-  const settings = readSystem('location/settings.js');
-  assert.match(settings, /category: 'Appearance'/);
-  assert.match(settings, /mount\(bodyEl, context\)/);
-  assert.match(settings, /context\.listen/);
-  assert.match(settings, /signal: context\.signal/);
-  assert.doesNotMatch(settings, /addEventListener/);
+test('Location is an official service (0.21): framed, its geolocation declared, Atmos only reading what it kept before', () => {
+  assert.equal(fs.existsSync(path.join(systemRoot, 'location')), false, 'no longer part of Core');
+  const manifest = JSON.parse(read('location/extension.json'));
+  assert.equal(manifest.runtime, 'frame');
+  assert.equal(manifest.isolation, 'origin');
+  assert.deepEqual(manifest.permissions.browser, ['geolocation']);
+  assert.deepEqual(manifest.permissions.network, ['geocoding-api.open-meteo.com', 'nominatim.openstreetmap.org']);
+  assert.deepEqual(Object.keys(manifest.contributes).sort(), ['boot', 'settings']);
+  // Detect asks Atmos first; the location goes out through Atmos.
+  assert.match(read('location/settings.js'), /atmos\.location\.allowDetect\(\)/);
+  assert.match(read('location/boot.js'), /atmos\.location\.publish\(/);
+  assert.match(read('location/boot.js'), /atmos\.location\.takeEarlier\(\)/);
+  // What Atmos kept before: its old namespace, read once.
+  const legacy = fs.readFileSync(path.join(systemRoot, '..', 'js', 'core', 'location-legacy.js'), 'utf8');
+  assert.match(legacy, /registerStateNamespace\('location'/);
+  assert.match(legacy, /location-legacy-v1/);
 });
 
 serviceTest('main-process service entry points register only their Core-owned surfaces', async () => {

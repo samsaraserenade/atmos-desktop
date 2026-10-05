@@ -71,7 +71,7 @@ const run = (name, input = {}) => atmos.fake.runCommand(name, input);
 const suggest = (name, input = {}) => atmos.fake.suggestCommand(name, input);
 
 test('the commands are declared for Atmos\'s bar, with the Atmos that has it, and all handled', () => {
-  assert.equal(manifest.engines.atmos, '>=0.20.0', 'atmos.commands is SDK 1.3 (Atmos 0.20.0)');
+  assert.equal(manifest.engines.atmos, '>=0.21.0', 'atmos.commands is SDK 1.3 (Atmos 0.20.0); atmos.nowPlaying 1.4 (0.21.0)');
   assert.deepEqual(manifest.contributes.commands.map(command => command.name), ['play', 'next', 'previous', 'song', 'album']);
   assert.deepEqual(atmos.fake.commandsHandled.sort(), ['album', 'next', 'play', 'previous', 'song']);
   const play = manifest.contributes.commands[0];

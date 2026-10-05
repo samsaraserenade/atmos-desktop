@@ -1,10 +1,10 @@
 {
   "apiVersion": 4,
   "engines": {
-    "atmos": ">=0.20.0"
+    "atmos": ">=0.21.0"
   },
   "tier": "first-party",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -63,6 +63,16 @@
     ]
   },
   "permissions": {
-    "web": true
+    "web": true,
+    "invokes": [
+      "service:now-playing"
+    ]
+  },
+  "dependencies": {
+    "now-playing": {
+      "version": "^1.0.0",
+      "optional": true,
+      "recommended": true
+    }
   }
 }

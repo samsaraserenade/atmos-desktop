@@ -27,12 +27,19 @@ const { createWebSettings } = require('./web-settings.cjs');
 
 // Every tab and pop-up gets this preload, and no other: it gives
 // window.chrome Chrome's members (Google's sign-in refuses a Chrome without
-// them) and asks for the ad blocker's styles and scriptlets for its own page,
-// over the two channels below. It holds nothing else.
+// them), asks for the ad blocker's styles and scriptlets for its own page,
+// and says what plays in it (Now Playing), over the channels below. It
+// holds nothing else.
 const PAGE_PRELOAD = path.join(__dirname, 'web-page-preload.cjs');
 const PAGE_FILTERS = 'atmos-web:page-filters';   // sync: as a page starts
 const PAGE_TOKENS = 'atmos-web:page-tokens';     // the DOM's class names, ids, links
+const PAGE_MEDIA = 'atmos-web:page-media';       // what plays in it
+const MEDIA_CONTROL = 'atmos-web:media-control'; // Core to the page: play/pause, next, previous, seek
 const TOKEN_MESSAGES = 400;                      // per page load
+const MEDIA_MESSAGES_PER_SECOND = 8;             // a page's reports of what plays
+const ARTWORK_FETCHES = 4;                       // artwork downloads at once, all tabs (one per tab)
+const ARTWORK_DECODES = 4;                       // and waiting to be drawn
+const USER_STARTED_MS = 5000;                    // a page that starts playing this soon after you acted in it: you started it
 // Filter lists download in a session of their own (in memory, nothing in it).
 const LISTS_PARTITION = 'atmos-browser-lists';
 const MAX_LIST_BYTES = 16 * 1024 * 1024;
@@ -53,8 +60,9 @@ const EXPECTED_DOWNLOAD_MS = 60 * 1000;          // a download Core asked a page
 const CORE_WORLD = 1025;
 
 // Run in the icon decoder's page (see decodeIcon): the image drawn into a
-// square canvas, fitted and centred, and its pixels back as base64 RGBA.
-const DECODE_ICON = `(async (b64, type, size) => {
+// square canvas, fitted and centred (or, for artwork, filling it, cut to
+// the middle), and its pixels back as base64 RGBA.
+const DECODE_ICON = `(async (b64, type, size, cover) => {
   const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   const url = URL.createObjectURL(new Blob([bytes], { type }));
   try {
@@ -66,7 +74,7 @@ const DECODE_ICON = `(async (b64, type, size) => {
     canvas.height = size;
     const context = canvas.getContext('2d');
     const w = image.naturalWidth || size, h = image.naturalHeight || size;
-    const scale = Math.min(size / w, size / h);
+    const scale = cover ? Math.max(size / w, size / h) : Math.min(size / w, size / h);
     context.imageSmoothingQuality = 'high';
     context.drawImage(image, (size - w * scale) / 2, (size - h * scale) / 2, w * scale, h * scale);
     const data = context.getImageData(0, 0, size, size).data;
@@ -102,6 +110,8 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   const secureOpeners = new Map();    // address -> until when
   const memoryLevels = new Map();    // tab's webContents id -> the last 'memory' step it was told about
   const faviconCache = new Map();    // "private|url" -> data URL
+  const artworkCache = new Map();    // "private|url" -> data URL (a JPEG Core drew)
+  const mediaOf = new Map();         // webContents id -> { report, artworkSrc, artwork, rate: { at, count } }
   const blockedByTab = new Map();    // webContents id -> { count, hosts: Map(host -> n), timer }
   const tokenBudget = new Map();     // webContents id -> page-token messages left for this page
   const navigations = new Map();     // webContents id -> its page navigations started (the token budget's)
@@ -207,22 +217,28 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     return decoder;
   }
 
-  /** `bytes` of an image (`type` image/…): a PNG data URL made by Core from its pixels, or null. */
-  async function decodeIcon(bytes, type) {
+  /**
+   * `bytes` of an image (`type` image/…): a data URL made by Core from its
+   * pixels, or null. An icon: 32×32, fitted, a PNG; `artwork`: filling
+   * ARTWORK_SIZE², a JPEG.
+   */
+  async function decodeIcon(bytes, type, { artwork = false } = {}) {
+    const size = artwork ? policy.ARTWORK_SIZE : policy.ICON_SIZE;
     const decoder = iconDecoderPage();
     clearTimeout(decoder.idle);
     let timer;
     try {
       await decoder.ready;
-      const script = `${DECODE_ICON}(${JSON.stringify(bytes.toString('base64'))}, ${JSON.stringify(type)}, ${policy.ICON_SIZE})`;
+      const script = `${DECODE_ICON}(${JSON.stringify(bytes.toString('base64'))}, ${JSON.stringify(type)}, ${size}, ${artwork})`;
       const answer = await Promise.race([
         decoder.view.webContents.executeJavaScript(script),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('the icon took too long')), ICON_DECODE_MS); }),
       ]);
-      const bitmap = policy.iconBitmap(typeof answer === 'string' ? Buffer.from(answer, 'base64') : null);
+      const bitmap = policy.iconBitmap(typeof answer === 'string' ? Buffer.from(answer, 'base64') : null, size);
       if (!bitmap) return null;
-      const png = nativeImage.createFromBitmap(bitmap, { width: policy.ICON_SIZE, height: policy.ICON_SIZE }).toPNG();
-      return png.length ? `data:image/png;base64,${png.toString('base64')}` : null;
+      const image = nativeImage.createFromBitmap(bitmap, { width: size, height: size });
+      const encoded = artwork ? image.toJPEG(85) : image.toPNG();
+      return encoded.length ? `data:image/${artwork ? 'jpeg' : 'png'};base64,${encoded.toString('base64')}` : null;
     } catch {
       // Stuck or broken: a new page next time.
       closeIconDecoder();
@@ -254,10 +270,11 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   /**
    * One request for an icon, without cookies: { image: { type, bytes } },
    * { redirect: url } (not followed: the caller checks it first), or null.
-   * At most ICON_MAX_BYTES, an image type.
+   * At most `maxBytes`, an image type.
    */
-  function requestIcon(ses, url) {
+  function requestIcon(ses, url, maxBytes = policy.ICON_MAX_BYTES, signal = null) {
     return new Promise(resolve => {
+      if (signal?.aborted) { resolve(null); return; }
       let settled = false;
       let timer = null;
       const finish = value => {
@@ -272,6 +289,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       } catch { finish(null); return; }
       const stop = () => { try { request.abort(); } catch { /* done already */ } finish(null); };
       timer = setTimeout(stop, 8000);
+      signal?.addEventListener('abort', stop, { once: true });
       // Not followed here (the request then ends): the caller checks where it goes first.
       request.on('redirect', (_status, _method, next) => finish({ redirect: String(next) }));
       request.on('response', response => {
@@ -282,7 +300,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
         let size = 0;
         response.on('data', chunk => {
           size += chunk.length;
-          if (size > policy.ICON_MAX_BYTES) { stop(); return; }
+          if (size > maxBytes) { stop(); return; }
           chunks.push(Buffer.from(chunk));
         });
         response.on('end', () => finish(size ? { image: { type, bytes: Buffer.concat(chunks) } } : null));
@@ -304,9 +322,10 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
    * unless the request goes through a proxy, which resolves it instead (and
    * where a lookup here may not work at all). Five redirects at most.
    */
-  async function fetchIcon(ses, url, pageUrl) {
+  async function fetchIcon(ses, url, pageUrl, maxBytes = policy.ICON_MAX_BYTES, signal = null) {
     let target = url;
     for (let hop = 0; hop <= 5; hop += 1) {
+      if (signal?.aborted) return null;
       if (!policy.iconFetchAllowed(target, pageUrl)) return null;
       const name = policy.iconLookup(target, pageUrl);
       let direct = true;
@@ -318,7 +337,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
         try { ({ endpoints } = await ses.resolveHost(name)); } catch { return null; }
         if (!endpoints?.length || endpoints.some(endpoint => policy.isLocalAddress(endpoint.address))) return null;
       }
-      const answer = await requestIcon(ses, target);
+      const answer = await requestIcon(ses, target, maxBytes, signal);
       if (!answer?.redirect) return answer?.image || null;
       target = answer.redirect;
     }
@@ -346,6 +365,66 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     if (faviconCache.size > 300) faviconCache.clear();
     faviconCache.set(key, dataUrl);
     send(contents.id, 'favicon', { dataUrl, pageUrl: contents.getURL() });
+  }
+
+  // ── What a page plays (Now Playing) ───────────────────────────────────────
+  // The page's preload reports it (PAGE_MEDIA, checked in web-policy.cjs);
+  // Core adds the artwork, fetched and drawn again as a site icon is, and
+  // tells the tab's extension ('media'). Atmos Browser shows it in Now
+  // Playing and sends the widget's controls back (atmos.web.media).
+
+  // Artwork has a queue of its own (site icons don't wait behind it), and
+  // few at once: a tab fetches one (a newer src aborts the one before), and
+  // all tabs ARTWORK_FETCHES, checked before a download starts.
+  let artworkQueue = Promise.resolve();
+  let artworkFetching = 0;
+  let artworkWaiting = 0;
+
+  /** The artwork at `src` for the page, as a JPEG Core drew: a data URL, or null. */
+  async function artworkFor(contents, src, signal) {
+    const key = `${isPrivateSession(contents.session) ? 'p' : 'n'}|${src}`;
+    if (artworkCache.has(key)) return artworkCache.get(key);
+    let image = /^data:/i.test(src) ? policy.imageDataUrlBytes(src, policy.ARTWORK_MAX_BYTES) : null;
+    if (!image && /^https?:/i.test(src) && policy.iconFetchAllowed(src, contents.getURL())) {
+      if (artworkFetching >= ARTWORK_FETCHES) return null;
+      artworkFetching += 1;
+      try { image = await fetchIcon(contents.session, src, contents.getURL(), policy.ARTWORK_MAX_BYTES, signal); } finally { artworkFetching -= 1; }
+    }
+    if (!image || signal?.aborted || artworkWaiting >= ARTWORK_DECODES) return null;
+    artworkWaiting += 1;
+    const decoded = artworkQueue.then(() => (signal?.aborted ? null : decodeIcon(image.bytes, image.type, { artwork: true })));
+    artworkQueue = decoded.catch(() => null);
+    let dataUrl = null;
+    try { dataUrl = await decoded; } catch { dataUrl = null; } finally { artworkWaiting -= 1; }
+    if (signal?.aborted) return null;
+    if (artworkCache.size > 40) artworkCache.clear();
+    artworkCache.set(key, dataUrl);
+    return dataUrl;
+  }
+
+  /**
+   * To the tab's extension: what plays, and whether you acted in the page
+   * (or moved it from the browser) a moment ago, so a page that starts
+   * playing by itself can be told from one you started (`userActed`).
+   */
+  function sendMedia(contents) {
+    if (contents.isDestroyed()) return;
+    const entry = mediaOf.get(contents.id);
+    const { artwork: _list, ...report } = entry?.report || {};
+    const actedAt = Math.max(activations.lastAt(contents.id), coreActedAt.get(contents.id) || 0);
+    send(contents.id, 'media', {
+      media: entry?.report ? { ...report, artwork: entry.artwork || null } : null,
+      userActed: Date.now() - actedAt < USER_STARTED_MS,
+    });
+  }
+
+  /** A new page, or the page gone: what played is over. */
+  function endMedia(contents) {
+    const entry = mediaOf.get(contents.id);
+    if (!entry) return;
+    entry.fetch?.abort();
+    mediaOf.delete(contents.id);
+    if (entry.report) send(contents.id, 'media', { media: null, userActed: false });
   }
 
   // ── Ads and trackers (web-adblock.cjs) ──────────────────────────────────
@@ -560,6 +639,36 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     if (left <= 0) return null;
     tokenBudget.set(page.contents.id, left - 1);
     return adblock.pageTokens(page.url, tokens);
+  });
+  // What plays in it: a few reports a second at most (the rest dropped; the
+  // preload sends again on the next change), checked, then the artwork.
+  ipcMain.on(PAGE_MEDIA, (event, input) => {
+    const page = pageFrom(event);
+    if (!page || !live.get(page.contents.id)?.tab) return;
+    const { contents } = page;
+    const entry = mediaOf.get(contents.id) || { report: null, artworkSrc: null, artwork: null, fetch: null, rate: { at: 0, count: 0 } };
+    mediaOf.set(contents.id, entry);
+    const now = Date.now();
+    if (now - entry.rate.at >= 1000) entry.rate = { at: now, count: 0 };
+    if (++entry.rate.count > MEDIA_MESSAGES_PER_SECOND) return;
+    entry.report = policy.cleanMediaReport(input);
+    const src = entry.report ? policy.pickArtwork(entry.report.artwork) : null;
+    if (src !== entry.artworkSrc) {
+      entry.artworkSrc = src;
+      entry.artwork = null;
+      entry.fetch?.abort();
+      entry.fetch = null;
+      if (src) {
+        const fetch = entry.fetch = new AbortController();
+        void artworkFor(contents, src, fetch.signal).then(dataUrl => {
+          if (mediaOf.get(contents.id) !== entry || entry.artworkSrc !== src || fetch.signal.aborted) return;
+          entry.fetch = null;
+          entry.artwork = dataUrl;
+          sendMedia(contents);
+        }).catch(() => {});
+      }
+    }
+    sendMedia(contents);
   });
 
   // ── Asking the user (the extension draws the prompt) ─────────────────────
@@ -814,6 +923,9 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       activations.forget(guestId);
       leaveRefusedAt.delete(guestId);
       endUpgrade(guestId);
+      // What the page before played is over (only now: a navigation that
+      // never commits, a download say, leaves it playing).
+      endMedia(contents);
       applyZoom(contents);
       send(guestId, 'navigated', { url, title: contents.getTitle(), inPage: false });
       sendState(contents);
@@ -838,7 +950,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     }));
     contents.on('enter-html-full-screen', () => { fullscreen = true; send(guestId, 'fullscreen', { on: true }); });
     contents.on('leave-html-full-screen', () => { fullscreen = false; send(guestId, 'fullscreen', { on: false }); });
-    contents.on('render-process-gone', (_event, details) => send(guestId, 'crashed', { reason: details.reason }));
+    contents.on('render-process-gone', (_event, details) => { endMedia(contents); send(guestId, 'crashed', { reason: details.reason }); });
     contents.on('destroyed', () => forgetGuest(guestId));
   }
 
@@ -874,7 +986,8 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     closing.delete(guestId);
     dropRequestsOf(guestId);
     resetBlocked(guestId);
-    for (const map of [tokenBudget, navigations, budgetFor, leaveRefusedAt, coreActedAt]) map.delete(guestId);
+    mediaOf.get(guestId)?.fetch?.abort();
+    for (const map of [tokenBudget, navigations, budgetFor, leaveRefusedAt, coreActedAt, mediaOf]) map.delete(guestId);
     activations.forget(guestId);
     downloadReady.delete(guestId);
     for (const key of [...expectedDownloads.keys()]) if (key.startsWith(`${guestId}\n`)) expectedDownloads.delete(key);
@@ -915,7 +1028,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     const privateSession = configureSessions().private;
     settings.clearPrivate();
     httpOnly.private.clear();
-    for (const key of [...faviconCache.keys()]) if (key.startsWith('p|')) faviconCache.delete(key);
+    for (const cache of [faviconCache, artworkCache]) for (const key of [...cache.keys()]) if (key.startsWith('p|')) cache.delete(key);
     for (const [id, entry] of [...downloads]) {
       if (entry.record.private && entry.record.state !== 'progressing') { downloads.delete(id); send(null, 'download-removed', { id }); }
     }
@@ -1258,6 +1371,13 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     },
     focus: contents => contents.focus(),
     state: contents => state(contents),
+    // Now Playing's controls, for what plays in the page: play/pause, next,
+    // previous, seek (seconds). The page's preload does it (web-page-preload.cjs).
+    media(contents, action, value) {
+      if (!policy.MEDIA_ACTIONS.includes(action)) throw new Error(`unknown media action ${String(action).slice(0, 20)}`);
+      if (action === 'seek' && !(typeof value === 'number' && Number.isFinite(value) && value >= 0)) throw new Error('seek to a number of seconds, 0 or more');
+      contents.send(MEDIA_CONTROL, { action, value: action === 'seek' ? value : null });
+    },
     // The site's shield: up (blocking) or down (its ads and trackers allowed).
     // Kept per site; a private tab's choice stays with the private session.
     shield(contents, on) {
@@ -1348,7 +1468,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   handle('web:clear-data', async what => {
     const ses = configureSessions().ordinary;
     if (what?.cookies) await ses.clearStorageData();
-    if (what?.cache) { await ses.clearCache(); faviconCache.clear(); }
+    if (what?.cache) { await ses.clearCache(); faviconCache.clear(); artworkCache.clear(); }
     if (what?.siteSettings) settings.clear({ permissions: true, zoom: true });
     return true;
   });
@@ -1423,6 +1543,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     return true;
   }
 
+  let lastPointerDown = null; // the Atmos window's last mouse-button press (setWindow)
   return {
     isWebSession,
     applyPolicy(contents) { applyPolicy(contents); track(contents); },
@@ -1433,6 +1554,12 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     routeShell,
     /** When the Atmos window last had a click or key (its page or a frame in it), in ms. */
     atmosActedAt: () => activations.lastAt('atmos'),
+    /**
+     * Where and when the Atmos window last had a mouse button pressed:
+     * { x, y, at } in its page's pixels, as Chromium reported it (a frame
+     * can't make one up), or null.
+     */
+    atmosPointerDown: () => lastPointerDown,
     forgetExtensionData,
     closePages,
     setWindow(win) {
@@ -1442,7 +1569,12 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       // Atmos then opens here comes to the front (openLink).
       const acted = () => activations.activate('atmos');
       win.webContents.on('before-input-event', (_event, input) => { if (policy.activatesUser(input)) acted(); });
-      win.webContents.on('before-mouse-event', (_event, mouse) => { if (mouse.type === 'mouseDown') acted(); });
+      win.webContents.on('before-mouse-event', (_event, mouse) => {
+        if (mouse.type !== 'mouseDown') return;
+        acted();
+        const zoom = win.webContents.getZoomFactor?.() || 1;
+        lastPointerDown = { x: mouse.x / zoom, y: mouse.y / zoom, at: Date.now() };
+      });
       win.webContents.on('input-event', (_event, input) => { if (input.type === 'touchEnd' || input.type === 'gestureTap') acted(); });
       // Before the window goes (closed, or Atmos quitting), its tabs' pages
       // close as Chrome closes them: destroying the window would destroy

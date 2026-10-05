@@ -8,8 +8,8 @@
  *
  * It records shapes (key → type) and the values that matter, never timing.
  * `declared` says which extension it runs as:
- *   'all'   declares service:audio, service:wallpaper, service:location
- *           and "notifications"
+ *   'all'   declares service:audio, service:wallpaper, service:location,
+ *           service:now-playing and "notifications"
  *   'none'  declares nothing
  * Neither declares a network host, another extension or a library.
  *
@@ -64,7 +64,7 @@ export async function runContract(atmos, { declared }) {
   // What the SDK has.
   report.sdkVersion = atmos.SDK_VERSION;
   report.api = members(atmos).filter(name => name !== 'fake');
-  report.members = Object.fromEntries(['audio', 'wallpaper', 'location', 'state', 'events', 'lifecycle', 'notifications', 'appearance', 'contextMenu', 'clipboard', 'panel', 'commands']
+  report.members = Object.fromEntries(['audio', 'wallpaper', 'location', 'state', 'events', 'lifecycle', 'notifications', 'appearance', 'contextMenu', 'clipboard', 'panel', 'commands', 'nowPlaying']
     .map(name => [name, members(atmos[name])]));
   report.extension = members(atmos.extension);
   report.surface = members(atmos.surface).filter(name => typeof atmos.surface[name] !== 'function');
@@ -127,6 +127,28 @@ export async function runContract(atmos, { declared }) {
 
   // Location: read-only; null until the user sets one.
   report.location = await outcome(() => atmos.location.get());
+
+  // Now Playing (1.4): what this extension plays, checked as it's set; all
+  // sessions, and controls, are the Now Playing service's alone.
+  report.nowPlaying = {
+    set: await outcome(() => atmos.nowPlaying.set({ title: 'Contract', artist: 'Tester', playing: true, duration: 10, position: 2, actions: ['toggle', 'seek'], artwork: pixelPng() })),
+    control: await outcome(() => atmos.nowPlaying.control('plugin:contract|main', 'toggle')),
+  };
+  if (all) {
+    report.nowPlaying.noTitle = await outcome(() => atmos.nowPlaying.set({ playing: false }));
+    report.nowPlaying.svg = await outcome(() => atmos.nowPlaying.set({ title: 'x', playing: false, artwork: new Blob(['<svg xmlns="http://www.w3.org/2000/svg"/>'], { type: 'image/svg+xml' }) }));
+    report.nowPlaying.anAddress = await outcome(() => atmos.nowPlaying.set({ title: 'x', playing: false, artwork: 'https://example.com/cover.png' }));
+    // An SVG claiming to be a PNG; a PNG claiming 5000 pixels a side.
+    report.nowPlaying.svgAsPng = await outcome(() => atmos.nowPlaying.set({ title: 'x', playing: false, artwork: new Blob(['<svg xmlns="http://www.w3.org/2000/svg"/>'], { type: 'image/png' }) }));
+    report.nowPlaying.huge = await outcome(async () => {
+      const bytes = new Uint8Array(await pixelPng().arrayBuffer());
+      new DataView(bytes.buffer).setUint32(16, 5000);
+      return atmos.nowPlaying.set({ title: 'x', playing: false, artwork: new Blob([bytes], { type: 'image/png' }) });
+    });
+    report.nowPlaying.unknownAction = await outcome(() => atmos.nowPlaying.set({ title: 'x', playing: false, actions: ['delete'] }));
+    report.nowPlaying.badKey = await outcome(() => atmos.nowPlaying.set({ title: 'x', playing: false }, 'no spaces'));
+    report.nowPlaying.clear = await outcome(() => atmos.nowPlaying.clear());
+  }
 
   // Notifications: whether one was shown depends on the system, not the SDK.
   report.notifications = await outcome(() => atmos.notifications.show({ title: 'Contract', silent: true }));

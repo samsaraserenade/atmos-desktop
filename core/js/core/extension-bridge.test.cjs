@@ -563,3 +563,93 @@ test('commands: Core asks the frame to run or suggest, and hears back once; a fr
   await assert.rejects(pending, /frame went away/);
   await assert.rejects(bridge.requestCommand('run', 'roll', {}), /frame went away/);
 });
+
+test('location (SDK 1.4): only the official Location service publishes, takes and clears what Atmos kept, or opens Detect', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const calls = [];
+  const location = {
+    get: async () => null, subscribe: () => () => {},
+    publish: value => calls.push(['publish', value]),
+    takeEarlier: () => ({ lat: 1, lon: 2, label: 'Earlier', mode: 'manual' }),
+    forgetEarlier: () => calls.push(['forgetEarlier']),
+    allowDetect: async () => { calls.push(['allowDetect']); return true; },
+  };
+  for (const extension of [
+    { tier: 'third-party', permissions: { invokes: ['service:location'] } },
+    { id: 'location', kind: 'service', tier: 'third-party' },
+    { id: 'weather', kind: 'plugin', tier: 'first-party', permissions: { invokes: ['service:location'] } },
+  ]) {
+    const other = harness(createExtensionBridge, { extension, deps: { location } });
+    for (const method of ['location.publish', 'location.takeEarlier', 'location.forgetEarlier', 'location.allowDetect']) {
+      assert.match((await other.request(method, { lat: 0, lon: 0 })).error.message, /only Atmos's Location service/, `${extension.id ?? 'a community plugin'}: ${method}`);
+    }
+  }
+  assert.deepEqual(calls, []);
+  const service = harness(createExtensionBridge, { extension: { id: 'location', kind: 'service', tier: 'first-party' }, deps: { location } });
+  assert.equal((await service.request('location.publish', { lat: 51.5, lon: -0.12 })).error, undefined);
+  assert.deepEqual((await service.request('location.takeEarlier')).result, { lat: 1, lon: 2, label: 'Earlier', mode: 'manual' });
+  assert.equal((await service.request('location.forgetEarlier')).error, undefined);
+  assert.equal((await service.request('location.allowDetect')).result, true);
+  assert.deepEqual(calls, [['publish', { lat: 51.5, lon: -0.12 }], ['forgetEarlier'], ['allowDetect']]);
+  location.allowDetect = async () => { throw new Error('Detect works from a click on its button'); };
+  assert.match((await service.request('location.allowDetect')).error.message, /click/);
+});
+
+test('nowPlaying (SDK 1.4): set and clear with "invokes": ["service:now-playing"]; every session and the controls for the official service only', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  const calls = [];
+  let watcher = null;
+  const nowPlaying = {
+    set: (key, session) => {
+      if (!session?.title) throw new TypeError('a Now Playing session has a title');
+      // The artwork is read later: what's wrong with it, or a limit, rejects.
+      if (session.title === 'later') return Promise.reject(new RangeError('an extension updates Now Playing 20 times a second at most'));
+      calls.push(['set', key, session.title]);
+      return Promise.resolve();
+    },
+    clear: key => calls.push(['clear', key]),
+    watch: fn => { watcher = fn; return () => { watcher = null; }; },
+    control: (id, action, value) => {
+      if (action === 'next') throw new TypeError('X doesn’t take “next” from Now Playing');
+      calls.push(['control', id, action, value]);
+    },
+  };
+
+  const refused = harness(createExtensionBridge, { deps: { nowPlaying } });
+  const denied = await refused.request('nowPlaying.set', { title: 'x', playing: true });
+  assert.equal(denied.error.name, 'AtmosPermissionError');
+  assert.match(denied.error.message, /declare it in extension\.json "permissions\.invokes"/);
+
+  const { request } = harness(createExtensionBridge, { extension: { tier: 'third-party', permissions: { invokes: ['service:now-playing'] } }, deps: { nowPlaying } });
+  assert.equal((await request('nowPlaying.set', { title: 'One', playing: true })).error, undefined);
+  assert.equal((await request('nowPlaying.set', { title: 'Tab', playing: true }, 'tab-1')).error, undefined);
+  const bad = await request('nowPlaying.set', { playing: true });
+  assert.equal(bad.error.name, 'TypeError', 'what Core finds wrong comes back as a TypeError');
+  const late = await request('nowPlaying.set', { title: 'later' });
+  assert.deepEqual([late.error.name, late.error.message], ['RangeError', 'an extension updates Now Playing 20 times a second at most'], 'found after reading the artwork: still its error');
+  assert.equal((await request('nowPlaying.clear', 'tab-1')).error, undefined);
+  assert.equal((await request('nowPlaying.clear', null)).error, undefined);
+  assert.equal((await request('nowPlaying.clear', 3)).error.name, 'TypeError');
+  assert.deepEqual(calls, [['set', 'main', 'One'], ['set', 'tab-1', 'Tab'], ['clear', 'tab-1'], ['clear', null]]);
+
+  // A community extension, even one calling itself service:now-playing, sees nothing.
+  for (const extension of [{ tier: 'third-party', permissions: { invokes: ['service:now-playing'] } }, { id: 'now-playing', kind: 'service', tier: 'third-party' }]) {
+    const other = harness(createExtensionBridge, { extension, deps: { nowPlaying } });
+    assert.match((await other.request('nowPlaying.sessions')).error.message, /only Atmos's Now Playing service/);
+    assert.match((await other.request('nowPlaying.control', 'plugin:x|main', 'toggle')).error.message, /only Atmos's Now Playing service/);
+  }
+  assert.equal(watcher, null);
+
+  const service = harness(createExtensionBridge, { extension: { id: 'now-playing', kind: 'service', tier: 'first-party' }, surface: { type: 'sidebar' }, deps: { nowPlaying } });
+  assert.equal((await service.request('nowPlaying.sessions')).error, undefined);
+  watcher([{ id: 'plugin:x|main', title: 'One' }]);
+  assert.deepEqual(service.posted.at(-1), { topic: 'nowPlaying.sessions', payload: [{ id: 'plugin:x|main', title: 'One' }] });
+  const first = watcher;
+  assert.equal((await service.request('nowPlaying.sessions')).error, undefined);
+  assert.notEqual(watcher, first, 'asked again: watched afresh, so the list comes again');
+  assert.equal((await service.request('nowPlaying.control', 'plugin:x|main', 'seek', 12)).error, undefined);
+  assert.equal((await service.request('nowPlaying.control', 'plugin:x|main', 'next')).error.name, 'TypeError');
+  assert.deepEqual(calls.at(-1), ['control', 'plugin:x|main', 'seek', 12]);
+  service.bridge.dispose();
+  assert.equal(watcher, null, 'the service frame went: it stops hearing');
+});

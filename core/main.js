@@ -15,7 +15,7 @@ const { createExtensionManager } = require('./js/core/extension-manager.cjs');
 const { createAtmosUpdater, spawnDetached } = require('./js/core/atmos-update.cjs');
 const { createSourceFetch } = require('./js/core/source-fetch.cjs');
 const { createExtensionStateStore } = require('./js/core/extension-state.cjs');
-const { BASELINE_BROWSER, exportDetails, describeExports, sharingRisk } = require('./js/core/extension-permissions.cjs');
+const { BASELINE_BROWSER, SYSTEM_INVOKES, exportDetails, describeExports, sharingRisk } = require('./js/core/extension-permissions.cjs');
 const { createLocationGate } = require('./js/core/location-gate.cjs');
 const { createExtensionFetch } = require('./js/core/extension-fetch.cjs');
 const frames = require('./js/core/extension-frames.cjs');
@@ -839,7 +839,7 @@ function _atmosDownloadUrl() {
   }
 }
 
-// The system services (Wallpaper, Audio, Location) are part of Atmos itself:
+// The system services (Wallpaper, Audio) are part of Atmos itself:
 // core/system/<id>, loaded by Core like the rest of its code.
 const _SYSTEM_ROOT = path.join(__dirname, 'system');
 
@@ -1041,8 +1041,22 @@ async function _downloadForUpgrade() {
 let _lastUpdateCheck = null;
 async function _checkForUpdates() {
   try {
-    const status = await _manager.checkForUpdates();
+    let status = await _manager.checkForUpdates();
     _lastUpdateCheck = Date.now();
+    // What Atmos Browser recommends (Now Playing), the first time it does,
+    // and Location for an extension that reads the location (it was part
+    // of Atmos before 0.21): staged for the next restart, as an update that
+    // first recommends one brings it. Not before the first start's choice.
+    if (_manager.setupDone()) {
+      const staged = await _manager.installBuiltInRecommendations().catch(error => {
+        console.warn('[extensions] built-in recommendations:', error.message);
+        return [];
+      });
+      if (staged.length) {
+        console.log(`[extensions] staged ${staged.map(change => change.id).join(', ')}: recommended by an extension Atmos comes with, or used by one installed`);
+        status = _manager.status();
+      }
+    }
     // What the sources name (with "Update Atmos automatically", downloaded
     // at once). An offer stands until its own source answers without it,
     // so being offline changes nothing.
@@ -1229,6 +1243,9 @@ function _describeSharing(entry) {
   const lines = [];
   for (const target of _trust?.get(entry)?.permissions.invokes || []) {
     if (target === `${entry.kind}:${entry.id}`) continue;
+    // Atmos's own calls (atmos.audio, atmos.nowPlaying…): Core in between,
+    // nothing the other extension shares. The permissions list says them.
+    if (Object.hasOwn(SYSTEM_INVOKES, target)) continue;
     const owner = _entryOf(target);
     const name = owner?.manifest?.displayName || target.split(':')[1];
     if (!owner) { lines.push(`${name}: not installed`); continue; }
@@ -1535,6 +1552,15 @@ const _shownNotifications = new Set(); // kept referenced until closed, so click
 // its own frame, and otherwise asks (extension-links.cjs, the A5 fix).
 const _linkQuestions = new Set();  // "kind:id" with a question up
 const _linksBlocked = new Set();   // "kind:id" blocked until Atmos restarts
+// Where the Atmos window last had a mouse button pressed, and how long ago:
+// what Now Playing asks before it lets a community extension's start count
+// as one you made (extension-frame-host.js _usedJustNow). From Chromium's
+// own input, so no frame can make one up.
+_page.handle('atmos:last-click', () => {
+  const press = _web.atmosPointerDown();
+  return press ? { x: press.x, y: press.y, ago: Date.now() - press.at } : null;
+});
+
 _page.handle('extensions:open-link', async (event, kind, id, url, info) => {
   if (!_isAppUrl(event.senderFrame?.url) || event.senderFrame !== event.sender.mainFrame) throw new Error('not allowed');
   const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
@@ -1802,10 +1828,13 @@ app.on('web-contents-created', (_, contents) => {
   });
 });
 
-// Location stays off until you press Detect (see location-gate.cjs).
-const _locationGate = createLocationGate({ appOrigin: _APP_ORIGIN });
+// Location stays off until you press Detect (see location-gate.cjs): the
+// official Location service's frame, and the Atmos page itself.
+let _locationOrigins = new Set([_APP_ORIGIN]);
+const _locationGate = createLocationGate({ gated: origin => _locationOrigins.has(origin) });
 _page.handle('location:allow-detect', event => {
-  // Only the Atmos page itself (not a frame inside it) opens the gate.
+  // Only the Atmos page itself (not a frame inside it) opens the gate; it
+  // does so for the Location service after a click on its Detect button.
   if (event.senderFrame !== event.sender.mainFrame || !_isAppUrl(event.senderFrame?.url)) return false;
   _locationGate.open();
   return true;
@@ -1815,7 +1844,11 @@ function _installBrowserPermissions(activeEntries) {
   // The Atmos page gets what page-runtime extensions declare; each frame
   // origin gets what its own extension(s) declare.
   const byOrigin = new Map([[_APP_ORIGIN, new Set(BASELINE_BROWSER)]]);
+  _locationOrigins = new Set([_APP_ORIGIN]);
   for (const entry of activeEntries) {
+    if (entry.kind === 'service' && entry.id === 'location' && entry.tier !== 'third-party' && frames.resolveRuntime(entry) === 'frame') {
+      _locationOrigins.add(frames.frameOrigin(entry));
+    }
     const origin = frames.resolveRuntime(entry) === 'frame' ? frames.frameOrigin(entry) : _APP_ORIGIN;
     if (!byOrigin.has(origin)) byOrigin.set(origin, new Set(BASELINE_BROWSER));
     for (const name of _trust.get(entry)?.permissions.browser || []) byOrigin.get(origin).add(name);
@@ -2006,6 +2039,11 @@ async function _cookiesReadable() {
 
 if (hasInstanceLock) app.whenReady().then(async () => {
   if (!(await _cookiesReadable())) return;
+  // Whether this profile was used before, read before any window opens: the
+  // startup splash's page makes Chromium create "Local Storage" at once,
+  // which made every first start look like an upgrade (0.19.4–0.20.1: no
+  // picker, everything installed).
+  const usedBefore = _usedBefore(app.getPath('userData'));
   // Something on screen at once, while extensions are checked and started.
   _openStartupSplash();
   console.log('[main] userData:', app.getPath('userData'));
@@ -2022,7 +2060,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   // otherwise they are downloaded once the window is up (below) and applied
   // at the next restart.
   // (A first run that hasn't been chosen yet, say offline, stays a first run.)
-  const upgrading = !_manager.setupDone() && !_manager.setupPending() && _usedBefore(app.getPath('userData'));
+  const upgrading = !_manager.setupDone() && !_manager.setupPending() && usedBefore;
   if (!_manager.setupDone() && !upgrading) _manager.beginSetup();
   if (upgrading && _seedSources().length) {
     const changes = await _manager.installFromSeed();

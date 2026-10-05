@@ -43,7 +43,7 @@ const TABS = { session: { tabs: [
 ], selected: 'b1' } };
 
 test('the commands are declared for Atmos\'s bar, with the Atmos that has it, and all handled', async () => {
-  assert.equal(manifest.engines.atmos, '>=0.20.0', 'atmos.commands is SDK 1.3 (Atmos 0.20.0)');
+  assert.equal(manifest.engines.atmos, '>=0.21.0', 'atmos.commands is SDK 1.3 (Atmos 0.20.0); atmos.nowPlaying and web.media 1.4 (0.21.0)');
   assert.deepEqual(manifest.contributes.commands.map(command => command.name), ['new-tab', 'tab', 'close-tab']);
   for (const command of manifest.contributes.commands) {
     assert.match(command.name, /^[a-z][a-z0-9-]{0,29}$/);

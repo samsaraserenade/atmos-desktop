@@ -258,7 +258,9 @@ test('Core owns sidebar resize handles and extensions only declare constraints',
   assert.doesNotMatch(registry, /def\.maxHeight/);
   // Widgets only declare constraints (Now Playing follows its content).
   assert.ok(audioManifest.contributes.sidebar.every(widget => widget.defaultHeight === undefined && widget.minHeight === undefined));
-  assert.equal(audioManifest.contributes.sidebar[0].resizable, false);
+  const nowPlaying = JSON.parse(fs.readFileSync(path.resolve(appDir, '../../services/now-playing/extension.json'), 'utf8'));
+  assert.equal(nowPlaying.contributes.sidebar[0].resizable, false);
+  assert.equal(nowPlaying.contributes.sidebar[0].defaultHeight, undefined);
 });
 
 test('standard context menus render interactive controls with typed values', () => {

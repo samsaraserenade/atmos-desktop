@@ -95,10 +95,12 @@ function cleanMenuItems(items) {
   });
 }
 
-/** Wallpaper, audio and location calls go to system services, declared like any other. */
+/** Wallpaper and audio calls go to system services, location reads through Core to the Location service; declared like any other. */
 const WALLPAPER = 'service:wallpaper';
 const AUDIO = 'service:audio';
 const LOCATION = 'service:location';
+// What an extension plays goes to this official service (atmos.nowPlaying).
+const NOW_PLAYING = 'service:now-playing';
 
 /**
  * Whether `host` is covered by a normalised "permissions.network" list
@@ -118,7 +120,8 @@ const MAX_FETCHES_PER_FRAME = 32;
 let _bridgeSerial = 0;
 
 // Web pages (atmos.web): what a frame may ask Core to do to one of its tabs.
-const WEB_COMMANDS = new Set(['navigate', 'back', 'forward', 'reload', 'stop', 'zoom', 'find', 'stopFind', 'print', 'mute', 'edit', 'download', 'copyImage', 'focus', 'state', 'shield', 'blocked']);
+const WEB_COMMANDS = new Set(['navigate', 'back', 'forward', 'reload', 'stop', 'zoom', 'find', 'stopFind', 'print', 'mute', 'edit', 'download', 'copyImage', 'focus', 'state', 'shield', 'blocked', 'media']);
+const WEB_MEDIA_ACTIONS = new Set(['toggle', 'next', 'previous', 'seek']);
 const MAX_WEB_URL = 8192;
 const MAX_DOWNLOAD_URL = 2_000_000; // "Save image as…" on a data: image
 const WEB_TAB_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -167,6 +170,21 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
   let wallpaperWatch = null;
   let locationWatch = null;
   let webWatch = null;
+  let nowPlayingWatch = null;
+
+  /** Every session and its controls: the official Now Playing service only. */
+  const requireNowPlayingService = () => {
+    if (self !== NOW_PLAYING || extension.tier === 'third-party') {
+      throw new BridgeError(`only Atmos's Now Playing service sees what extensions play`);
+    }
+    if (!deps.nowPlaying) throw new BridgeError('Now Playing is unavailable here', 'Error');
+  };
+  // The Location service itself (official): it says where you are.
+  const requireLocationService = () => {
+    if (self !== LOCATION || extension.tier === 'third-party') {
+      throw new BridgeError(`only Atmos's Location service sets the location`);
+    }
+  };
 
   /** Web pages: an official extension that declares "web": true, and Core's web layer to show them. */
   const requireWeb = () => {
@@ -332,15 +350,65 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       await deps.audio.watch();
     },
 
-    // The Location system service, read-only ("invokes": ["service:location"]):
-    // { lat, lon, label, mode }, or null when the user hasn't set one.
+    // The Location service, read-only ("invokes": ["service:location"]):
+    // { lat, lon, label, mode }, or null when the user hasn't set one (or
+    // the service isn't installed).
     'location.get': () => {
       requireTarget(LOCATION, 'read the location from');
       return deps.location.get();
     },
+    // The official Location service (services/location) itself: what it
+    // keeps, published for readers; the location Atmos kept before it; and
+    // its Detect button, which lets its frame use the browser's location
+    // for a moment.
+    'location.publish': value => {
+      requireLocationService();
+      deps.location.publish(value ?? null);
+    },
+    'location.takeEarlier': () => {
+      requireLocationService();
+      return deps.location.takeEarlier();
+    },
+    'location.forgetEarlier': async () => {
+      requireLocationService();
+      await deps.location.forgetEarlier();
+    },
+    'location.allowDetect': async () => {
+      requireLocationService();
+      try { return await deps.location.allowDetect(); }
+      catch (error) { throw new BridgeError(error.message, 'Error'); }
+    },
     'location.subscribe': () => {
       requireTarget(LOCATION, 'follow the location from');
       if (!locationWatch) locationWatch = deps.location.subscribe(value => post({ topic: 'location', payload: value }));
+    },
+
+    // atmos.nowPlaying (SDK 1.4): what this extension plays, for the Now
+    // Playing service ("invokes": ["service:now-playing"]). Core checks the
+    // session and stamps it with this extension (now-playing.js); controls
+    // come back to this extension's frames as topic 'nowPlaying.control'.
+    'nowPlaying.set': async (session, key) => {
+      requireTarget(NOW_PLAYING, 'show what it plays in');
+      try { await deps.nowPlaying.set(key ?? 'main', session); }
+      catch (error) { throw new BridgeError(error.message, error.name === 'RangeError' ? 'RangeError' : 'TypeError'); }
+    },
+    'nowPlaying.clear': async key => {
+      requireTarget(NOW_PLAYING, 'show what it plays in');
+      if (key != null && typeof key !== 'string') throw new BridgeError('atmos.nowPlaying.clear(key?)', 'TypeError');
+      await deps.nowPlaying.clear(key ?? null);
+    },
+    // The Now Playing service itself, official: every session, and the
+    // controls it sends to one (only those its extension takes).
+    'nowPlaying.sessions': () => {
+      requireNowPlayingService();
+      // Asked again (another listener in the frame): the list again, at once.
+      nowPlayingWatch?.();
+      nowPlayingWatch = deps.nowPlaying.watch(list => post({ topic: 'nowPlaying.sessions', payload: list }));
+    },
+    'nowPlaying.control': (id, action, value) => {
+      requireNowPlayingService();
+      try { deps.nowPlaying.control(id, action, value ?? null); }
+      catch (error) { throw new BridgeError(error.message, error.name === 'TypeError' ? 'TypeError' : 'Error'); }
     },
 
     // atmos.fetch(): an HTTP request the main process makes for the frame,
@@ -529,6 +597,10 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       if (name === 'find' && args[0] != null && typeof args[0] !== 'string') throw new BridgeError('web.find(tabId, text)', 'TypeError');
       if (name === 'copyImage' && !(Number.isFinite(args[0]) && Number.isFinite(args[1]))) throw new BridgeError('web.copyImage(tabId, x, y)', 'TypeError');
       if (name === 'shield' && typeof args[0] !== 'boolean') throw new BridgeError('web.shield(tabId, on): on is true or false', 'TypeError');
+      if (name === 'media') {
+        if (!WEB_MEDIA_ACTIONS.has(args[0])) throw new BridgeError('web.media(tabId, action): toggle, next, previous or seek', 'TypeError');
+        if (args[0] === 'seek' && !(Number.isFinite(args[1]) && args[1] >= 0)) throw new BridgeError('web.media(tabId, \'seek\', seconds)', 'TypeError');
+      }
       return web.do(tabIdOf(tabId), name, ...args.slice(0, 2));
     },
     'web.list': () => requireWeb().list(),
@@ -739,6 +811,8 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     locationWatch = null;
     webWatch?.();
     webWatch = null;
+    nowPlayingWatch?.();
+    nowPlayingWatch = null;
     // A panel that goes takes its page with it (the tab stays open).
     if (surface.type === 'panel' && deps.web) { try { deps.web.clearSurface(); } catch { /* not a web panel */ } }
     for (const requestId of fetches) deps.fetchAbort?.(self, requestId);

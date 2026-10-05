@@ -88,7 +88,7 @@ test('the SDK surface: stable, experimental and first-party calls, nothing else'
   assert.ok(Object.isFrozen(atmos));
   assert.deepEqual(Object.keys(atmos).sort(), [
     'SDK_VERSION', 'appearance', 'audio', 'background', 'call', 'clipboard', 'commands', 'contextMenu', 'drawer', 'events', 'expose',
-    'extension', 'fetch', 'invoke', 'legacy', 'library', 'lifecycle', 'listen', 'location', 'notifications', 'panel',
+    'extension', 'fetch', 'invoke', 'legacy', 'library', 'lifecycle', 'listen', 'location', 'notifications', 'nowPlaying', 'panel',
     'ready', 'state', 'surface', 'wallpaper', 'web',
   ]);
   assert.equal(atmos.surface.onFileDrop, undefined, 'file drops went with SDK 1.0');
@@ -209,6 +209,40 @@ test('lifecycle: one signal, cleanups last-first, timers and listeners gone when
   let late = false;
   atmos.lifecycle.onCleanup(() => { late = true; });
   assert.equal(late, true, 'a cleanup added after the frame went runs at once');
+});
+
+test('nowPlaying (SDK 1.4): set, clear and the controls this extension hears; the service\'s sessions and controls', async t => {
+  const { atmos, core, next } = await connectedSdk(t);
+  assert.deepEqual(Object.keys(atmos.nowPlaying).sort(), ['clear', 'control', 'onControl', 'sessions', 'set']);
+  const art = new Blob([new Uint8Array(4)], { type: 'image/png' });
+  const set = atmos.nowPlaying.set({ title: 'One', playing: true, artwork: art }, 'tab-1');
+  const asked = await next(message => message.method === 'nowPlaying.set');
+  assert.equal(asked.args[0].title, 'One');
+  assert.ok(asked.args[0].artwork instanceof Blob, 'artwork goes as it is');
+  assert.equal(asked.args[1], 'tab-1');
+  core.postMessage({ reply: asked.id, result: undefined });
+  await set;
+  atmos.nowPlaying.set({ title: 'Two', playing: false });
+  assert.equal((await next(message => message.method === 'nowPlaying.set' && message.args[0].title === 'Two')).args[1], null, 'no key: Core\'s "main"');
+  atmos.nowPlaying.clear();
+  assert.deepEqual((await next(message => message.method === 'nowPlaying.clear')).args, [null]);
+
+  const heard = [];
+  const stop = atmos.nowPlaying.onControl(control => heard.push(control));
+  core.postMessage({ topic: 'nowPlaying.control', payload: { key: 'tab-1', action: 'toggle', value: null } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(heard, [{ key: 'tab-1', action: 'toggle', value: null }]);
+  stop();
+  assert.throws(() => atmos.nowPlaying.onControl(null), TypeError);
+
+  const lists = [];
+  atmos.nowPlaying.sessions(list => lists.push(list));
+  assert.ok(await next(message => message.method === 'nowPlaying.sessions'));
+  core.postMessage({ topic: 'nowPlaying.sessions', payload: [{ id: 'plugin:x|main' }] });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(lists, [[{ id: 'plugin:x|main' }]]);
+  atmos.nowPlaying.control('plugin:x|main', 'seek', 30);
+  assert.deepEqual((await next(message => message.method === 'nowPlaying.control')).args, ['plugin:x|main', 'seek', 30]);
 });
 
 test('commands (SDK 1.3): a handled command runs and lists in this frame when Core asks, and answers once', async t => {

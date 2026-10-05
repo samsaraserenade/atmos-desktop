@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('atmosCore', {
   invokeExtensionAs: (caller, kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, String(caller), ...args),
   showExtensionNotification: (kind, id, options) => ipcRenderer.invoke('extensions:notify', kind, id, options),
   openExtensionLink: (kind, id, url, info) => ipcRenderer.invoke('extensions:open-link', kind, id, url, info),
+  // { x, y, ago }: the Atmos window's last mouse-button press (Now Playing).
+  lastClick: () => ipcRenderer.invoke('atmos:last-click'),
   // A framed extension's atmos.fetch(), made by the main process on its
   // behalf (stamped with `caller`, like invokeExtensionAs).
   extensionFetch: (caller, requestId, request) => ipcRenderer.invoke('extensions:fetch', String(caller), String(requestId), request),

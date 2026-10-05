@@ -127,11 +127,12 @@ const ELECTRON_TEXT = {
   net: 'Make network requests from the main process',
   safeStorage: 'Encrypt data with your system\u2019s secure storage',
 };
-// The system services an extension reaches through the SDK, in plain words.
+// The services an extension reaches through the SDK, in plain words.
 const SYSTEM_INVOKES = {
   'service:audio': 'Play audio',
   'service:wallpaper': 'See and change your wallpaper',
   'service:location': 'Know your location, as set in Atmos',
+  'service:now-playing': 'Show what it plays in Now Playing',
 };
 const BROWSER_TEXT = {
   geolocation: 'Use your location',
@@ -370,6 +371,6 @@ function reachOf(caller, target) {
 }
 
 module.exports = {
-  BASELINE_BROWSER, CONTEXT_ELECTRON, normalizePermissions, describePermissions, normalizeExports, exportDetails, describeExports, sharingRisk, levelAllows, reachOf, reaches,
+  BASELINE_BROWSER, CONTEXT_ELECTRON, SYSTEM_INVOKES, normalizePermissions, describePermissions, normalizeExports, exportDetails, describeExports, sharingRisk, levelAllows, reachOf, reaches,
   isValidHost, hostAllowed, hostCovered, permissionsAdded,
 };

@@ -414,3 +414,68 @@ test('automatic https fell back to http: the tab says so through the load; an in
   await settle();
   assert.deepEqual(calls('download').at(-1).args, [tab.id, 'http://files.example/a.zip']);
 });
+
+test('a tab that plays is in Now Playing: what the page says, else its title; its controls go back to the page', async () => {
+  const atmos = createFakeAtmos({ extension: { id: 'browser', tier: 'first-party' }, permissions: { web: true, invokes: ['service:now-playing'] } });
+  const timers = fakeTimers();
+  const engine = createEngine({ atmos, store: memoryStore(), engines, now: () => 1_000_000, timers });
+  await engine.ready;
+  engine.attachPanel();
+  const tab = engine.newTab({ url: 'https://www.youtube.com/watch?v=x' });
+  await settle();
+  const web = event => atmos.fake.webEvent({ tabId: tab.id, ...event });
+  const sync = async () => { timers.flush(); await settle(); };
+  web({ type: 'state', url: 'https://www.youtube.com/watch?v=x', title: 'Lofi - YouTube', audible: false });
+  await sync();
+  assert.deepEqual(atmos.fake.nowPlaying, {}, 'nothing plays');
+
+  // A muted video playing by itself never sounded: its report alone isn't enough.
+  web({ type: 'media', media: { title: 'Lofi', artist: 'Girl', album: null, artwork: null, playing: true, position: 3, duration: null, actions: ['toggle'] } });
+  await sync();
+  assert.deepEqual(atmos.fake.nowPlaying, {});
+
+  web({ type: 'state', url: 'https://www.youtube.com/watch?v=x', title: 'Lofi - YouTube', audible: true });
+  await sync();
+  const session = atmos.fake.nowPlaying[tab.id];
+  assert.deepEqual({ ...session, artwork: !!session.artwork },
+    { title: 'Lofi', artist: 'Girl', album: null, from: 'youtube.com', artwork: false, duration: null, position: 3, playing: true, actions: ['toggle'], volume: null });
+
+  // The widget's play/pause reaches the page.
+  atmos.fake.controlNowPlaying(tab.id, 'toggle');
+  await settle();
+  assert.deepEqual(atmos.fake.web.calls.filter(call => call.name === 'media').map(call => call.args), [[tab.id, 'toggle', null]]);
+
+  // Paused: still there, to resume; a new page: gone.
+  web({ type: 'state', url: 'https://www.youtube.com/watch?v=x', title: 'Lofi - YouTube', audible: false });
+  web({ type: 'media', media: { title: 'Lofi', artist: 'Girl', playing: false, position: 9, actions: ['toggle', 'seek'] } });
+  await sync();
+  assert.equal(atmos.fake.nowPlaying[tab.id].playing, false);
+  web({ type: 'navigated', url: 'https://example.com/', title: 'Example', inPage: false });
+  await sync();
+  assert.deepEqual(atmos.fake.nowPlaying, {}, 'what the last page played is over');
+
+  // A page that sounds without saying what (an embedded video): the tab's title and the site's icon, no controls.
+  web({ type: 'favicon', dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', pageUrl: 'https://example.com/' });
+  web({ type: 'state', url: 'https://example.com/', title: 'Example', audible: true });
+  await sync();
+  const plain = atmos.fake.nowPlaying[tab.id];
+  assert.deepEqual([plain.title, plain.from, plain.playing, plain.actions, plain.artwork?.type], ['Example', 'example.com', true, [], 'image/png']);
+  engine.closeTab(tab.id);
+  await sync();
+  assert.deepEqual(atmos.fake.nowPlaying, {}, 'closed: gone');
+});
+
+test('what a tab shows in Now Playing: never a crashed page; a page that began by itself is marked so', async () => {
+  const { nowPlayingSession } = await import('../src/now-playing.js');
+  const tab = { id: 't1', url: 'https://www.youtube.com/watch?v=x', title: 'Lofi - YouTube' };
+  const media = { title: 'Lofi', artist: 'Girl', playing: true, actions: ['toggle', 'delete'] };
+  const live = { live: true, audible: true, heard: true, media, error: null };
+  const session = nowPlayingSession(tab, live, { startedByUser: false });
+  assert.deepEqual([session.title, session.from, session.actions, session.startedByUser], ['Lofi', 'youtube.com', ['toggle'], false]);
+  assert.equal(nowPlayingSession(tab, live).startedByUser, true);
+  assert.equal(nowPlayingSession(tab, { ...live, error: { kind: 'crashed' } }), null);
+  assert.equal(nowPlayingSession(tab, { ...live, live: false }), null, 'put away');
+  assert.equal(nowPlayingSession(tab, { ...live, audible: false, heard: false }), null, 'never sounded');
+  assert.equal(nowPlayingSession({ ...tab, url: 'about:blank' }, live), null);
+  assert.equal(nowPlayingSession({ ...tab, title: 'https://www.youtube.com/watch?v=x' }, { ...live, media: null }).title, 'youtube.com', 'no title of its own: the site');
+});

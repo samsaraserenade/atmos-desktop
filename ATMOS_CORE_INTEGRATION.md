@@ -298,7 +298,7 @@ frame.
 
 | Source | Where |
 |---|---|
-| Part of Atmos | `core/system/<id>`: the system services (Wallpaper, Audio, Location) only |
+| Part of Atmos | `core/system/<id>`: the system services (Wallpaper, Audio) only. Location was one until 0.21; it's an official service now |
 | Built in | Atmos Browser, which an installer carries (`core/built-in-extensions.json`, Atmos 0.18): official, never offered in the first-start picker, switched off rather than removed, and updated by a newer signed package like any other |
 | Bundled | the repository's `plugins/` and `services/` when running from source (`npm start`). An installer bundles only the built-in ones: it offers the rest as packages on the first start |
 | Installed | `%APPDATA%\atmos\{plugins,services}\<id>\` on Windows (`~/Library/Application Support/atmos` on macOS, `~/.config/atmos` on Linux), by Settings → Extensions or by hand |
@@ -342,7 +342,8 @@ Every extension has an `extension.json`. A typical community one:
   "permissions": {
     "network": ["api.open-meteo.com"],
     "invokes": ["service:location"]
-  }
+  },
+  "dependencies": { "location": "^1.0.0" }
 }
 ```
 
@@ -386,7 +387,7 @@ make the block invalid.
   `">=0.16.0"`: Atmos 0.15 reads `engines` and says the extension isn't for
   it, rather than running it without the call. SDK 1.2's `atmos.web`
   (official only) needs `">=0.17.0"`; SDK 1.3's `atmos.commands` and
-  `"commands"`, `">=0.20.0"`.
+  `"commands"`, `">=0.20.0"`; SDK 1.4's `atmos.nowPlaying`, `">=0.21.0"`.
 
 ### Versions and dependencies
 
@@ -406,8 +407,10 @@ make the block invalid.
   `0.5.0` for `^0.4.x`), `~1.2.3` (patch updates), `>=1.2.3` and `*`.
 - List every service and plugin in `permissions.invokes` as a dependency,
   so Atmos can say what's missing. The system services (`audio`,
-  `wallpaper`, `location`) are part of Atmos and always there, so a
-  community extension needn't list them (the example above doesn't). The
+  `wallpaper`) are part of Atmos and always there, so a community
+  extension needn't list them. Location (and Now Playing) are official
+  services, installed with what names them: list them (the example above
+  does), or the user has to install them themselves. The
   bundled extensions list them anyway: `npm run test:permissions` checks
   that every invoke is a dependency, along with the ranges and that a
   released extension's required dependencies are released too.
@@ -428,7 +431,10 @@ and **offers** optional ones ("Optional: <name>" with its own Install
 button) when a source has a version in range. One marked `"recommended":
 true` is installed with the extension the first time, but stays optional:
 it can be removed, switched off or fail without stopping the extension,
-and an update doesn't bring it back:
+and an update doesn't bring it back. An update that recommends it for the
+first time installs it too (Atmos 0.21), so its users get what a new
+install gets; but once the user removed it, or cancelled its install, no
+extension's recommendation brings it back:
 
 ```json
 "market-data": { "version": "^0.4.0", "optional": true, "recommended": true }
@@ -485,10 +491,10 @@ refused call rejects with an `AtmosPermissionError` naming what to declare.
 Subscriptions (`events.on`, `listen`, the `onChange`s) don't reject: a
 refusal is logged in the frame's console.
 
-**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.3.0'` (Atmos 0.20),
+**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.4.0'` (Atmos 0.21),
 and a later 1.x only adds. What 1.1 added is marked **1.1**; 1.2 added
 only `atmos.web`, for official extensions; 1.3, `atmos.commands` (with
-`"commands"` in the manifest) and ui.css's bar. Everything below is **stable** unless marked
+`"commands"` in the manifest) and ui.css's bar; 1.4, `atmos.nowPlaying`. Everything below is **stable** unless marked
 **experimental** (it may still change in a minor version). The calls in
 "Official extensions only" at the end of this section may change in a
 minor version too, and Atmos refuses them to community extensions.
@@ -500,7 +506,7 @@ minor version too, and Atmos refuses them to community extensions.
 | `atmos.extension` | `{ id, kind, tier, version }`: which extension this frame belongs to |
 | `atmos.surface` | `{ type, id, presentation, glass, drawer }`: `type` is `'panel'`, `'sidebar'`, `'settings'` or `'boot'`; `presentation` is `'full'`, `'tile'` or `'window'` (panels) and never changes, since a layout change makes a new frame |
 | `atmos.ready` | A promise that resolves once the frame is connected. Entry files already run after it |
-| `atmos.SDK_VERSION` | `'1.3.0'` (Atmos 0.20); `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
+| `atmos.SDK_VERSION` | `'1.4.0'` (Atmos 0.21); `'1.3.0'` in Atmos 0.20, `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
 
 ### State and events
 
@@ -548,7 +554,7 @@ are changed; add `closeOnChange: true` to close on the first change.
 | Call | What it does | Needs |
 |---|---|---|
 | `atmos.fetch(input, init)` | `fetch()`, made by Atmos for the frame: for APIs the frame can't read itself because they send no CORS headers. Same arguments and result as `fetch()` | the host in `permissions.network` |
-| `atmos.location.get()` / `onChange(fn)` | The location the user set in Atmos (Settings → Appearance → Location), read-only: `{ lat, lon, label, mode }` (`mode` is `'auto'` or `'manual'`), or `null` when none is set | `"invokes": ["service:location"]` |
+| `atmos.location.get()` / `onChange(fn)` | The location the user set in Atmos (Settings → Appearance → Location), read-only: `{ lat, lon, label, mode }` (`mode` is `'auto'` or `'manual'`), or `null` when none is set or the Location service isn't installed. It's an official service since Atmos 0.21: list it as a dependency (`"location": "^1.0.0"`) so it comes with your extension | `"invokes": ["service:location"]` |
 | `atmos.lifecycle` | The frame's lifetime, for cleaning up after it (below) | — |
 
 **`atmos.fetch()` rules.** Atmos's main process makes the request, and
@@ -592,6 +598,68 @@ flight):
 | `atmos.wallpaper.restore()` **1.1** | Put back the wallpaper your image replaced. Resolves `false` when the image showing isn't yours (the user or another extension changed it since); `canRestore` says beforehand. After several extensions in a row, what comes back is still what the user had | `"invokes": ["service:wallpaper"]` |
 | `atmos.audio.load(source, { id, position, play, loop })` | This extension's own playback channel, which lives all session and keeps playing whatever frames come and go. `source` is a `Blob`/`File`, or an `atmos-resource://` URL from a provider it registers (official). `id` is your own label, reported back as `id`. **1.1:** `loop: true` starts it over at the end inside Atmos, with no `'ended'` and no frame involved (a soundscape keeps looping when its panel closes). Resolves with the state | `"invokes": ["service:audio"]` |
 | `atmos.audio.play()` / `pause()` / `seek(s)` / `setVolume(0–1)` / `stop()` / `state()` / `onChange(fn)` | Control it; `play()` resolves whether it started. `{ type, id, source, loop, playing, currentTime, duration, volume, ended, error }` on every change, in every frame of the extension. `id` and `loop` are **1.1**; `source` is the same label as `id` (all Atmos 0.15 reports) | `"invokes": ["service:audio"]` |
+
+### Now Playing (1.4)
+
+Atmos's Now Playing widget shows what's playing, from any extension: Music,
+a tab in Atmos Browser, yours. The widget belongs to the Now Playing
+service (installed with the first extension that names it); your extension
+only says what it plays and takes the controls back. Atmos sits between
+the two, so no extension sees what another plays, and the widget can only
+ask yours for what you listed.
+
+```js
+atmos.nowPlaying.set({
+  title: 'Rain on a tin roof', artist: 'Field recordings',
+  artwork: coverBlob,                 // PNG, JPEG, WebP or GIF, 1 MB at most
+  duration: 1800, position: 42, playing: true, volume: 70,
+  actions: ['toggle', 'seek', 'volume'],
+});
+atmos.nowPlaying.onControl(({ action, value }) => {
+  if (action === 'toggle') togglePlayback();
+  else if (action === 'seek') seekTo(value);       // seconds
+  else if (action === 'volume') setVolume(value);  // 0–100
+});
+```
+
+| Call | What it does | Needs |
+|---|---|---|
+| `atmos.nowPlaying.set(session, key?)` | Say what plays, the whole session each time: what you leave out is gone, so send the artwork and the current position with every change (while `playing`, the widget moves the position on by itself, so only a jump needs one). `key` (1–64 letters, digits, `- _ . :`; `'main'` by default) names one of several, a tab say. Past 20 calls a second, the newest for each session waits for the next second (it resolves once it's in, or once a newer one replaced it); 16 sessions and 4 MB of artwork all together | `"invokes": ["service:now-playing"]` |
+| `atmos.nowPlaying.clear(key?)` | That session ends; with no key, all of yours. They also end when your extension's last frame goes | the same |
+| `atmos.nowPlaying.onControl(fn)` | `fn({ key, action, value })` when the widget asks: `value` is seconds for `seek`, 0–100 for `volume`, else `null`. Only actions the session lists arrive. Every frame of yours that listens hears it, so listen in one (the background frame). Returns an unsubscribe function | the same |
+
+A session is `{ title, artist?, album?, from?, artwork?, duration?,
+position?, playing?, actions?, volume?, startedByUser? }` (`startedByUser:
+false` when playback began without the user, so it shows only when nothing
+else plays). Atmos checks every field and
+rejects the call with a `TypeError` naming the one that's wrong: text is
+shown as plain text on one line (title and artist 200 characters at most,
+`from`, where it plays, 80); `duration` and `position` are seconds;
+`artwork` is an image `Blob` or a `data:` URL of a PNG, JPEG, WebP or GIF,
+1 MB and 4096 pixels a side at most, which Atmos reads by its bytes, not
+the type it claims (never SVG, never an address for Atmos to fetch);
+`actions` are any of `toggle`, `next`, `previous`, `seek`, `volume`. A
+problem with the artwork rejects the whole call, so drop it and set the
+rest again. Under the title the widget shows the artist and `from`, else which
+extension it comes from (always for a community extension, marked as one).
+
+Atmos Browser publishes its tabs too: a tab whose page plays shows with
+what the page's Media Session says (else the tab's title and site icon),
+always with its site, and the widget's controls reach the page. A page that
+starts playing by itself (a background tab, nothing done in it just
+before) shows only when nothing else plays.
+
+Which one shows: the one picked with the widget's dots (shown only with
+two or more), until something starts after that; else the one that started
+playing last; else the one that played last. Paused for less than 3
+seconds and playing again isn't a start. A community extension's start
+counts only within 5 seconds of a click in one of its frames (Atmos sees
+where clicks land), or of the user using its controls in the widget; otherwise its session shows only when nothing else
+plays, so one can't take the widget by itself. And what shows doesn't
+change while the pointer moves over the widget, so a click acts on what
+was there. Declare the Now Playing service
+as a dependency with `"optional": true, "recommended": true` so it comes
+with your extension; without it the calls still work and nothing shows.
 
 ### Other extensions
 
@@ -843,8 +911,8 @@ script them. `atmos.state` is kept in a file of its own
   across the workspace.
 
 Keys pressed inside a focused frame that aren't typing are passed on to
-Atmos: modifier combinations (Ctrl+` for Settings, Ctrl+\ for the command
-bar), F-keys, Escape, Space
+Atmos: modifier combinations (Ctrl+` for Settings, Alt+` for the sidebar,
+Ctrl+\ for the command bar), F-keys, Escape, Space
 outside fields and buttons, and Atmos's single-key shortcuts outside fields
 and buttons (Tab for the sidebar, Shift+Tab to move it). A key the frame handled itself (`preventDefault()`)
 stays its own.
@@ -868,6 +936,21 @@ open. Audio Player's Music panel is one.
 | `atmos.drawer.state` / `onChange(fn)` / `onKey(fn)` | `{ open, expanded, placement, barPlacement, locked, bar }`. While it moves, `--atmos-drawer-visible-h` on `:root` is the visible height below the bar (pinned open, it's unset: use `var(--atmos-drawer-visible-h, calc(100vh - <bar>px))`). Wheel and swipes in the frame move the drawer, except over elements marked `data-atmos-drawer-scroll` |
 | `atmos.drawer.open()` / `close()` / `expand()` / `collapse()` | Bar only, hidden, fully open, back to the bar. Nothing happens while it's pinned open |
 | `atmos.drawer.setBarPlacement('top' \| 'bottom')` / `setPlacement(0–2)` | Dock the bar at the bottom (the rest revealed upward); place it (0 open, 1 bar, 2 hidden) to carry over an old position |
+
+**The Now Playing service's calls (1.4).** `atmos.nowPlaying.sessions(fn)`
+(every extension's sessions, as section 4's "Now Playing" describes them,
+with `id`, `source { id, name, community }`, `artwork` as a Blob Atmos
+made and `artworkKey`, `positionAt`, `playingSince` and `lastActive`) and
+`atmos.nowPlaying.control(id, action, value)` are refused to anything but
+the official `service:now-playing` (services/now-playing).
+
+**The Location service's calls (1.4).** `atmos.location.publish(location)`
+(where you are, for readers; `null`: not set), `takeEarlier()` (the
+location Atmos kept itself before 0.21, or `null`), `forgetEarlier()` (the
+service has saved it: Atmos's copy goes, once the service's state is on
+disk) and `allowDetect()` (after a real click on its Detect button, its
+frame may use the browser's location for 15 s) are refused to anything but
+the official `service:location` (services/location).
 
 **Boot keys.** `"keys": ["Space"]` on the boot contribution:
 `KeyboardEvent.code` values its frame hears with `atmos.surface.onKey(fn)`
@@ -900,7 +983,8 @@ it may load and do. The extension names its tabs (1–64 letters, digits,
 | `atmos.web.navigate(tabId, url)`, `back`, `forward`, `reload(tabId, { hard })`, `stop`, `zoom(tabId, 'in' \| 'out' \| 'reset')`, `find(tabId, text, { forward, findNext })`, `stopFind`, `print`, `mute(tabId, muted)`, `edit(tabId, 'copy' …)`, `download(tabId, url)`, `copyImage(tabId, x, y)`, `focus`, `state` | What a browser does to a page. `navigate` is checked in the main process like any navigation; zoom is kept per site. A page's state has `blocked` (ads and trackers blocked on it) and `shield` (`'on'`, `'off'`, `'disabled'` or `'none'`) |
 | `atmos.web.shield(tabId, on)` / `blocked(tabId)` | The site's shield: `false` lets its ads and trackers through, `true` blocks them again (kept per site; a private tab's choice stays with the private session); what was blocked on the page, `{ count, hosts }` |
 | `atmos.web.adblock.status()` / `update()` | The ad and tracker blocker: `{ enabled, state, error, updatedAt, rules, total, lists }`; checking every list now |
-| `atmos.web.onEvent(fn)` | What pages do, `{ type, tabId, … }`: `opened`, `closed`, `state`, `navigated`, `progress`, `favicon`, `load-failed` (with `certificate`), `refused`, `crashed`, `memory` (`bytes`: the page's process passed 2 GB, then each 2 GB more; Atmos 0.19.2), `find`, `fullscreen`, `context-menu`, `command` (the browser's shortcuts, taken before the page sees them), `open-tab`, `open-link` (a link from the rest of Atmos, when the user turned that on; `background` when there was no click in Atmos just before), `popup-blocked` and `download-blocked` (a page tried one without a click, or, with `insecure`, a secure page's download over plain http; `url` to open or fetch it, as Core's own), `https-fallback` (`url`, `site`: Atmos tried the page over https first and it loads over http; `redirected` when the site sent it back itself; Atmos 0.19.2), `download`, `download-removed`, `permission-request` (`origin` is the page's site, whichever frame asks), `permission-settled`, `external-request` (`site`, the asking page's), `private-ended`, `adblock` (the blocker's status changed) |
+| `atmos.web.onEvent(fn)` | What pages do, `{ type, tabId, … }`: `opened`, `closed`, `state`, `navigated`, `progress`, `favicon`, `load-failed` (with `certificate`), `refused`, `crashed`, `memory` (`bytes`: the page's process passed 2 GB, then each 2 GB more; Atmos 0.19.2), `find`, `fullscreen`, `context-menu`, `command` (the browser's shortcuts, taken before the page sees them), `open-tab`, `open-link` (a link from the rest of Atmos, when the user turned that on; `background` when there was no click in Atmos just before), `popup-blocked` and `download-blocked` (a page tried one without a click, or, with `insecure`, a secure page's download over plain http; `url` to open or fetch it, as Core's own), `https-fallback` (`url`, `site`: Atmos tried the page over https first and it loads over http; `redirected` when the site sent it back itself; Atmos 0.19.2), `download`, `download-removed`, `permission-request` (`origin` is the page's site, whichever frame asks), `permission-settled`, `external-request` (`site`, the asking page's), `private-ended`, `adblock` (the blocker's status changed), `media` (1.4: what plays in the page, `{ title, artist, album, artwork, playing, position, duration, actions }` from its Media Session and media elements, in the page's own words checked by Atmos, `artwork` a JPEG Atmos drew from the page's image; `null` when nothing does any more; `userActed`: the user acted in the page, or moved it from the browser, in the 5 seconds before) |
+| `atmos.web.media(tabId, action, value)` | 1.4: what plays in the page: `'toggle'`, `'next'`, `'previous'` or `'seek'` (`value` in seconds), as its `media` event lists. Done through the page's own Media Session handlers where it has them, as Chrome's media controls do, else on the media element |
 | `atmos.web.permissions.respond(requestId, { allow, remember })` / `list()` / `set(origin, name, 'allow' \| 'block' \| null)` | Answer a site's request (the extension draws the prompt; Atmos keeps the answer per site); the remembered answers, to show or take back. Besides the prompted permissions, `ads` (the site's shield down) and `popups` (its pop-ups allowed without a click), each only ever `'allow'` |
 | `atmos.web.external.respond(requestId, allow)` | Answer a link to another program (`mailto:`…) |
 | `atmos.web.downloads.list()` / `open(id)` / `show(id)` / `cancel(id)` / `pause(id)` / `resume(id)` / `remove(id)` | This session's downloads. `open` refuses a program or script |
@@ -1342,7 +1426,7 @@ Every extension lists what it uses:
 |---|---|
 | `network` | Hosts it contacts: its frames (`fetch()`, WebSockets, images, media) and `atmos.fetch()`. Each entry is a public host name (`"api.example.com"`), `"*.example.com"` for its subdomains (not `example.com` itself), or `"*"` for any public host. No schemes, ports, paths, IP addresses or local names (`.localhost`, `.local`, `.lan`, `.internal`, `.home.arpa`): a manifest with one is invalid |
 | `browser` | `geolocation`, `clipboard-read`, `notifications`, `media` (camera and microphone), `display-capture`, and `wasm` (not a browser permission: lets its frames compile WebAssembly). Writing the clipboard, fullscreen and audio autoplay need nothing |
-| `invokes` | Other extensions it talks to, as `plugin:<id>` or `service:<id>`: the system services (`service:audio`, `service:wallpaper`, `service:location`), libraries it imports, and whatever other extensions share with it. Declaring one isn't enough on its own: the other extension decides what it shares |
+| `invokes` | Other extensions it talks to, as `plugin:<id>` or `service:<id>`: the system services (`service:audio`, `service:wallpaper`), Atmos's calls through official services (`service:location`, `service:now-playing`), libraries it imports, and whatever other extensions share with it. Declaring one isn't enough on its own: the other extension decides what it shares |
 | `node` | Official only: modules `main.cjs` (and the `.cjs` files it loads) `require()`, including `electron` and npm packages |
 | `electron` | Official only: Electron APIs used from the main process |
 | `ipc` | Official only: `main.cjs` registers IPC handlers or sends events |
@@ -1817,6 +1901,38 @@ Before sharing an extension:
     that check their arguments, shared only when they must be.
 
 ## 10. Compatibility
+
+**SDK 1.4 (Atmos 0.21).** Only additions; an SDK 1.3 extension runs
+unchanged, but for one move: Location is an official service now
+(services/location), no longer part of Atmos. `atmos.location` works as
+before once it's installed, and `get()` is `null` until it is. An
+extension that reads it lists it as a dependency (`"location": "^1.0.0"`)
+so it comes along at install. One written before, with only
+`"invokes": ["service:location"]`, still brings it: Atmos's update check
+installs Location once for an installed extension that invokes it (unless
+you removed Location), applied at the next restart. Its Settings section
+and Detect are where they were (Appearance), and the location set before
+moves to it the first time it starts. Without a reader, nothing installs
+it; the location set before waits until it's installed.
+
+- `atmos.nowPlaying` (`set`, `clear`, `onControl`): say what your extension
+  plays in Atmos's Now Playing widget and take its controls (section 4,
+  "Now Playing"). Needs `"engines": { "atmos": ">=0.21.0" }` and
+  `"invokes": ["service:now-playing"]`.
+- Now Playing is an official service now, not part of Audio Player: Audio
+  Player 1.2 publishes to it and installs it as a recommended dependency.
+  The widget keeps its old id, so saved sidebars keep it in place, and,
+  having no panel of its own, shows beside every panel (Music's showed
+  beside Music only).
+- A recommended optional dependency comes with the update that first
+  recommends it, as it does with a first install; never one the user
+  removed or cancelled, whichever extension recommends it (installing it by
+  hand undoes that). What Atmos Browser (built in) recommends comes with
+  the first start's choice, or after the Atmos update that first
+  recommends it (not after "Just Atmos Browser").
+- `atmos.web.media` and the `media` event (official extensions): what plays
+  in a page, and its controls. Atmos Browser 1.2.0 shows its tabs in Now
+  Playing with them.
 
 **SDK 1.3 (Atmos 0.20).** Only additions; an SDK 1.2 extension runs
 unchanged.

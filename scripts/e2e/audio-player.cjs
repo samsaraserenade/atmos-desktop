@@ -4,7 +4,8 @@
 // Audio service surviving panel switches, Space, rev/play, rev/next and
 // rev/song in Atmos's command bar (answered by the boot frame), the bar
 // lying on Music's own and rev/ typed in its search handing over, menus with
-// controls and icons, the three widgets, and state across a restart.
+// controls and icons, the Queue and Library widgets and the Now Playing
+// service's, and state across a restart.
 // Usage: node scripts/e2e/audio-player.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), path = require('path'), zlib = require('zlib');
@@ -74,10 +75,10 @@ async function waitFrame(page, surface, index = 0, timeout = 15000) {
 }
 const channelState = page => page.evaluate(async () => (await import('atmos-core/core/renderer-capabilities.js')).getCapability('media.audio')?.channel('plugin:audio-player').state());
 const activate = (page, id) => page.evaluate(async id => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin(id), id);
-async function widget(page, selector, timeout = 15000) {
+async function widget(page, selector, timeout = 15000, ext = 'plugin%3Aaudio-player') {
   const until = Date.now() + timeout;
   while (Date.now() < until) {
-    for (const frame of page.frames().filter(f => f.url().includes('ext=plugin%3Aaudio-player') && f.url().includes('surface=sidebar'))) {
+    for (const frame of page.frames().filter(f => f.url().includes(`ext=${ext}`) && f.url().includes('surface=sidebar'))) {
       if (await frame.evaluate(selector => !!document.querySelector(selector), selector).catch(() => false)) return frame;
     }
     await page.waitForTimeout(150);
@@ -194,11 +195,41 @@ const r = {};
   r.playing = await channelState(s.page);
   r.pageAudioElements = await s.page.evaluate(() => [...document.querySelectorAll('#atmos-audio-host audio')].map(a => a.dataset.owner));
   const queue = await widget(s.page, '#mp-side-queue');
-  const nowPlaying = await widget(s.page, '#ap-mini-cover');
+  // Now Playing is a service of its own (Atmos 0.21): Music publishes to it.
+  const nowPlaying = await widget(s.page, '#np-cover', 15000, 'service%3Anow-playing');
   const library = await widget(s.page, '#lib-folder-list');
   await s.page.waitForTimeout(500);
   r.queue = await queue?.evaluate(() => [...document.querySelectorAll('.mp-tl-row')].map(row => `${row.classList.contains('active') ? '*' : ''}${row.querySelector('.mp-tl-name').textContent}`)).catch(e => e.message);
-  r.nowPlaying = await nowPlaying?.evaluate(() => ({ track: document.getElementById('ap-mini-track')?.textContent, artist: document.getElementById('ap-mini-artist')?.textContent })).catch(e => e.message);
+  await nowPlaying?.waitForFunction(() => document.getElementById('np-track')?.textContent !== 'Nothing playing', null, { timeout: 8000 }).catch(() => {});
+  r.nowPlaying = await nowPlaying?.evaluate(() => ({
+    track: document.getElementById('np-track')?.textContent,
+    artist: document.getElementById('np-artist')?.textContent,
+    dots: document.getElementById('np-dots').hidden ? 0 : document.querySelectorAll('.np-dot').length,
+    cover: document.querySelector('#np-cover-img img')?.src.slice(0, 15) ?? null,
+    hint: document.getElementById('np-cover').title,
+  })).catch(e => e.message);
+  // Its section kept Music's old widget id, so a saved layout still places it.
+  r.nowPlayingSection = await s.page.evaluate(() => !!document.querySelector('#fin-section-audio-player iframe[src*="now-playing"]'));
+  // Its cover is Music's play/pause: a click pauses, another plays again
+  // (real clicks: the widget acts on what showed when the button went down).
+  await s.page.evaluate(() => {
+    const section = document.getElementById('fin-section-audio-player');
+    if (section && !section.classList.contains('open')) section.querySelector('.fin-section-label')?.click();
+    section?.scrollIntoView({ block: 'center' });
+  });
+  await s.page.waitForTimeout(800);
+  const clickCover = async () => {
+    const box = await s.page.locator('#fin-section-audio-player iframe').boundingBox();
+    const at = await nowPlaying.evaluate(() => { const b = document.getElementById('np-cover').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; });
+    await s.page.mouse.click(box.x + at.x, box.y + at.y);
+    await s.page.mouse.move(640, 300);
+  };
+  await clickCover().catch(e => { r.nowPlayingClick = e.message; });
+  await s.page.waitForTimeout(800);
+  r.nowPlayingPaused = (await channelState(s.page))?.playing === false;
+  await clickCover().catch(e => { r.nowPlayingClick = e.message; });
+  await s.page.waitForTimeout(800);
+  r.nowPlayingResumed = (await channelState(s.page))?.playing === true;
   r.libraryWidget = await library?.evaluate(() => [...document.querySelectorAll('.lib-folder-row')].map(row => row.textContent.replace(/\s+/g, ' ').trim())).catch(e => e.message);
   r.waveform = await panel?.evaluate(async () => {
     const wave = await (await import('atmos-sdk')).default.call('plugin:audio-player', 'waveform');

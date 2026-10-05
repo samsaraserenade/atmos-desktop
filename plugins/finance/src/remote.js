@@ -11,7 +11,12 @@ const HISTORY_TIERS = [
 async function fetchJson(route) {
   const result = await invoke('vps:fetch', route);
   // "VPS unavailable: no answer in 20 s", "…: its address didn't resolve (DNS)".
-  if (!result?.ok) throw new Error(result?.status ? `VPS HTTP ${result.status}` : `VPS unavailable${result?.error ? `: ${result.error}` : ''}`);
+  if (!result?.ok) {
+    const error = new Error(result?.status ? `VPS HTTP ${result.status}` : `VPS unavailable${result?.error ? `: ${result.error}` : ''}`);
+    // No server paired yet: nothing went wrong, there's just nothing to read.
+    if (result?.configured === false) error.unconfigured = true;
+    throw error;
+  }
   try { return JSON.parse(result.body); }
   catch { throw new Error('VPS returned invalid data'); }
 }

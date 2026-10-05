@@ -1,5 +1,5 @@
 /**
- * Types for the Atmos SDK 1.3 (`import atmos from 'atmos-sdk'`).
+ * Types for the Atmos SDK 1.4 (`import atmos from 'atmos-sdk'`).
  *
  * The SDK is what a framed extension uses to talk to Atmos; Atmos serves it
  * to every frame. These typings let an editor check and complete calls; point
@@ -273,13 +273,23 @@ export interface Location {
   mode: 'auto' | 'manual';
 }
 export interface LocationApi {
-  /** The location set in Atmos, or null when none is. */
+  /** The location set in Atmos, or null when none is (or the Location service isn't installed). */
   get(): Promise<Location | null>;
   onChange(fn: (location: Location | null) => void): Unsubscribe;
+  /** @firstParty SDK 1.4, the Location service only: where you are, for readers (null: not set). */
+  publish(location: Location | null): Promise<void>;
+  /** @firstParty SDK 1.4, the Location service only: the location Atmos kept before 0.21, or null. It stays until forgetEarlier(). */
+  takeEarlier(): Promise<Location | null>;
+  /** @firstParty SDK 1.4, the Location service only: it has saved what takeEarlier() gave, so Atmos's copy goes. */
+  forgetEarlier(): Promise<void>;
+  /** @firstParty SDK 1.4, the Location service only: after a click on its Detect button, its frame may use the browser's location for a moment. */
+  allowDetect(): Promise<boolean>;
 }
 /**
  * The user's location as set in Atmos (Settings → Appearance → Location),
- * read-only. Needs "invokes": ["service:location"].
+ * read-only. Needs "invokes": ["service:location"], and the Location
+ * service (official, Atmos 0.21): declare it as a dependency so it comes
+ * with your extension.
  */
 export declare const location: LocationApi;
 
@@ -389,6 +399,95 @@ export interface CommandsApi {
 }
 /** SDK 1.3 */
 export declare const commands: CommandsApi;
+
+/** SDK 1.4: what an extension can do from Atmos's Now Playing widget. */
+export type NowPlayingAction = 'toggle' | 'next' | 'previous' | 'seek' | 'volume';
+
+/** SDK 1.4: what an extension is playing. Atmos checks every field. */
+export interface NowPlayingSession {
+  /** Shown as plain text, 200 characters at most. */
+  title: string;
+  artist?: string | null;
+  album?: string | null;
+  /** Where it's playing, in a few words ("youtube.com"), 80 characters at most. */
+  from?: string | null;
+  /** A PNG, JPEG, WebP or GIF image (by its bytes), 1 MB and 4096 pixels a side at most: a Blob or a data: URL. No SVG, nothing Atmos would fetch. */
+  artwork?: Blob | string | null;
+  /** Seconds. */
+  duration?: number | null;
+  /** Seconds, now: set again when playback jumps; Atmos moves it on while playing. */
+  position?: number | null;
+  /** false when left out. */
+  playing?: boolean;
+  /** What the widget may ask for: onControl hears only these. */
+  actions?: NowPlayingAction[];
+  /**
+   * false: this start wasn't the user's doing (a page that began playing by
+   * itself): it shows only when nothing else plays. A community extension's
+   * start counts only after the user clicked in it anyway.
+   */
+  startedByUser?: boolean;
+  /** 0–100. */
+  volume?: number | null;
+}
+
+/** SDK 1.4: a control from the widget, for one of this extension's sessions. */
+export interface NowPlayingControl {
+  key: string;
+  action: NowPlayingAction;
+  /** Seconds for seek, 0–100 for volume, else null. */
+  value: number | null;
+}
+
+/**
+ * SDK 1.4: what this extension plays, shown in Atmos's Now Playing widget
+ * (the Now Playing service). Needs "invokes": ["service:now-playing"].
+ */
+export interface NowPlayingApi {
+  /**
+   * Set a session, whole: what's left out is gone (send the artwork and the
+   * position every time). `key` names one of several (a tab, say); 'main'
+   * by default. 20 updates a second at most; 16 sessions and 4 MB of artwork.
+   */
+  set(session: NowPlayingSession, key?: string): Promise<void>;
+  /** That session ends; with no key, all of this extension's. They also end when its last frame goes. */
+  clear(key?: string): Promise<void>;
+  /** The widget asks this extension to do something listed in a session's `actions`. Every frame of it that listens hears it: listen in one. */
+  onControl(fn: (control: NowPlayingControl) => void): Unsubscribe;
+  /** @firstParty The Now Playing service only: every extension's sessions, now and on every change. */
+  sessions(fn: (sessions: NowPlayingSessionShown[]) => void): Unsubscribe;
+  /** @firstParty The Now Playing service only: ask a session's extension for one of its `actions`. */
+  control(id: string, action: NowPlayingAction, value?: number | null): Promise<void>;
+}
+
+/** @firstParty A session as the Now Playing service gets it: checked, and stamped by Atmos. */
+export interface NowPlayingSessionShown {
+  /** "<extension>|<key>" */
+  id: string;
+  key: string;
+  source: { id: string; name: string; community: boolean };
+  title: string;
+  artist: string | null;
+  album: string | null;
+  from: string | null;
+  /** A Blob Atmos made from the image's bytes, typed by what they are. */
+  artwork: Blob | null;
+  /** The same image, the same key. */
+  artworkKey: string | null;
+  duration: number | null;
+  position: number | null;
+  /** When `position` was set (ms). */
+  positionAt: number;
+  playing: boolean;
+  /** When it last started playing (ms), null while paused. */
+  playingSince: number | null;
+  /** When it last played (ms). */
+  lastActive: number;
+  actions: NowPlayingAction[];
+  volume: number | null;
+}
+/** SDK 1.4 */
+export declare const nowPlaying: NowPlayingApi;
 
 /** @experimental Not yet seen working on Windows. Needs "notifications" in "permissions.browser". */
 export interface NotificationsApi {
@@ -502,12 +601,30 @@ export interface WebDownload {
  * `redirected` when the site itself sent it back; Atmos 0.19.2),
  * 'download', 'download-removed', 'private-ended', 'adblock' (the blocker's
  * status changed; `untrusted` names uBlock Origin's lists in use from a
- * copy without their trust).
+ * copy without their trust), 'media' (SDK 1.4: `media` is what plays in
+ * the page, a WebMedia, or null when nothing does any more).
  */
 export interface WebEvent {
   type: string;
   tabId?: string | null;
   [key: string]: unknown;
+}
+/**
+ * @firstParty SDK 1.4: what plays in a page, from its Media Session and
+ * media elements (the page's own words, checked and bounded by Atmos).
+ * `artwork` is a JPEG data URL Atmos drew from the page's image, or null.
+ */
+export interface WebMedia {
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  artwork: string | null;
+  playing: boolean;
+  /** Seconds. */
+  position: number | null;
+  duration: number | null;
+  /** What web.media() can ask of it. */
+  actions: ('toggle' | 'next' | 'previous' | 'seek')[];
 }
 /**
  * @firstParty SDK 1.2: web pages, for an official extension declaring
@@ -536,6 +653,8 @@ export interface WebApi {
   copyImage(tabId: string, x: number, y: number): Promise<void>;
   focus(tabId: string): Promise<void>;
   state(tabId: string): Promise<WebTabState>;
+  /** SDK 1.4: what plays in the page, as its 'media' events say it takes. `value`: seconds, for 'seek'. */
+  media(tabId: string, action: 'toggle' | 'next' | 'previous' | 'seek', value?: number | null): Promise<void>;
   /** The site's shield for the tab's page: true blocks its ads and trackers, false allows them (kept per site). */
   shield(tabId: string, on: boolean): Promise<'on' | 'off' | 'disabled' | 'none'>;
   /** What was blocked on the tab's page: the count, and by site. */
@@ -597,6 +716,8 @@ export interface Atmos {
   readonly lifecycle: LifecycleApi;
   /** SDK 1.3 */
   readonly commands: CommandsApi;
+  /** SDK 1.4 */
+  readonly nowPlaying: NowPlayingApi;
   /** @experimental */
   readonly notifications: NotificationsApi;
   /** @firstParty */

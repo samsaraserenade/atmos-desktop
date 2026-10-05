@@ -6,11 +6,10 @@ Plays your music library. First-party, runs in frames (`"runtime": "frame"`).
 audio-player/
 ├── boot.js              # Background frame: the engine, for the whole session
 ├── panel.js             # "Music" panel: player bar + library browser, in Atmos's drawer
-├── sidebar.js           # "Now Playing" widget
 ├── sidebar-queue.js     # "Queue" widget (or the album picked in the grid)
 ├── sidebar-library.js   # "Library" widget: folders, rescans, scan progress
 ├── main.cjs             # Folder dialogs, directory walks, tag fallbacks, media server (your folders only)
-├── assets/              # panel.css (panel + Queue/Library widgets), sidebar.css (Now Playing)
+├── assets/              # panel.css (panel + Queue/Library widgets)
 └── src/
     ├── engine.js        # Queue, shuffle/repeat, restore, waveforms; exposes methods
     ├── library.js       # Folder scanning and album grouping (engine side)
@@ -36,6 +35,13 @@ loads tracks into its channel of Atmos's Audio service (`atmos.audio`),
 which lives in the Atmos page. So music carries on whatever panel is
 showing, and the panel and widgets can come and go. The engine hears when a
 track ends and loads the next one.
+
+**Now Playing.** The engine says what plays with `atmos.nowPlaying.set()`
+(the track, artist, album, its cover when it's a PNG, JPEG, WebP or GIF,
+length, position, volume) and takes play/pause, next, previous, seek and
+volume back (`onControl`). The widget itself is the Now Playing service's
+(services/now-playing), installed with Audio Player as a recommended
+dependency; without it Music plays the same, with no Now Playing widget.
 
 **The drawer.** On the full workspace the Music panel is a drawer
 (`"drawer": { "bar": 54, "keys": true }`): Atmos slides it between hidden,

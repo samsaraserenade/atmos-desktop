@@ -494,6 +494,15 @@ document.addEventListener('keydown', event => {
     toggleSettings();
     return;
   }
+  // Alt+` opens and closes the sidebar from anywhere, even while typing:
+  // frames pass it on, and Atmos Browser takes it before a web page sees it
+  // (web-policy.cjs 'sidebar'). Tab, below, does too where Tab isn't
+  // someone else's (not in a field, not in a web page).
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.code === 'Backquote' || event.key === '`')) {
+    event.preventDefault();
+    toggleSidebar();
+    return;
+  }
   if (isTyping() || event.ctrlKey || event.metaKey || event.altKey) return;
   // While Settings is open, Tab moves between its controls (it used to hide
   // the sidebar behind it instead).
@@ -507,6 +516,9 @@ document.addEventListener('keydown', event => {
     }
   }
 });
+
+// Alt+` in a web page (web-layer.js).
+window.addEventListener('atmos:toggle-sidebar', () => toggleSidebar());
 
 document.getElementById('sidebar-footer-settings')?.addEventListener('click', event => {
   event.stopPropagation();

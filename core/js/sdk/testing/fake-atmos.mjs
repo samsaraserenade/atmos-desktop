@@ -26,6 +26,8 @@
  * MIT licence, like the SDK.
  */
 
+import { normalizeSession, readArtwork, sessionKey } from '../now-playing-checks.mjs';
+
 const clone = value => (value === undefined ? undefined : structuredClone(value));
 
 class AtmosPermissionError extends Error {
@@ -95,6 +97,15 @@ export function createFakeAtmos(options = {}) {
     deliver('audio', audioState);
     return audioState;
   };
+  // Now Playing (SDK 1.4): this extension's sessions by key, checked as Atmos
+  // checks them (../now-playing-checks.mjs, which Atmos itself uses).
+  const nowPlayingSessions = new Map();
+  let nowPlayingChain = Promise.resolve(); // set and clear apply in the order asked, as in Atmos
+  const inOrder = job => { const run = nowPlayingChain.then(job); nowPlayingChain = run.catch(() => {}); return run; };
+  const isNowPlayingService = () => extension.kind === 'service' && extension.id === 'now-playing' && extension.tier !== 'third-party';
+  const isLocationService = () => extension.kind === 'service' && extension.id === 'location' && extension.tier !== 'third-party';
+  const notLocationService = () => new AtmosPermissionError("only Atmos's Location service sets the location");
+
   // The wallpaper as a frame sees it; `mine` is whether this extension set it.
   let wallpaperNow = options.wallpaper === null ? null : { mode: 'wallpaper', opacity: 100, thumbnail: null, ...clone(options.wallpaper || {}) };
   let wallpaperMine = false;
@@ -180,6 +191,11 @@ export function createFakeAtmos(options = {}) {
       download: guard('download', tabId => { page(tabId); }),
       copyImage: guard('copyImage', tabId => { page(tabId); }),
       focus: guard('focus', tabId => { page(tabId); }),
+      media: guard('media', (tabId, action, value) => {
+        page(tabId);
+        if (!['toggle', 'next', 'previous', 'seek'].includes(action)) throw new TypeError('web.media(tabId, action): toggle, next, previous or seek');
+        if (action === 'seek' && !(Number.isFinite(value) && value >= 0)) throw new TypeError("web.media(tabId, 'seek', seconds)");
+      }),
       state: guard('state', tabId => webState(tabId, page(tabId))),
       shield: guard('shield', (tabId, on) => {
         const current = page(tabId);
@@ -265,6 +281,28 @@ export function createFakeAtmos(options = {}) {
       if (typeof handler?.suggest !== 'function') throw new Error(`rev/${name} lists nothing (atmos.commands.handle(name, run, { suggest }))`);
       return clone(await handler.suggest({ args: '', options: {}, ...clone(input) }));
     },
+    /** Now Playing (SDK 1.4): this extension's sessions as Atmos holds them, by key. */
+    get nowPlaying() { return Object.fromEntries([...nowPlayingSessions].map(([key, session]) => [key, clone(session)])); },
+    /** Use the widget on one of this extension's sessions: onControl hears { key, action, value }. */
+    controlNowPlaying(key = 'main', action = 'toggle', value = null) {
+      const session = nowPlayingSessions.get(key);
+      if (!session) throw new Error(`no Now Playing session '${key}'`);
+      if (!session.actions.includes(action)) throw new TypeError(`this session doesn't take “${action}” (its actions: ${session.actions.join(', ') || 'none'})`);
+      // As Atmos sends it: seek in seconds within the length, volume 0–100.
+      let amount = null;
+      if (action === 'seek') {
+        if (!Number.isFinite(value) || value < 0) throw new TypeError('seek to a number of seconds, 0 or more');
+        amount = session.duration == null ? value : Math.min(value, session.duration);
+      } else if (action === 'volume') {
+        if (!Number.isFinite(value) || value < 0 || value > 100) throw new TypeError('volume is 0–100');
+        amount = value;
+      }
+      deliver('nowPlaying.control', { key, action, value: amount });
+    },
+    /** As the Now Playing service: what atmos.nowPlaying.sessions() listeners hear. */
+    showNowPlaying(sessions) { deliver('nowPlaying.sessions', sessions); },
+    /** As the Now Playing service: the controls it sent ({ id, action, value }). */
+    nowPlayingControls: [],
     /** The last image atmos.wallpaper.set() was given (null after restore()). */
     wallpaper: null,
     /** Change the wallpaper as the user would in Settings (onChange listeners hear it; restore() then does nothing). */
@@ -294,6 +332,10 @@ export function createFakeAtmos(options = {}) {
     emit(name, payload) { deliver(`event:${name}`, payload); },
     /** Change the location as the user would in Settings. */
     setLocation(next) { location = clone(next); deliver('location', location); },
+    /** As the Location service: what it published, in order. */
+    locationPublished: [],
+    /** The location Atmos kept before 0.21, for the Location service to take (once). */
+    earlierLocation: options.earlierLocation === undefined ? null : clone(options.earlierLocation),
     /** Deliver a main-process event (listen()). */
     send(target, channel, ...args) { for (const fn of [...(listeners.get(`main:${target} ${channel}`) || [])]) fn(...clone(args)); },
     /** What the next contextMenu.open() resolves with (an id, { id, value }, or null). */
@@ -337,7 +379,7 @@ export function createFakeAtmos(options = {}) {
   }
 
   const atmos = {
-    SDK_VERSION: '1.3.0',
+    SDK_VERSION: '1.4.0',
     ready: Promise.resolve({ extension }),
     extension,
     surface: {
@@ -494,10 +536,68 @@ export function createFakeAtmos(options = {}) {
         onChange: fn => follow('audio', 'service:audio', 'play audio through', 'audio', fn),
       };
     })(),
+    nowPlaying: {
+      async set(session, key = 'main') {
+        const refused = needs('service:now-playing', 'show what it plays in');
+        if (refused) throw refused;
+        const id = sessionKey(key ?? 'main');
+        const checked = normalizeSession(session);
+        return inOrder(async () => {
+          const art = await readArtwork(session.artwork);
+          if (!nowPlayingSessions.has(id) && nowPlayingSessions.size >= 16) throw new RangeError('an extension shows 16 sessions in Now Playing at most');
+          const others = [...nowPlayingSessions].filter(([other]) => other !== id).reduce((sum, [, item]) => sum + (item.artwork?.size ?? 0), 0);
+          if (art && others + art.bytes > 4 * 1024 * 1024) throw new RangeError('an extension’s Now Playing artwork is 4 MB at most, all together');
+          nowPlayingSessions.set(id, { ...checked, artwork: art?.blob ?? null });
+        });
+      },
+      async clear(key = null) {
+        const refused = needs('service:now-playing', 'show what it plays in');
+        if (refused) throw refused;
+        if (key != null && typeof key !== 'string') throw new TypeError('atmos.nowPlaying.clear(key?)');
+        return inOrder(() => {
+          if (key == null) nowPlayingSessions.clear();
+          else nowPlayingSessions.delete(key);
+        });
+      },
+      onControl: fn => {
+        if (typeof fn !== 'function') throw new TypeError('atmos.nowPlaying.onControl(fn)');
+        return on('nowPlaying.control', fn);
+      },
+      sessions(fn) {
+        if (typeof fn !== 'function') throw new TypeError('atmos.nowPlaying.sessions(fn)');
+        const off = on('nowPlaying.sessions', fn);
+        if (!isNowPlayingService()) { off(); console.error('[atmos-sdk] cannot follow Now Playing:', 'only Atmos\'s Now Playing service sees what extensions play'); }
+        return off;
+      },
+      async control(id, action, value = null) {
+        if (!isNowPlayingService()) throw new AtmosPermissionError('only Atmos\'s Now Playing service sees what extensions play');
+        fake.nowPlayingControls.push({ id, action, value });
+      },
+    },
     fetch: fakeFetch,
     location: {
       get: async () => (declared('service:location') ? clone(location) : refuse(`${self} is not permitted to read the location from service:location; declare it in extension.json "permissions.invokes"`)),
       onChange: fn => follow('location', 'service:location', 'follow the location from', 'the location', fn),
+      // The Location service's own: what it publishes reaches readers (fake.location).
+      async publish(next) {
+        if (!isLocationService()) throw notLocationService();
+        location = next == null ? null : clone(next);
+        fake.locationPublished.push(clone(location));
+        deliver('location', location);
+      },
+      // What Atmos kept before 0.21 (fake.earlierLocation): it stays until forgotten.
+      async takeEarlier() {
+        if (!isLocationService()) throw notLocationService();
+        return clone(fake.earlierLocation);
+      },
+      async forgetEarlier() {
+        if (!isLocationService()) throw notLocationService();
+        fake.earlierLocation = null;
+      },
+      async allowDetect() {
+        if (!isLocationService()) throw notLocationService();
+        return true;
+      },
     },
     lifecycle: {
       signal: controller.signal,

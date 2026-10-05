@@ -1,10 +1,10 @@
 {
   "apiVersion": 4,
   "engines": {
-    "atmos": ">=0.20.0"
+    "atmos": ">=0.21.0"
   },
   "tier": "first-party",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
@@ -26,13 +26,8 @@
     },
     "sidebar": [
       {
-        "label": "Now Playing",
-        "icon": "icon.svg",
-        "order": 20,
-        "resizable": false
-      },
-      {
         "id": "queue",
+        "legacyId": "audio-player-queue",
         "entry": "sidebar-queue.js",
         "label": "Queue",
         "icon": "icon-queue.svg",
@@ -103,7 +98,12 @@
   "dependencies": {
     "audio": "^1.0.0",
     "media-metadata": "^1.0.0",
-    "wallpaper": "^1.0.0"
+    "wallpaper": "^1.0.0",
+    "now-playing": {
+      "version": "^1.0.0",
+      "optional": true,
+      "recommended": true
+    }
   },
   "permissions": {
     "node": [
@@ -124,7 +124,8 @@
     "invokes": [
       "service:audio",
       "service:media-metadata",
-      "service:wallpaper"
+      "service:wallpaper",
+      "service:now-playing"
     ]
   }
 }

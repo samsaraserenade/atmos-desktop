@@ -158,3 +158,136 @@ test('pages get Atmos\'s thin scrollbar, as a user stylesheet a page\'s own styl
   // A page with no document to style goes on without it.
   assert.doesNotThrow(() => applyScrollbar({ webFrame: { insertCSS: () => { throw new Error('no document'); } } }));
 });
+
+// ── What plays (Now Playing) ──────────────────────────────────────────────────
+const vm = require('node:vm');
+const { installMediaSessionRelay, watchMedia, PAGE_MEDIA, MEDIA_CONTROL } = require('./web-page-preload.cjs');
+
+/** A page's world: a MediaSession like Chromium's, with the relay installed for `token`. */
+function mediaWorld(token) {
+  const calls = [];
+  const doc = new EventTarget();
+  class MediaSession {}
+  Object.defineProperty(MediaSession.prototype, 'setActionHandler', {
+    value(action, handler) { calls.push([action, typeof handler]); }, writable: true, enumerable: true, configurable: true,
+  });
+  const session = new MediaSession();
+  session.metadata = null;
+  session.playbackState = 'none';
+  const context = vm.createContext({ MediaSession, navigator: { mediaSession: session }, document: doc, EventTarget, CustomEvent, JSON, Reflect, Proxy });
+  vm.runInContext(`(${installMediaSessionRelay})(${JSON.stringify(token)})`, context);
+  return { doc, session, calls };
+}
+
+test('the page\'s Media Session handlers: still set as the page sets them, and Atmos can call them by its token', () => {
+  const { doc, session, calls } = mediaWorld('tok');
+  const announced = [];
+  doc.addEventListener('tok:actions', event => announced.push(JSON.parse(event.detail)));
+  const heard = [];
+  session.setActionHandler('pause', details => heard.push(details));
+  session.setActionHandler('seekto', details => heard.push(details));
+  session.setActionHandler('nexttrack', () => heard.push('next'));
+  session.setActionHandler('nexttrack', null);
+  assert.deepEqual(calls, [['pause', 'function'], ['seekto', 'function'], ['nexttrack', 'function'], ['nexttrack', 'object']], 'Chromium still gets them');
+  assert.deepEqual(announced.at(-1), ['pause', 'seekto']);
+  doc.dispatchEvent(new CustomEvent('tok', { detail: JSON.stringify({ action: 'pause' }) }));
+  doc.dispatchEvent(new CustomEvent('tok', { detail: JSON.stringify({ action: 'seekto', seekTime: 42 }) }));
+  doc.dispatchEvent(new CustomEvent('tok', { detail: JSON.stringify({ action: 'nexttrack' }) }));
+  doc.dispatchEvent(new CustomEvent('other', { detail: JSON.stringify({ action: 'pause' }) }));
+  doc.dispatchEvent(new CustomEvent('tok', { detail: '{not json' }));
+  // (Made in the page's world: compared as plain values.)
+  assert.deepEqual(JSON.parse(JSON.stringify(heard)), [{ action: 'pause' }, { action: 'seekto', seekTime: 42 }], 'only handlers it has, only by the token');
+  const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(session), 'setActionHandler');
+  assert.deepEqual([descriptor.writable, descriptor.enumerable, descriptor.configurable], [true, true, true], 'as Chromium defines it');
+  assert.match(Function.prototype.toString.call(descriptor.value), /\[native code\]/, 'a page that looks sees a native function');
+  assert.equal(descriptor.value.name, 'value', 'its own name (Chromium\'s is setActionHandler)');
+});
+
+/** A media element, enough for watchMedia. */
+class FakeMedia {
+  constructor(localName, { muted = false } = {}) {
+    Object.assign(this, { localName, paused: true, ended: false, muted, volume: 1, currentTime: 0, duration: 120, isConnected: true });
+  }
+  play() { this.paused = false; return Promise.resolve(); }
+  pause() { this.paused = true; }
+}
+
+function mediaPage() {
+  const { doc, session } = mediaWorld('tok2');
+  const elements = [];
+  doc.querySelectorAll = () => elements;
+  doc.hidden = false;
+  const sent = [];
+  const listeners = {};
+  const queue = [];
+  const timers = { setTimeout: fn => { queue.push(fn); return queue.length; }, clearTimeout() {}, setInterval: () => 1, clearInterval() {} };
+  const ipcRenderer = { send: (channel, report) => sent.push([channel, report]), on: (channel, fn) => { listeners[channel] = fn; } };
+  watchMedia({ ipcRenderer, contextBridge: null, doc, nav: { mediaSession: session }, timers, token: 'tok2' });
+  const fire = (type, target) => doc.dispatchEvent(Object.assign(new Event(type), { __target: target }));
+  // An Event's target can't be set; the listener reads event.target, so give it one.
+  const realDispatch = doc.dispatchEvent.bind(doc);
+  doc.dispatchEvent = event => {
+    if (event.__target) Object.defineProperty(event, 'target', { value: event.__target });
+    return realDispatch(event);
+  };
+  const flush = () => { while (queue.length) queue.shift()(); };
+  const control = (action, value) => listeners[MEDIA_CONTROL](null, { action, value });
+  return { doc, session, elements, sent, fire, flush, control };
+}
+
+test('a page\'s media is reported once something audible plays; muted video never', () => {
+  const page = mediaPage();
+  const hero = new FakeMedia('video', { muted: true });
+  page.elements.push(hero);
+  hero.paused = false;
+  page.fire('playing', hero);
+  page.flush();
+  assert.deepEqual(page.sent, [], 'a muted video playing on its own: nothing');
+  const song = new FakeMedia('audio');
+  page.elements.push(song);
+  song.paused = false;
+  song.currentTime = 3;
+  page.fire('play', song);
+  page.flush();
+  assert.equal(page.sent.length, 1);
+  assert.equal(page.sent[0][0], PAGE_MEDIA);
+  assert.deepEqual(page.sent[0][1], { title: '', artist: '', album: '', artwork: [], playing: true, actions: ['toggle', 'seek'], position: 3, duration: 120 });
+  // The page's metadata and handlers.
+  page.session.metadata = { title: 'One', artist: 'Tester', album: 'Album', artwork: [{ src: 'https://example.com/a.png', sizes: '512x512', type: 'image/png' }] };
+  page.session.setActionHandler('nexttrack', () => {});
+  page.flush();
+  const last = page.sent.at(-1)[1];
+  assert.deepEqual([last.title, last.artist, last.album, last.artwork, last.actions], ['One', 'Tester', 'Album', [{ src: 'https://example.com/a.png', sizes: '512x512' }], ['toggle', 'next', 'seek']]);
+  // Nothing new, nothing sent.
+  const count = page.sent.length;
+  page.fire('playing', song);
+  page.flush();
+  assert.equal(page.sent.length, count);
+});
+
+test('the widget\'s controls: the page\'s own handlers where it has them, else the element', () => {
+  const page = mediaPage();
+  const song = new FakeMedia('audio');
+  page.elements.push(song);
+  song.paused = false;
+  page.fire('play', song);
+  page.flush();
+  // No handlers: pause and play the element itself, seek it.
+  page.control('toggle');
+  assert.equal(song.paused, true);
+  page.control('toggle');
+  assert.equal(song.paused, false);
+  page.control('seek', 30);
+  assert.equal(song.currentTime, 30);
+  // The page's handlers: called instead.
+  const heard = [];
+  for (const action of ['play', 'pause', 'nexttrack', 'previoustrack', 'seekto']) page.session.setActionHandler(action, details => heard.push(details));
+  page.control('toggle');
+  page.control('next');
+  page.control('previous');
+  page.control('seek', 12);
+  page.control('seek', -1);
+  page.control('delete');
+  assert.equal(song.paused, false, 'the page pauses itself');
+  assert.deepEqual(JSON.parse(JSON.stringify(heard)), [{ action: 'pause' }, { action: 'nexttrack' }, { action: 'previoustrack' }, { action: 'seekto', seekTime: 12 }]);
+});

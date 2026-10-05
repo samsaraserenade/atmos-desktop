@@ -25,6 +25,7 @@ const SDK_FILES = [
   'atmos-sdk.d.ts',
   'extension.schema.json',
   'LICENSE',
+  'now-playing-checks.mjs',
   'pack.cjs',
   'testing/fake-atmos.mjs',
   'testing/register.mjs',

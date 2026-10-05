@@ -29,6 +29,10 @@ const server = https.createServer({ cert, key }, (request, response) => {
     if (request.url === '/hop') { response.writeHead(302, { location: '/no-cors' }); return response.end(); }
     if (request.url === '/away') { response.writeHead(302, { location: 'https://elsewhere.example/' }); return response.end(); }
     if (request.url === '/slow') return; // never answers
+    // The Location service's place search (Open-Meteo's geocoder).
+    if (host === 'geocoding-api.open-meteo.com' && request.url.startsWith('/v1/search?name=London')) {
+      return json(200, { results: [{ name: 'London', admin1: 'England', country: 'United Kingdom', latitude: 51.5072, longitude: -0.1276 }] });
+    }
     json(404, { error: 'not found' });
   });
 });
@@ -50,7 +54,7 @@ async function until(check, { timeout = 15000, every = 100 } = {}) {
   const at = { address: '127.0.0.1', port };
   const fetchTest = path.join(home, 'fetch-test.json');
   fs.writeFileSync(fetchTest, JSON.stringify({
-    hosts: { 'api.test.example': at, 'other.test.example': at, 'elsewhere.example': at, 'api.github.com': at },
+    hosts: { 'api.test.example': at, 'other.test.example': at, 'elsewhere.example': at, 'api.github.com': at, 'geocoding-api.open-meteo.com': at },
     ca: cert,
   }));
 
@@ -63,8 +67,10 @@ async function until(check, { timeout = 15000, every = 100 } = {}) {
   fs.mkdirSync(future);
   fs.writeFileSync(path.join(future, 'extension.json'), JSON.stringify({ apiVersion: 4, engines: { atmos: '>=99.0.0' }, permissions: {} }));
   fs.writeFileSync(path.join(future, 'panel.js'), 'document.body.textContent = "never";');
+  // Nothing bundled but the Location service (official, since 0.21), which the probe reads.
   const noBundled = path.join(home, 'no-bundled');
   fs.mkdirSync(noBundled);
+  fs.cpSync(path.join(repo, 'services', 'location'), path.join(noBundled, 'services', 'location'), { recursive: true, filter: source => !source.includes(`${path.sep}tests`) });
 
   const app = await electron.launch({
     executablePath: ELECTRON,
@@ -95,8 +101,33 @@ async function until(check, { timeout = 15000, every = 100 } = {}) {
   r.serverSaw = seen.map(({ host, method, url, auth, cookie, agent }) => `${method} ${host}${url} auth=${auth} cookie=${cookie} ua=${String(agent).split('/')[0]}`);
   await page.screenshot({ path: path.join(out, '10-probe.png') });
 
-  // 3. The location, set in Settings' place of it.
-  await page.evaluate(async () => (await import('/system/location/index.js')).setLocation({ latitude: 51.5072, longitude: -0.1276, name: 'London' }));
+  // 3. The location, set on the Location service's own Settings page: a
+  // place searched for and picked (the geocoder is the test server); the
+  // page shows it at once, and its background frame publishes it.
+  await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).openSettingsPage('appearance'));
+  // (Settings may draw its page again, with a new frame: each step finds the frame there is then.)
+  const inLocationPage = fn => until(async () => {
+    const frame = frameFor('service:location', 'settings');
+    if (!frame) return undefined;
+    return frame.evaluate(fn).then(value => ({ value }), () => undefined);
+  }, { timeout: 15000 }).then(answer => answer?.value);
+  r.locationPageBefore = await until(() => inLocationPage(() => document.querySelector('#loc-current')?.textContent || undefined)) ?? 'no Location page';
+  await page.evaluate(() => document.querySelector('iframe[src*="ext=service%3Alocation"][src*="surface=settings"]')?.scrollIntoView({ block: 'center' }));
+  // Search, pick, and read the page in one go (a redrawn page starts again).
+  r.locationPage = await inLocationPage(async () => {
+    const until = async (check, ms = 5000) => { for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 50))) { const value = check(); if (value) return value; } return null; };
+    document.getElementById('loc-query').value = 'London';
+    document.getElementById('loc-search').requestSubmit();
+    const found = await until(() => document.querySelector('.loc-result'));
+    if (!found) {
+      const why = await (await import('atmos-sdk')).default.fetch('https://geocoding-api.open-meteo.com/v1/search?name=London').then(response => `status ${response.status}`, error => error.message);
+      return `no result: ${document.getElementById('loc-status').textContent} (${why})`;
+    }
+    found.click();
+    return (await until(() => (document.getElementById('loc-current').textContent === 'London' ? 'London' : null), 2000)) ?? `shows ${document.getElementById('loc-current').textContent}`;
+  }) ?? 'not shown';
+  await page.screenshot({ path: path.join(out, '15-location-page.png') });
+  await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).closeSettingsMenu());
   r.locationChanged = await until(() => panel.evaluate(() => window.__results.locationChanged), { timeout: 5000 });
   r.locationNow = await panel.evaluate(() => window.__atmos.location.get());
 

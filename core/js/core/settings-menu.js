@@ -83,7 +83,7 @@ const _EXTENSIONS_PAGE_ID = '__extensions__';
 // browser is what Atmos is built around (extension-frames.cjs gives its
 // settings contribution the "Browser" category).
 const _BROWSER_PAGE_ID = '__browser__';
-// Atmos's own capabilities (Audio, Wallpaper, Location): always on. Every
+// Atmos's own capabilities (Audio, Wallpaper): always on. Every
 // other plugin and service is on the Extensions page.
 const _SYSTEM_PAGE_ID = 'System';
 
@@ -596,7 +596,7 @@ function _renderHome() {
 
 // Settings → Appearance: Core's Theme, Sidebar and Glass sections
 // (appearance.js), then each extension's Appearance contribution as a
-// section of its own, in `order` (Wallpaper, Location, then any others).
+// section of its own, in `order` (Wallpaper, then Location and any others).
 function _renderAppearancePage() {
   _headerEl.classList.add('sm-no-search');
   _clearPageCleanups();
@@ -1332,7 +1332,7 @@ function _managerErrorHtml(key) {
  */
 function _needsHtml({ dependencies = [], usedBy = [] } = {}) {
   const chips = (items, extra = '') => items.map(item => `<span class="sm-manager-chip${extra}">${escapeHtml(item.name)}</span>`).join('');
-  // System services (Audio, Wallpaper, Location) are always there: not worth a chip.
+  // System services (Audio, Wallpaper) are always there: not worth a chip.
   const required = dependencies.filter(dep => !dep.optional && !dep.system);
   const optional = dependencies.filter(dep => dep.optional && !dep.system);
   const parts = [];

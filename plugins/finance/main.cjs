@@ -331,7 +331,7 @@ module.exports = async function activate(context) {
     let url;
     try {
       const server = connection.get();
-      if (!server) return { ok: false, status: 0, body: '', error: 'No portfolio server is set up' };
+      if (!server) return { ok: false, status: 0, body: '', configured: false, error: 'No portfolio server is set up' };
       url = requireVpsRoute(route, server.baseUrl);
       return await vpsQueue.run(async () => {
         const started = Date.now();

@@ -61,6 +61,9 @@ Built in: Atmos opens on it.
 - **Beside everything else.** Tile a page next to another panel or float
   it in a window, and links from Atmos and its extensions open in a new
   tab.
+- **What plays in Now Playing:** a video or song in a tab shows in the
+  sidebar's Now Playing with its title and artwork, and you can pause it,
+  skip or seek from there, from any panel.
 - **Private tabs** that keep nothing once the last one closes.
 - **Downloads, find in page, zoom per site, print**, and the shortcuts you
   know from other browsers.
@@ -101,7 +104,9 @@ Atmos Core owns the shell, and extensions fill it.
 - **Panels and layouts.** Show one panel full screen, split two side by side
   or stacked, run four in a grid, or float them as windows you can move,
   resize and layer. Dividers are draggable and every layout remembers its
-  proportions. Ctrl+Tab opens Task View; a middle click opens Settings.
+  proportions. Ctrl+Tab opens Task View; a middle click opens Settings;
+  Alt+` opens and closes the sidebar from anywhere, web pages and text
+  fields included (Tab does too, outside them).
 - **A command bar.** Ctrl+\\ opens a bar over the bottom of the panel
   you're in (or in the sidebar's footer, if you prefer) for `rev/`
   commands: switch panels, open Settings on a page, and the commands of
@@ -225,7 +230,8 @@ Features:
 - Queue management and persistent playback
 - Metadata handling
 - A waveform seek bar
-- Now Playing, Queue and Library sidebar widgets
+- Queue and Library sidebar widgets, and what plays in the Now Playing
+  widget (with Now Playing, which comes with it)
 - Global play and pause controls: Space, and `rev/play`, `rev/next`,
   `rev/previous`, `rev/song` and `rev/album` in the command bar
 
@@ -275,9 +281,12 @@ and the plugin is its interface and memory.
 ### Services
 
 Reusable capabilities shared between extensions, so each one doesn't
-reimplement them. Audio, wallpaper and location are part of Core itself;
-the others are extensions like any plugin: media metadata, full-screen
-viewing, charting, currency conversion and live market data.
+reimplement them. Audio and wallpaper are part of Core itself; the others
+are extensions like any plugin, installed with what uses them: Now Playing
+(what's playing, from any extension that plays something, with its
+controls), Location (yours, set once, for the extensions you let read it),
+media metadata, full-screen viewing, charting, currency conversion and live
+market data.
 
 Every plugin runs in sandboxed frames and talks to Core through the Atmos
 SDK. A service is a library that runs inside the frames of the extensions
@@ -327,7 +336,7 @@ npm run build
 ```
 
 An installer carries Core, which includes the system services (Audio,
-Location, Wallpaper), and Atmos Browser, the one extension built in
+Wallpaper), and Atmos Browser, the one extension built in
 (`core/built-in-extensions.json`): it can be switched off, not removed,
 and a newer signed package still updates it. Every other extension is
 downloaded from the official source, the latest release of
@@ -376,10 +385,10 @@ soon as it's approved. The guide is
 Atmos/
 ├── core/        # The runtime: window, panels, sidebar, settings, the extension host and SDK,
 │                #   web pages for Atmos Browser, and the system services (core/system:
-│                #   audio, location, wallpaper)
+│                #   audio, wallpaper)
 ├── plugins/     # User-facing extensions (browser, built in; audio-player, finance, matrix-chat)
 ├── services/    # Capabilities extensions call into (charting, currency, fullscreen-viewer,
-│                #   market-data, media-metadata)
+│                #   location, market-data, media-metadata, now-playing)
 ├── scripts/     # Tests, permission audit, build hook, end-to-end checks
 ├── templates/   # The extension template (npm run new:extension)
 ├── .github/     # CI: npm run test:all on every push

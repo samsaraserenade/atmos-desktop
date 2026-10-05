@@ -26,6 +26,16 @@
  *    to Core, and nothing is exposed to the page.
  *
  * 3. Atmos's thin scrollbar instead of Windows' (PAGE_SCROLLBAR_CSS).
+ *
+ * 4. What plays, for Now Playing (watchMedia): the Media Session metadata
+ *    the page set and its media elements' state, sent to Core
+ *    (`atmos-web:page-media`, which Core checks and bounds), and the
+ *    widget's controls back (`atmos-web:media-control`): play/pause, next,
+ *    previous and seek, through the page's own Media Session handlers where
+ *    it has them, as Chrome's media controls do, else on the media element.
+ *    To call those handlers, setActionHandler is wrapped in the page's world
+ *    before its scripts (installMediaSessionRelay); it reaches them through
+ *    an event named by a random token. Muted media isn't reported.
  */
 function installChromeMembers() {
   const chrome = window.chrome;
@@ -224,6 +234,191 @@ function applyScrollbar({ webFrame }) {
   try { webFrame.insertCSS(PAGE_SCROLLBAR_CSS, { cssOrigin: 'user' }); } catch { /* no document to style */ }
 }
 
+// ── What plays (Now Playing) ────────────────────────────────────────────────
+
+const PAGE_MEDIA = 'atmos-web:page-media';
+const MEDIA_CONTROL = 'atmos-web:media-control';
+const MEDIA_EVENTS = ['play', 'playing', 'pause', 'ended', 'emptied', 'durationchange', 'loadedmetadata', 'seeked', 'volumechange'];
+const REPORT_EVERY_MS = 250;   // a report at most this often
+const CHECK_EVERY_MS = 2000;   // and a look at the metadata this often, once something played
+
+/**
+ * In the page's world, before its scripts: setActionHandler still does what
+ * it does, and the handlers the page sets are kept so Atmos can call them,
+ * as Chrome's media controls do. `token` names the two events: `<token>`
+ * (Atmos asks for an action, its detail a JSON string) and
+ * `<token>:actions` (which actions the page handles, sent to Atmos). The
+ * page can't name them without the token, and could only ever call its own
+ * handlers anyway.
+ */
+function installMediaSessionRelay(token) {
+  if (typeof MediaSession !== 'function' || !navigator.mediaSession || typeof token !== 'string') return;
+  const proto = MediaSession.prototype;
+  const original = proto.setActionHandler;
+  const descriptor = Object.getOwnPropertyDescriptor(proto, 'setActionHandler');
+  if (typeof original !== 'function' || !descriptor) return;
+  const session = navigator.mediaSession;
+  const handlers = new Map();
+  // Kept now: the page's scripts may replace these later.
+  const dispatch = EventTarget.prototype.dispatchEvent;
+  const listen = EventTarget.prototype.addEventListener;
+  const Custom = CustomEvent;
+  const stringify = JSON.stringify;
+  const parse = JSON.parse;
+  const apply = Reflect.apply;
+  const doc = document;
+  const announce = () => {
+    const names = [];
+    handlers.forEach((_handler, name) => names.push(name));
+    try { dispatch.call(doc, new Custom(`${token}:actions`, { detail: stringify(names) })); } catch { /* no document */ }
+  };
+  // A Proxy of Chromium's own function: the same name, length and
+  // "[native code]" to a page that looks.
+  const wrapped = new Proxy(original, {
+    apply(target, self, args) {
+      const result = apply(target, self, args);
+      if (self === session) {
+        const [action, handler] = args;
+        if (typeof handler === 'function') handlers.set(String(action), handler);
+        else handlers.delete(String(action));
+        announce();
+      }
+      return result;
+    },
+  });
+  Object.defineProperty(proto, 'setActionHandler', { ...descriptor, value: wrapped });
+  listen.call(doc, token, event => {
+    let request = null;
+    try { request = parse(event.detail); } catch { return; }
+    const handler = request && handlers.get(request.action);
+    if (typeof handler !== 'function') return;
+    const details = { action: request.action };
+    if (typeof request.seekTime === 'number' && request.seekTime >= 0) details.seekTime = request.seekTime;
+    try { apply(handler, session, [details]); } catch { /* the page's own error */ }
+  });
+}
+
+/**
+ * Watch what plays in the page and report it; take the widget's controls.
+ * `nav`, `doc`, `timers`: the page's, unless a test gives its own.
+ */
+function watchMedia({ ipcRenderer, contextBridge, doc = document, nav = navigator, timers = globalThis, token = null }) {
+  const name = token || `atmos-media-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  if (contextBridge && typeof contextBridge.executeInMainWorld === 'function') {
+    try { contextBridge.executeInMainWorld({ func: installMediaSessionRelay, args: [name] }); } catch { /* the elements alone, then */ }
+  }
+  let handled = [];         // the actions the page handles itself
+  let current = null;       // the media element that played last
+  const pausedHere = new Set();
+  let started = false;      // something played or the page set handlers: reports begin
+  let sent = null;          // the last report sent, as JSON
+  let sentAt = -Infinity;
+  let lastPosition = null;  // the position it gave
+  let timer = null;
+  let check = null;
+
+  const audible = element => !element.muted && element.volume > 0;
+  const elements = () => {
+    const list = [...doc.querySelectorAll('video, audio')];
+    if (current && !list.includes(current)) list.push(current);
+    return list;
+  };
+  const playingElements = () => elements().filter(element => !element.paused && !element.ended && audible(element));
+  const sessionState = () => { try { return nav.mediaSession?.playbackState || 'none'; } catch { return 'none'; } };
+
+  function snapshot() {
+    let metadata = null;
+    try { metadata = nav.mediaSession?.metadata || null; } catch { metadata = null; }
+    const playingNow = playingElements();
+    const element = playingNow.includes(current) ? current : playingNow[0] || (current && audible(current) ? current : null);
+    const state = sessionState();
+    const playing = state === 'playing' || (state !== 'paused' && playingNow.length > 0);
+    if (!metadata && !element && !handled.length) return null;
+    const duration = element && Number.isFinite(element.duration) ? element.duration : null;
+    const actions = [];
+    if (element || handled.includes('play') || handled.includes('pause')) actions.push('toggle');
+    if (handled.includes('nexttrack')) actions.push('next');
+    if (handled.includes('previoustrack')) actions.push('previous');
+    if (handled.includes('seekto') || duration) actions.push('seek');
+    let artwork = [];
+    try { artwork = [...(metadata?.artwork || [])].slice(0, 10).map(item => ({ src: String(item.src || ''), sizes: String(item.sizes || '') })); } catch { artwork = []; }
+    return {
+      title: metadata ? String(metadata.title || '') : '',
+      artist: metadata ? String(metadata.artist || '') : '',
+      album: metadata ? String(metadata.album || '') : '',
+      artwork, playing, actions,
+      position: element ? element.currentTime : null,
+      duration,
+    };
+  }
+
+  function send() {
+    timer = null;
+    const report = snapshot();
+    // Unchanged but for the position moving on as it plays: Core moves it on itself.
+    const key = JSON.stringify(report && { ...report, position: null });
+    const moved = report && sent === key && report.position != null && lastPosition != null
+      && Math.abs(report.position - (lastPosition + (report.playing ? (Date.now() - sentAt) / 1000 : 0))) > 2;
+    if (key === sent && !moved) return;
+    sent = key;
+    sentAt = Date.now();
+    lastPosition = report?.position ?? null;
+    try { ipcRenderer.send(PAGE_MEDIA, report); } catch { /* the page is going */ }
+  }
+  function schedule() {
+    if (!started || timer) return;
+    timer = timers.setTimeout(send, Math.max(0, sentAt + REPORT_EVERY_MS - Date.now()));
+  }
+  function start() {
+    if (started) return;
+    started = true;
+    check = timers.setInterval(() => { if (!doc.hidden || playingElements().length) schedule(); }, CHECK_EVERY_MS);
+  }
+
+  for (const type of MEDIA_EVENTS) {
+    doc.addEventListener(type, event => {
+      const element = event.target;
+      if (!element || (element.localName !== 'video' && element.localName !== 'audio')) return;
+      if ((type === 'play' || type === 'playing') && audible(element)) { current = element; pausedHere.delete(element); }
+      if (type === 'volumechange' && audible(element) && !element.paused) current = element;
+      if (audible(element) || element === current) start();
+      schedule();
+    }, true);
+  }
+  doc.addEventListener(`${name}:actions`, event => {
+    try { handled = JSON.parse(event.detail).filter(item => typeof item === 'string').slice(0, 20); } catch { return; }
+    start();
+    schedule();
+  });
+
+  const trigger = (action, extra = {}) => {
+    try { doc.dispatchEvent(new CustomEvent(name, { detail: JSON.stringify({ action, ...extra }) })); } catch { /* no document */ }
+  };
+  ipcRenderer.on(MEDIA_CONTROL, (_event, control) => {
+    const action = control?.action;
+    if (action === 'toggle') {
+      const playingNow = playingElements();
+      if (sessionState() === 'playing' || playingNow.length) {
+        if (handled.includes('pause')) trigger('pause');
+        else for (const element of playingNow) { element.pause(); pausedHere.add(element); }
+      } else if (handled.includes('play')) {
+        trigger('play');
+      } else {
+        const again = [...pausedHere].filter(element => element.isConnected || element === current);
+        pausedHere.clear();
+        for (const element of again.length ? again : [current]) element?.play?.()?.catch?.(() => {});
+      }
+    } else if (action === 'next') trigger('nexttrack');
+    else if (action === 'previous') trigger('previoustrack');
+    else if (action === 'seek' && typeof control.value === 'number' && control.value >= 0) {
+      if (handled.includes('seekto')) trigger('seekto', { seekTime: control.value });
+      else if (current) current.currentTime = control.value;
+    }
+    schedule();
+  });
+  return { report: snapshot, stop: () => { timers.clearInterval?.(check); timers.clearTimeout?.(timer); } };
+}
+
 // In a page (required by Node for the tests, `electron` is only a path and
 // nothing runs): Chrome's members in the page's world, synchronously,
 // before its scripts; then the blocker's styles and scriptlets.
@@ -237,6 +432,9 @@ if (electron && typeof electron === 'object') {
   if (electron.ipcRenderer && electron.webFrame) {
     try { applyFilters(electron); } catch { /* the page goes on without them */ }
   }
+  if (electron.ipcRenderer && typeof document === 'object') {
+    try { watchMedia(electron); } catch { /* the page goes on without it */ }
+  }
 }
 
-if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens, applyFilters, applyScrollbar, PAGE_SCROLLBAR_CSS, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS };
+if (typeof module === 'object' && module) module.exports = { installChromeMembers, collectTokens, watchTokens, applyFilters, applyScrollbar, PAGE_SCROLLBAR_CSS, SCRIPTLET_WORLD, SCRIPTLET_WORLD_CSP, MAX_LENGTH, MAX_BATCH_CHARS, installMediaSessionRelay, watchMedia, PAGE_MEDIA, MEDIA_CONTROL };

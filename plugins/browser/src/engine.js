@@ -15,6 +15,7 @@ import { createTabList, pagesToPutAway } from './tabs.js';
 import { createHistory } from './history.js';
 import { createBookmarks } from './bookmarks.js';
 import { interpret, hostOf, isPageUrl, searchUrl, siteName } from './address.js';
+import { nowPlayingSession } from './now-playing.js';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   searchEngine: '',          // '' is the list's default
@@ -63,6 +64,9 @@ function freshRuntime() {
     find: null,         // { text, matches, active }
     fullscreen: false,
     typed: null,        // what was typed, when a typed address failed: { text, query }
+    heard: false,       // it has sounded since its page loaded (Now Playing)
+    media: null,        // what plays in it, as Core reported it (atmos.web 'media')
+    userActed: false,   // and whether you'd just acted in the page then
   };
 }
 
@@ -96,6 +100,45 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     for (const fn of [...listeners]) {
       try { fn(change); } catch (error) { console.error('[browser] view listener failed:', error); }
     }
+    scheduleNowPlaying();
+  }
+
+  // ── Now Playing ───────────────────────────────────────────────────────────
+  // A tab whose page plays something is a session in Atmos's Now Playing,
+  // under the tab's id (src/now-playing.js says what it shows); the widget's
+  // controls go back to the page (atmos.web.media). Every change the views
+  // hear is looked at here too, a moment later.
+  const nowPlaying = atmos.nowPlaying || null;
+  const published = new Map(); // tab id -> the session last sent, as JSON
+  let nowPlayingTimer = null;
+  function scheduleNowPlaying() {
+    if (nowPlaying && !nowPlayingTimer) nowPlayingTimer = timers.setTimeout(syncNowPlaying, 50);
+  }
+  function syncNowPlaying() {
+    nowPlayingTimer = null;
+    const playing = new Set();
+    for (const tab of list.tabs) {
+      const state = runtime.get(tab.id);
+      // Started by you: in the tab you're looking at, or just after you acted in the page.
+      const startedByUser = (tab.id === list.selected && panels > 0) || state?.userActed === true;
+      const session = nowPlayingSession(tab, state, { favicon: state?.favicon || iconFor(tab), startedByUser });
+      if (!session) continue;
+      playing.add(tab.id);
+      const json = JSON.stringify(session);
+      if (published.get(tab.id) === json) continue;
+      published.set(tab.id, json);
+      // Refused (more than Now Playing takes from one extension, say): not tried again until it changes.
+      nowPlaying.set(session, tab.id).catch(error => console.warn('[browser] Now Playing:', error.message));
+    }
+    for (const id of [...published.keys()]) {
+      if (playing.has(id)) continue;
+      published.delete(id);
+      nowPlaying.clear(id).catch(() => {});
+    }
+  }
+  function onNowPlayingControl({ key, action, value }) {
+    if (!runtime.get(key)?.live) return;
+    web.media(key, action, value).catch(error => console.warn('[browser] Now Playing control:', error.message));
   }
   const rt = id => {
     if (!runtime.has(id)) runtime.set(id, freshRuntime());
@@ -216,8 +259,9 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
       maxLive: settings.maxLoadedTabs,
       keep: tab => {
         const state = rt(tab.id);
+        // (A page paused in Now Playing too: it stays there to resume.)
         return tab.id === list.selected || tab.private || state.audible || state.fullscreen || !!state.opening
-          || state.permissions.length > 0 || !!state.external;
+          || state.permissions.length > 0 || !!state.external || (state.heard && !!state.media);
       },
     });
     for (const id of ids) putAway(id);
@@ -370,6 +414,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     for (const key of ['loading', 'canGoBack', 'canGoForward', 'audible', 'muted', 'zoom', 'secure', 'blocked', 'shield']) {
       if (page[key] !== undefined) state[key] = page[key];
     }
+    if (state.audible) state.heard = true;
     if (isPageUrl(page.url) && page.url !== tab.url) {
       tab.url = page.url;
       tab.page = null;
@@ -410,9 +455,24 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
           if (title) tab.title = title;
           if (!tab.private) void history.visit(event.url, title);
         }
-        if (!event.inPage) state.find = null;
+        if (!event.inPage) {
+          state.find = null;
+          // A new page: what the last one played is over.
+          state.heard = state.audible;
+          state.media = null;
+        }
         emit({ type: 'tab', id });
         scheduleSave();
+        return;
+      }
+      case 'media': {
+        if (!tab || !runtime.get(id)?.live) return;
+        const state = rt(id);
+        state.media = event.media && typeof event.media === 'object' ? event.media : null;
+        // Whether you acted in the page a moment before (Core's word): a
+        // page that starts playing by itself doesn't take Now Playing.
+        state.userActed = event.userActed === true;
+        emit({ type: 'tab', id });
         return;
       }
       case 'progress': {
@@ -505,6 +565,10 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         const state = rt(id);
         state.error = { kind: 'crashed', url: tab.url, code: 0, description: String(event.reason || '') };
         state.loading = false;
+        // Nothing plays in it any more.
+        state.audible = false;
+        state.heard = false;
+        state.media = null;
         syncShown();
         emit({ type: 'tab', id });
         return;
@@ -858,6 +922,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     // Pages left from an earlier run of this frame (Atmos itself didn't restart) go.
     for (const page of await web.list().catch(() => [])) await web.close(page.tabId).catch(() => {});
     web.onEvent(onEvent);
+    nowPlaying?.onControl(onNowPlayingControl);
     options = await web.options().catch(() => options);
     void adblockStatus();
     for (const record of await web.downloads.list().catch(() => [])) downloads.set(record.id, record);

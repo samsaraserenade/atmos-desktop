@@ -4,6 +4,7 @@
 // .test are mapped to 127.0.0.1 by the check (--host-resolver-rules).
 const http = require('http');
 const https = require('https');
+const zlib = require('zlib');
 const { cert, key } = require('../test-tls.cjs');
 
 const esc = value => String(value).replace(/[<>&"]/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[ch]));
@@ -12,6 +13,38 @@ const doc = (title, body, head = '', icon = '/favicon.png') => `<!doctype html><
 
 // A 16×16 red square with a white one inside.
 const FAVICON = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALklEQVR4nGO8o6b2n4ECwESJ5sFhAAu6gPLNm3g13FVXp64LRg0YDAYwjuYFBgD2wQdvyxzZ/QAAAABJRU5ErkJggg==', 'base64');
+
+/** A size × size PNG of one colour (Now Playing's artwork). */
+function png([r, g, b], size) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = buf => { let c = 0xffffffff; for (const byte of buf) c = crcTable[(c ^ byte) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4); length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const sum = Buffer.alloc(4); sum.writeUInt32BE(crc(body));
+    return Buffer.concat([length, body, sum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0); header.writeUInt32BE(size, 4); header[8] = 8; header[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 3).map((_, i) => [r, g, b][i % 3])]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(Buffer.concat(Array.from({ length: size }, () => row)))), chunk('IEND', Buffer.alloc(0))]);
+}
+const ARTWORK = png([220, 38, 38], 400);
+
+/** Two seconds of a tone, as a WAV (8 kHz mono). */
+function tone(seconds = 2, rate = 8000) {
+  const samples = seconds * rate;
+  const data = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) data.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * i / rate) * 8000), i * 2);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0); header.writeUInt32LE(36 + data.length, 4); header.write('WAVE', 8);
+  header.write('fmt ', 12); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24); header.writeUInt32LE(rate * 2, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34);
+  header.write('data', 36); header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+const TONE = tone();
 
 // Records every request, so the check can see which cookies reached the server.
 function handler(requests, info) {
@@ -26,6 +59,24 @@ function handler(requests, info) {
       case '/favicon.ico':
         res.writeHead(200, { 'Content-Type': 'image/png' });
         res.end(FAVICON);
+        return;
+      // Now Playing: a page that says what it plays (its Media Session),
+      // with artwork and a "next" of its own; it plays on a click.
+      case '/media':
+        html(doc('Tone page', `<button id="play" style="position:absolute;left:20px;top:20px;width:200px;height:60px;font-size:20px">Play</button>
+          <audio id="audio" src="/tone.wav" loop></audio>
+          <script>window.__next = 0;
+          navigator.mediaSession.metadata = new MediaMetadata({ title: 'Tone', artist: 'Pages', album: 'E2E', artwork: [{ src: '/art.png', sizes: '400x400', type: 'image/png' }] });
+          navigator.mediaSession.setActionHandler('nexttrack', () => { window.__next += 1; });
+          document.getElementById('play').onclick = () => document.getElementById('audio').play();</script>`));
+        return;
+      case '/tone.wav':
+        res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': TONE.length });
+        res.end(TONE);
+        return;
+      case '/art.png':
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(ARTWORK);
         return;
       case '/bad-icon.png':
         // Not an image at all, whatever it says: the icon decoder fails on it.

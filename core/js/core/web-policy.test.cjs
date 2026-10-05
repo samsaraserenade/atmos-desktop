@@ -398,6 +398,11 @@ test('the browser\'s shortcuts are taken before the page; single keys never are'
   assert.equal(key('Unidentified', { control: true, code: 'IntlBackslash' }), 'command-bar');
   assert.equal(key('\\', { meta: true }), 'command-bar');
   assert.equal(key('\\', { control: true, alt: true }), null, 'AltGr+\\ types a character');
+  // Atmos's sidebar: Alt and the key left of 1, whatever it types there.
+  assert.equal(key('`', { alt: true, code: 'Backquote' }), 'sidebar');
+  assert.equal(key('Dead', { alt: true, code: 'Backquote' }), 'sidebar', 'a layout where it is a dead key');
+  assert.equal(key('`', { alt: true, control: true, code: 'Backquote' }), null, 'AltGr there types a character');
+  assert.equal(key('`', { code: 'Backquote' }), null, 'a plain ` is typing');
   for (const single of [']', '[', '\\', 'Tab', ' ', 'Escape', 'a', 'ArrowLeft']) assert.equal(key(single), null, single);
   assert.equal(policy.shortcutFor({ type: 'keyUp', key: 't', control: true }), null);
   assert.equal(key('ArrowLeft', { alt: true, control: true }), null);

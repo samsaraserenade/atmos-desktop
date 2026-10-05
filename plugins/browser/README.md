@@ -33,6 +33,7 @@ The plugin itself is the browser's UI and its memory:
 | `boot.js` | The background frame: the engine, alive while Atmos runs, so tabs stay open when the panel is switched away and links from Atmos have somewhere to go. |
 | `src/engine.js` | Tabs and what their pages are doing, history, bookmarks, site icons, downloads, what pages ask; the views follow its changes. |
 | `src/commands.js` | `rev/new-tab`, `rev/tab` and `rev/close-tab` in Atmos's command bar. |
+| `src/now-playing.js` | What a playing tab shows in Atmos's Now Playing. |
 | `panel.js`, `src/ui/*` | The tab strip, toolbar and address bar, the new-tab page, History, the warning and error pages, prompts, find, downloads, menus. |
 | `sidebar.js`, `sidebar-bookmarks.js` | The Tabs and Bookmarks widgets. |
 | `settings.js` | Its settings, on a page of their own: Settings → Browser. |
@@ -42,6 +43,26 @@ The plugin itself is the browser's UI and its memory:
 
 The panel and widgets find the engine with `atmos.background()` (they share
 the plugin's own origin, `"isolation": "origin"`).
+
+**Now Playing** (1.2.0, Atmos 0.21). A tab whose page plays is a session in
+Atmos's Now Playing widget, under the tab's id. Core's page preload reports
+what the page's Media Session says and its media elements' state; Core
+checks it, fetches the artwork as it fetches site icons (no cookies, public
+addresses) and draws it again as its own JPEG, and sends it as a `media`
+event (`atmos.web`); the engine publishes it (`src/now-playing.js`: the
+page's title, artist and artwork, else the tab's title and site icon). The
+widget's play/pause, next, previous and seek go back with
+`atmos.web.media`, which the preload carries out through the page's own
+Media Session handlers where it has them, as Chrome's media controls do,
+else on the media element. A tab shows once it has sounded (a muted video
+playing by itself never does), always with its site, stays while paused
+(and its page isn't put away meanwhile), and goes with a new page, a crash
+or the tab closed. A page that starts by itself (not the tab you're on,
+nothing done in it just before) is marked `startedByUser: false`, so it
+shows only when nothing else plays: no page takes the widget from Music.
+Artwork is fetched one at a time per tab (a newer one stops the one
+before), four at once in all. Now Playing is a recommended
+dependency: it comes with Atmos Browser.
 
 ## What it keeps, and where
 

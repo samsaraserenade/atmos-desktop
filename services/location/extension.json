@@ -1,0 +1,37 @@
+{
+  "apiVersion": 4,
+  "engines": {
+    "atmos": ">=0.21.0"
+  },
+  "tier": "first-party",
+  "version": "1.0.0",
+  "publisher": "atmos",
+  "runtime": "frame",
+  "isolation": "origin",
+  "exports": {},
+  "displayName": "Location",
+  "description": "Your location, set once in Settings (detected, or a place you search for), for the extensions you let read it.",
+  "requires": {
+    "extensions.manifest": 1,
+    "extensions.frames": 3
+  },
+  "permissions": {
+    "network": [
+      "geocoding-api.open-meteo.com",
+      "nominatim.openstreetmap.org"
+    ],
+    "browser": [
+      "geolocation"
+    ]
+  },
+  "contributes": {
+    "boot": {
+      "entry": "boot.js"
+    },
+    "settings": {
+      "label": "Location",
+      "icon": "icon.svg",
+      "order": 10
+    }
+  }
+}

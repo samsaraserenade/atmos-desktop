@@ -17,7 +17,7 @@ const sources = () => fs.readdirSync(root, { recursive: true })
   .filter(file => /\.(js|cjs)$/.test(file) && !file.startsWith('tests') && !file.includes('node_modules'))
   .map(file => [file, read(file)]);
 
-test('runs in frames: drawer panel, three widgets, a boot frame with Space', () => {
+test('runs in frames: drawer panel, Queue and Library widgets, a boot frame with Space', () => {
   const m = manifest();
   assert.equal(m.apiVersion, 4);
   assert.equal(m.runtime, 'frame');
@@ -25,12 +25,12 @@ test('runs in frames: drawer panel, three widgets, a boot frame with Space', () 
   assert.deepEqual(m.contributes.panel.drawer, { bar: 54, keys: true });
   // Not the panel Atmos opens on any more: Atmos Browser, built in, is (Atmos 0.18).
   assert.equal(m.contributes.panel.default, undefined);
-  // Same widget ids as before frames (audio-player, -queue, -library), so
-  // saved sidebar layouts still apply.
-  assert.deepEqual(m.contributes.sidebar.map(item => item.id ?? null), [null, 'queue', 'library']);
-  assert.equal(m.contributes.sidebar[0].resizable, false);
+  // Same widget ids as before frames (audio-player-queue, -library), so
+  // saved sidebar layouts still apply. Now Playing (audio-player) is the
+  // Now Playing service's since Audio Player 1.2.0, under the same id.
+  assert.deepEqual(m.contributes.sidebar.map(item => item.legacyId ?? `audio-player-${item.id}`), ['audio-player-queue', 'audio-player-library']);
   assert.deepEqual(m.contributes.boot, { entry: 'boot.js', keys: ['Space'] });
-  assert.deepEqual([...m.permissions.invokes].sort(), ['service:audio', 'service:media-metadata', 'service:wallpaper']);
+  assert.deepEqual([...m.permissions.invokes].sort(), ['service:audio', 'service:media-metadata', 'service:now-playing', 'service:wallpaper']);
   assert.deepEqual(m.permissions.resources, ['audio-player-media']);
   assert.deepEqual(m.legacyStorage.indexedDB, [{ name: 'samsara_db', keys: ['audio-player:*', 'library-meta', 'waveform-cache', 'playlist'] }]);
 });
@@ -56,7 +56,7 @@ test('sound comes from the Audio service; the engine owns the queue', () => {
   assert.match(engine, /await atmos\.expose\(\{/);
   assert.doesNotMatch(engine, /document\.createElement\('audio'\)|new Audio\(/);
   // Views never play anything themselves.
-  for (const file of ['src/player-view.js', 'src/client.js', 'sidebar.js', 'sidebar-queue.js', 'sidebar-library.js']) {
+  for (const file of ['src/player-view.js', 'src/client.js', 'sidebar-queue.js', 'sidebar-library.js']) {
     assert.doesNotMatch(read(file), /atmos\.audio\.(load|play|pause|seek|setVolume)\(/, file);
   }
 });
@@ -146,15 +146,19 @@ test('the waveform paints only while it can change, at the chosen rate', () => {
   assert.match(css, /#mp-album-grid\.is-scrolling \.mp-alb-card/);
 });
 
-test('now-playing widget avoids perpetual animation and redundant layout writes', () => {
-  const sidebar = read('sidebar.js');
-  const css = read('assets/sidebar.css');
-  assert.match(sidebar, /if \(snap\.playing !== _lastPlaying\)/);
-  assert.match(sidebar, /fillEl\.style\.transform = `scaleX/);
-  assert.doesNotMatch(sidebar, /fillEl\.style\.width/);
-  assert.doesNotMatch(css, /ap-mini-marquee 8s linear infinite/);
-  assert.match(css, /animation: ap-mini-marquee 8s linear 2/);
-  assert.match(css, /\.ap-mini-cover-info \{[\s\S]*?padding: 10px 12px 13px;/);
+test('what plays goes to Now Playing, and its controls come back here', () => {
+  const engine = read('src/engine.js');
+  const manifest = JSON.parse(read('extension.json'));
+  assert.ok(manifest.permissions.invokes.includes('service:now-playing'));
+  assert.deepEqual(manifest.dependencies['now-playing'], { version: '^1.0.0', optional: true, recommended: true }, 'installed with Music, removable');
+  assert.equal(manifest.engines.atmos, '>=0.21.0', 'atmos.nowPlaying is SDK 1.4 (Atmos 0.21.0)');
+  // Its own Now Playing widget went to the service; the Queue keeps the id it had.
+  assert.deepEqual(manifest.contributes.sidebar.map(widget => widget.label), ['Queue', 'Library']);
+  assert.equal(manifest.contributes.sidebar[0].legacyId, 'audio-player-queue');
+  assert.ok(!fs.existsSync(path.join(root, 'sidebar.js')));
+  assert.match(engine, /atmos\.nowPlaying\?\.onControl\(onNowPlayingControl\)/);
+  assert.match(engine, /actions: NOW_PLAYING_ACTIONS/);
+  assert.match(engine, /published\?\.fingerprint === fingerprint && Math\.abs\(position - expected\) < 2\) return;/, 'not every tick: only what changed, or a jump');
 });
 
 test('metadata grouping preserves releases, discs, and repeated titles', async () => {

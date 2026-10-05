@@ -437,7 +437,7 @@ onStateLoaded(applyAppearance);
  * index.html under "Appearance page"): titled sections (.sa-section), rows
  * with the label on the left and the control on the right (.sa-row), and
  * sliders with their value beside them (.sa-slider). Services that add a
- * section here (Wallpaper, Location) use the same classes, so every row on
+ * section here (Wallpaper, the Location service) use the same classes, so every row on
  * the page has the same shape. */
 
 /** A row: label (with an optional hint under it) and its control. */
