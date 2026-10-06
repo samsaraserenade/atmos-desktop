@@ -56,11 +56,15 @@ sudo -u atmos-portfolio python3 /opt/atmos-portfolio/server.py prune --vacuum
   (at most 10,000 points).
 - `GET /v1/holdings-history?from=...&to=...` — itemized point-in-time holdings
   (at most 20,000 rows; 50,000 before 0.9.1). Ask for a few minutes around
-  the time you want, as Finance does, not a day of every poll.
+  the time you want, as Finance does, not a day of every poll. Whole polls
+  only, the oldest first, or the newest first with `order=desc`. `polls`
+  lists every poll the answer covers: one with no rows held nothing.
 
 Both say `"truncated": true` when the limit cut the answer short; the oldest
-points are returned, so ask again from the last `t`/`ts_ms`. `/v1/info`
-includes the retention settings. Money is always USD; Finance converts.
+points are returned (the newest with `order=desc`), so ask again from the
+last `t`, or past the last of a holdings answer's `polls` (its points can
+end sooner, in polls where nothing was held). `/v1/info` includes the
+retention settings. Money is always USD; Finance converts.
 
 These two answers are built one at a time (0.9.1): they're what takes the
 memory and the CPU, and the service is capped at 160 MB and a quarter of a

@@ -54,6 +54,13 @@ portfolios.set('hyperliquid', { ...open, holdings: [cash(1000, 'perp-cash'), { s
 assert.equal(run('getFuturesPositions().length'), 1, 'open cross-margin positions remain visible at zero local equity');
 assert.equal(run('getFuturesPositions()[0].value'), 0);
 assert.equal(run('getFuturesDirectionSplit().long'), 500, 'direction split falls back to non-zero notional exposure');
+// R15: the connector's null is "not available", not 0 (Number(null) is 0).
+portfolios.set('hyperliquid', { ...open, holdings: [{ symbol: 'BTC Perp', value: 300, meta: { instrument: 'perp', side: 'long',
+  leverage: null, entryPrice: null, markPrice: null, liquidationPrice: null, positionValue: null, marginUsed: null,
+  unrealizedPnl: null, fundingRate: null, funding24h: null, fees24h: null } }] });
+assert.deepEqual(JSON.parse(run('JSON.stringify(getFuturesPositions()[0])')), { coin: 'BTC', connectionId: 'hyperliquid', value: 300, side: 'long',
+  leverage: null, entryPrice: null, markPrice: null, liquidationPrice: null, positionValue: null, marginUsed: null,
+  unrealizedPnl: null, fundingRate: null, funding24h: null, fees24h: null }, 'unknown figures stay unknown');
 portfolios.set('hyperliquid', { ...open, holdings: [cash(1000)] });
 assert.equal(run('getFuturesSourceTotal()'), 1000);
 assert.equal(run('getPortfolioComposition().cash'), 500);
@@ -111,4 +118,25 @@ assert.deepEqual(rows().map(row => row[1]), ['perp', 'earn'], 'a server before 0
 portfolios.set('hyperliquid:alt', { ...hl([{ symbol: 'USDC', kind: 'cash', value: 5, currency: 'GBP', meta: { instrument: 'perp-cash', group: 'perp' } }]), label: 'Alt' });
 run('updateFuturesTotal()');
 assert.deepEqual(rows().map(row => row[2]), ['Perp Balance · HL', 'Earn Balance · HL', 'Perp Balance · Alt'], 'two accounts say whose each balance is');
+// R14: Futures amounts in the output currency, as balances are, and the
+// sidebar writes that currency's sign (GBP here, at 0.8 to the dollar).
+run("convertFromGbp = v => v; getOutputCurrency = () => 'GBP'; symbolForIso = iso => iso === 'GBP' ? '£' : '$';");
+portfolios.clear();
+portfolios.set('hyperliquid', { value: 300, currency: 'USD', lastUpdate: 1, holdings: [{ symbol: 'BTC Perp', value: 300, currency: 'USD',
+  meta: { instrument: 'perp', side: 'long', entryPrice: 50000, positionValue: 1000, marginUsed: 100, unrealizedPnl: -50, funding24h: 10, fees24h: 5 } }] });
+const futures = JSON.parse(run('JSON.stringify(getFuturesPositions()[0])'));
+assert.deepEqual([futures.value, futures.positionValue, futures.marginUsed, futures.unrealizedPnl, futures.funding24h, futures.fees24h],
+  [240, 800, 80, -40, 8, 4], 'every amount converted, not only the equity');
+assert.equal(futures.entryPrice, 50000, "a price stays in the market's dollars");
+assert.equal(run('getFuturesDirectionSplit().long'), 800, 'exposure in the same currency as its sign');
+vm.runInContext(`var masked = fn => fn;
+  ${sidebar.slice(sidebar.indexOf('const _holdingValueFmt'), sidebar.indexOf('function formatEntryPrice(')).replaceAll('const ', 'var ')}`, context);
+assert.equal(run('formatHoldingValue(800)'), '£800');
+assert.equal(run('formatSignedAmount(-40)'), '−£40.00');
+// Before the exchange rates arrive, amounts aren't converted: the server's
+// dollars, written with their own sign.
+run('ratesReady = () => false');
+assert.deepEqual([run('outputSymbol()'), run('getTotal().symbol'), run('getPortfolioComposition().symbol'), run('getFuturesDirectionSplit().symbol')], ['$', '$', '$', '$']);
+run('ratesReady = () => true');
+assert.equal(run('outputSymbol()'), '£');
 console.log('Passed: section histories, currency conversion, mixed accounts, and idle perp cash');

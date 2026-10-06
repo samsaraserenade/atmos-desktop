@@ -121,6 +121,7 @@ test('pages are put away past the limit and when left alone; the tab keeps its a
     await settle();
   }
   const live = () => engine.tabs().filter(tab => tab.live).map(tab => tab.id);
+  await settle();
   assert.equal(live().length, 5, 'at most five pages loaded');
   assert.ok(live().includes(ids[6]), 'the selected tab is kept');
   const putAway = engine.tab(ids[0]);
@@ -132,6 +133,7 @@ test('pages are put away past the limit and when left alone; the tab keeps its a
   assert.equal(engine.tab(ids[0]).live, true, 'going back to it loads it again');
   clock += 31 * 60 * 1000;
   engine._checkPutAway();
+  await settle();
   assert.deepEqual(live(), [ids[0]], 'everything but the selected tab was left alone too long');
   assert.deepEqual(cleanSettings({ maxLoadedTabs: 3, putAwayAfterMinutes: -1, searchEngine: 'nope' }, engines),
     { searchEngine: '', putAwayAfterMinutes: 30, maxLoadedTabs: 10 }, 'only the offered choices');
@@ -370,6 +372,7 @@ test('a page using too much memory: asleep in the background, with why; a notice
   assert.equal(engine.tab(heavy.id).live, true);
   // In the background: put to sleep, and it says why.
   atmos.fake.webEvent({ type: 'memory', tabId: heavy.id, bytes: 14341 * 1024 ** 2 });
+  await settle();
   assert.equal(engine.tab(heavy.id).live, false, 'put to sleep');
   assert.ok(calls('close').some(call => call.args[0] === heavy.id));
   assert.match(engine.tab(heavy.id).notice.text, /^Put to sleep in the background: it was using 14 GB of memory/);
@@ -396,6 +399,105 @@ test('a page using too much memory: asleep in the background, with why; a notice
   atmos.fake.webEvent({ type: 'state', tabId: heavy.id, audible: true });
   atmos.fake.webEvent({ type: 'memory', tabId: heavy.id, bytes: 6.5 * 1024 ** 3 });
   assert.equal(engine.tab(heavy.id).live, true, 'sound playing: not put away');
+});
+
+test('a page with unsaved changes isn\'t put to sleep: it stays awake until it next loads (R40)', async () => {
+  let clock = 1_000_000;
+  const { engine, atmos, calls } = await start({ now: () => clock });
+  engine.attachPanel();
+  const form = engine.newTab({ url: 'https://forms.example/draft' });
+  await settle();
+  engine.newTab({ url: 'https://docs.example/' });
+  await settle();
+  // The page objects to being left (its beforeunload: unsaved changes).
+  atmos.fake.webUnsaved(form.id, true);
+  atmos.fake.webEvent({ type: 'memory', tabId: form.id, bytes: 3 * 1024 ** 3 });
+  await settle();
+  assert.ok(calls('close').some(call => call.args[0] === form.id && call.args[1]?.sleep === true), 'asked to let go, not closed');
+  assert.equal(engine.tab(form.id).live, true, 'still awake, its changes still there');
+  assert.ok(atmos.fake.web.pages[form.id], 'its page still open');
+  assert.match(engine.tab(form.id).notice?.text || '', /^This page is using 3\.0 GB of memory/, 'told instead, for when you come back');
+  // Left alone past the limit: not asked again while it's on that page.
+  const asked = calls('close').length;
+  clock += 31 * 60 * 1000;
+  engine._checkPutAway();
+  await settle();
+  assert.equal(calls('close').length, asked);
+  assert.equal(engine.tab(form.id).live, true);
+  // Once it has loaded another page (and lets go), it sleeps as any other.
+  atmos.fake.webUnsaved(form.id, false);
+  await atmos.web.navigate(form.id, 'https://forms.example/sent');
+  await settle();
+  engine._checkPutAway();
+  await settle();
+  assert.equal(engine.tab(form.id).live, false);
+  assert.equal(atmos.fake.web.pages[form.id], undefined);
+});
+
+test('a tab chosen while its page is being put to sleep loads again; a tab on its way to sleep isn\'t counted twice (R40)', async () => {
+  let clock = 1_000_000;
+  const { engine, atmos, calls } = await start({ now: () => clock });
+  await engine.setSettings({ maxLoadedTabs: 5, putAwayAfterMinutes: 30 });
+  engine.attachPanel();
+  const ids = [];
+  for (let i = 0; i < 5; i++) {
+    clock += 1000;
+    ids.push(engine.newTab({ url: `https://site${i}.example/` }).id);
+    await settle();
+  }
+  // The oldest tab's page takes a while to unload.
+  const release = atmos.fake.webHoldSleep(ids[0]);
+  clock += 1000;
+  ids.push(engine.newTab({ url: 'https://site5.example/' }).id);
+  await settle();
+  assert.ok(calls('close').some(call => call.args[0] === ids[0] && call.args[1]?.sleep), 'the oldest is being put to sleep');
+  // Checked again meanwhile: it's on its way out, so nothing else goes.
+  engine._checkPutAway();
+  await settle();
+  assert.equal(calls('close').length, 1, 'only one put to sleep for one over the limit');
+  // Chosen before its page has gone: once it has, it loads again.
+  engine.selectTab(ids[0]);
+  release();
+  await settle(); await settle();
+  assert.equal(engine.tab(ids[0]).live, true, 'loaded again');
+  assert.equal(atmos.fake.web.shown, ids[0], 'and shown');
+});
+
+test('a tab that wouldn\'t let go may sleep again once you have been back to it (R40)', async () => {
+  let clock = 1_000_000;
+  const { engine, atmos, calls } = await start({ now: () => clock });
+  engine.attachPanel();
+  const form = engine.newTab({ url: 'https://forms.example/draft' });
+  await settle();
+  const other = engine.newTab({ url: 'https://docs.example/' });
+  await settle();
+  atmos.fake.webUnsaved(form.id, true);
+  clock += 31 * 60 * 1000;
+  engine._checkPutAway();
+  await settle();
+  assert.equal(engine.tab(form.id).live, true);
+  // You go back to it (and save, a page that stays the same document), then leave it again.
+  engine.selectTab(form.id);
+  await settle();
+  atmos.fake.webUnsaved(form.id, false);
+  engine.selectTab(other.id);
+  await settle();
+  clock += 31 * 60 * 1000;
+  engine._checkPutAway();
+  await settle();
+  assert.equal(engine.tab(form.id).live, false, 'asked again, and it let go');
+  // A memory notice never brings back a tab closed meanwhile.
+  const third = engine.newTab({ url: 'https://heavy.example/' });
+  await settle();
+  engine.selectTab(other.id);
+  await settle();
+  const release = atmos.fake.webHoldSleep(third.id);
+  atmos.fake.webEvent({ type: 'memory', tabId: third.id, bytes: 3 * 1024 ** 3 });
+  engine.closeTab(third.id);
+  release();
+  await settle(); await settle();
+  assert.equal(engine.tab(third.id), null);
+  assert.ok(calls('close').length > 0);
 });
 
 test('automatic https fell back to http: the tab says so through the load; an insecure download, with Download anyway', async () => {
@@ -478,4 +580,77 @@ test('what a tab shows in Now Playing: never a crashed page; a page that began b
   assert.equal(nowPlayingSession(tab, { ...live, audible: false, heard: false }), null, 'never sounded');
   assert.equal(nowPlayingSession({ ...tab, url: 'about:blank' }, live), null);
   assert.equal(nowPlayingSession({ ...tab, title: 'https://www.youtube.com/watch?v=x' }, { ...live, media: null }).title, 'youtube.com', 'no title of its own: the site');
+});
+
+test('a second address typed while a new tab’s page is still opening is where it goes (R28)', async () => {
+  const atmos = createFakeAtmos({ extension: { id: 'browser', tier: 'first-party' }, permissions: { web: true } });
+  const open = atmos.web.open;
+  let release;
+  atmos.web.open = (...args) => new Promise(resolve => { release = () => resolve(open(...args)); });
+  const engine = createEngine({ atmos, store: memoryStore(), engines, now: () => 1_000_000, timers: fakeTimers() });
+  await engine.ready;
+  engine.attachPanel();
+  const id = engine.selectedId();
+  const first = engine.navigate(id, 'https://first.example/');
+  await settle();
+  const second = engine.navigate(id, 'https://second.example/');
+  await settle();
+  release();
+  assert.deepEqual(await first, { ok: true });
+  assert.equal((await second).ok, true);
+  await settle();
+  assert.equal(atmos.fake.web.pages[id].url, 'https://second.example/', 'the page went to the second');
+  assert.equal(engine.tab(id).url, 'https://second.example/');
+});
+
+test('of several addresses typed while a tab’s page opens, the last is where it goes; a tab closed meanwhile goes nowhere (R28)', async () => {
+  const atmos = createFakeAtmos({ extension: { id: 'browser', tier: 'first-party' }, permissions: { web: true } });
+  const open = atmos.web.open;
+  let release;
+  atmos.web.open = (...args) => new Promise(resolve => { release = () => resolve(open(...args)); });
+  const engine = createEngine({ atmos, store: memoryStore(), engines, now: () => 1_000_000, timers: fakeTimers() });
+  await engine.ready;
+  engine.attachPanel();
+  const id = engine.selectedId();
+  const typed = ['https://a.example/', 'https://b.example/', 'https://a.example/'].map(url => engine.navigate(id, url));
+  await settle();
+  release();
+  for (const result of await Promise.all(typed)) assert.equal(result.ok, true);
+  await settle();
+  assert.equal(atmos.fake.web.pages[id].url, 'https://a.example/', 'A, B, then A again: at A');
+  assert.equal(engine.tab(id).url, 'https://a.example/');
+
+  const other = engine.newTab({ select: true }).id;
+  await settle();
+  const going = engine.navigate(other, 'https://c.example/');
+  await settle();
+  const navigated = [];
+  const navigate = atmos.web.navigate;
+  atmos.web.navigate = (tabId, url) => { navigated.push(tabId); return navigate(tabId, url); };
+  engine.closeTab(other);
+  release();
+  assert.equal((await going).ok, false);
+  await settle();
+  assert.deepEqual(navigated, [], 'nothing sent to a closed tab');
+});
+
+test('a muted tab wakes muted (R41)', async () => {
+  let clock = 1_000_000;
+  const { engine, atmos } = await start({ now: () => clock, state: { session: { tabs: [{ id: 'a1', url: 'https://a.example/', title: 'A' }, { id: 'b1', url: 'https://b.example/', title: 'B' }], selected: 'a1' } } });
+  await engine.setSettings({ maxLoadedTabs: 5, putAwayAfterMinutes: 30 });
+  engine.attachPanel();
+  await settle();
+  await engine.mute('a1', true);
+  engine.selectTab('b1');
+  await settle();
+  clock += 31 * 60 * 1000;
+  engine._checkPutAway();
+  await settle();
+  assert.equal(engine.tab('a1').live, false, 'asleep');
+  assert.equal(engine.tab('a1').muted, true, 'kept while it sleeps');
+  engine.selectTab('a1');
+  await settle();
+  await settle();
+  assert.equal(atmos.fake.web.pages.a1.muted, true, 'the new page is muted');
+  assert.equal(engine.tab('a1').muted, true);
 });

@@ -189,7 +189,7 @@ function harness(extension, surface = { type: 'panel' }) {
       on: (name, fn) => { listeners.set(name, [...(listeners.get(name) || []), fn]); return () => {}; },
     },
     appearance: () => ({ vars: {} }),
-    invokeMain: async (caller, kind, id, channel, ...args) => ({ caller, kind, id, channel, args }),
+    invokeMain: async (stamp, kind, id, channel, ...args) => ({ caller: stamp.caller, kind, id, channel, args }),
     services,
     libraryBase: id => (id === 'plotting' ? 'atmos-ext://first-party/services/plotting/' : null),
     openMenu: async () => 'x',
@@ -330,4 +330,32 @@ test('commands come from the manifest as plain text, never Atmos\'s own names, a
   assert.deepEqual(frames.describeCommands(entry('first-party', { kind: 'service', manifest: { library: true, contributes: { commands: [{ name: 'go' }] } } })), [], 'a library has no frames to run them');
   assert.equal(declared([{ name: 'x', about: 'y'.repeat(200) }])[0].about.length, 120);
   assert.deepEqual(frames.CORE_COMMAND_NAMES, ['sidebar', 'settings', 'extensions', 'switch']);
+});
+
+test('bridge: a frame\'s calls to a main.cjs say which frame; Core hears when it goes (R17)', async () => {
+  const { createExtensionBridge } = await bridgeModule();
+  const h = harness({ id: 'hello', kind: 'plugin', tier: 'official', permissions: {} });
+  const stamps = [];
+  const closed = [];
+  h.deps.invokeMain = async (stamp, kind, id, channel) => { stamps.push(stamp); return channel; };
+  h.deps.frameClosed = frame => closed.push(frame);
+  const open = () => {
+    const posted = [];
+    const bridge = createExtensionBridge({ extension: h.extension, surface: h.surface, post: m => posted.push(m), deps: h.deps });
+    return { bridge, call: (method, ...args) => request(bridge, posted, method, ...args) };
+  };
+  const one = open();
+  const two = open();
+  assert.equal(await one.call('invoke', 'plugin:hello', 'own'), 'own');
+  await one.call('invoke', 'plugin:hello', 'own');
+  await two.call('invoke', 'plugin:hello', 'own');
+  assert.equal(stamps[0].caller, 'plugin:hello');
+  assert.equal(typeof stamps[0].frame, 'string');
+  assert.equal(stamps[1].frame, stamps[0].frame, 'one id per frame');
+  assert.notEqual(stamps[2].frame, stamps[0].frame);
+  one.bridge.dispose();
+  one.bridge.dispose();
+  assert.deepEqual(closed, [stamps[0].frame], 'once');
+  open().bridge.dispose();
+  assert.equal(closed.length, 1, 'a frame that never called a main.cjs: nothing to tell');
 });

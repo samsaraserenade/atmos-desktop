@@ -32,12 +32,12 @@ function createCore(initial = {}) {
   return core;
 }
 
-async function startFrame(core, role, { engineReady = Promise.resolve() } = {}) {
+async function startFrame(core, role, { engineReady = Promise.resolve(), legacy = null, indexedDB, storage = new Map() } = {}) {
   const frame = { role, inbox: [], listeners: [] };
   core.frames.push(frame);
-  const storage = new Map();
   const context = vm.createContext({
-    structuredClone, queueMicrotask, console, setTimeout,
+    structuredClone, queueMicrotask, setTimeout, indexedDB,
+    console: legacy ? { ...console, warn() {}, error() {} } : console,
     window: { addEventListener() {} },
     localStorage: { getItem: key => (storage.has(key) ? storage.get(key) : null), setItem: (key, value) => storage.set(key, String(value)) },
   });
@@ -48,7 +48,7 @@ async function startFrame(core, role, { engineReady = Promise.resolve() } = {}) 
       onChange: fn => { frame.listeners.push(fn); return () => {}; },
     },
     call: async (_target, method) => { if (method === 'ready') await engineReady; return true; },
-    legacy: { readState: async () => null, readIndexedDB: async () => null, readLocalStorage: async () => ({}) },
+    legacy: legacy || { readState: async () => null, readIndexedDB: async () => null, readLocalStorage: async () => ({}) },
   };
   const host = new vm.SyntheticModule(['atmos', 'isEngine', 'role', 'SELF'], function () {
     this.setExport('atmos', atmos);
@@ -150,4 +150,101 @@ test('if Atmos refuses the move, every frame still reads the earlier layout', as
   inView.a = 7; view.save();
   await settle();
   assert.deepEqual(plain(inEngine), { a: 7, b: 6 }, 'a change still reaches the other frames, without losing the rest');
+});
+
+// IndexedDB with one store, kept in `data`; `fail.get` / `fail.put` make
+// reads or writes fail.
+function fakeIndexedDB() {
+  const data = new Map();
+  const fail = { get: false, put: false };
+  const later = fn => setTimeout(fn, 0);
+  const db = {
+    transaction() {
+      const transaction = { error: null };
+      const request = (failing, done) => {
+        const req = {};
+        later(() => {
+          if (failing) { req.error = transaction.error = new Error('IndexedDB failed'); req.onerror?.(); transaction.onerror?.(); return; }
+          req.result = done();
+          req.onsuccess?.();
+          transaction.oncomplete?.();
+        });
+        return req;
+      };
+      transaction.objectStore = () => ({
+        get: key => request(fail.get, () => data.get(key)),
+        put: (value, key) => request(fail.put, () => { data.set(key, value); }),
+      });
+      return transaction;
+    },
+  };
+  const indexedDB = { open() { const req = { result: db }; later(() => req.onsuccess?.({ target: req })); return req; } };
+  return { data, fail, indexedDB };
+}
+
+test('a copy from the page that fails part-way is tried again, never over what was saved since (R16)', async () => {
+  const core = createCore({});
+  const idb = fakeIndexedDB();
+  const storage = new Map();
+  const page = { 'portfolio-tracker': { a: 5 }, markets: { lastQuery: 'SOLUSDT' }, watchlist: null, currency: null };
+  let failing = new Set(['markets', 'history']);
+  const legacy = {
+    readState: async id => { if (failing.has(id)) throw new Error('page not ready'); return page[id]; },
+    readIndexedDB: async () => { if (failing.has('history')) throw new Error('page not ready'); return { stores: { assets: [['chart-history', [1, 2]], ['portfolio-tracker:x', 'page']] } }; },
+    readLocalStorage: async () => ({ 'atmos:charting-a': 'page' }),
+  };
+  const start = () => startFrame(core, 'engine', { legacy, indexedDB: idb.indexedDB, storage });
+  await start();
+  assert.notEqual(core.state.settingsLayout, 2, "a failed read isn't done");
+  assert.equal(core.state.copiedFromPage, undefined);
+  assert.equal(core.state['ns:portfolio-tracker:a'], 5, 'what was read is kept');
+  // Changed since, here and in the frame's own storage.
+  core.state['ns:portfolio-tracker:a'] = 6;
+  idb.data.set('portfolio-tracker:x', 'mine');
+  storage.set('atmos:charting-a', 'mine');
+  failing = new Set();
+  idb.fail.put = true;
+  await start();
+  assert.notEqual(core.state.settingsLayout, 2, "nor a failed write");
+  idb.fail.put = false;
+  idb.fail.get = true;
+  await start();
+  assert.notEqual(core.state.settingsLayout, 2, "nor history it couldn't tell was there");
+  assert.equal(idb.data.get('portfolio-tracker:x'), 'mine');
+  idb.fail.get = false;
+  await start();
+  assert.equal(core.state.settingsLayout, 2);
+  assert.ok(core.state.copiedFromPage);
+  assert.equal(core.state['ns:portfolio-tracker:a'], 6, 'saved since wins');
+  assert.equal(core.state['ns:markets:lastQuery'], 'SOLUSDT');
+  assert.deepEqual(idb.data.get('chart-history'), [1, 2]);
+  assert.equal(idb.data.get('portfolio-tracker:x'), 'mine');
+  assert.equal(storage.get('atmos:charting-a'), 'mine');
+});
+
+test('what a frame saves of its own during an unfinished copy (defaults, empty history) doesn\'t stop the next (R16)', async () => {
+  const core = createCore({});
+  const idb = fakeIndexedDB();
+  const storage = new Map();
+  let failing = true;
+  const page = { markets: { lastQuery: 'SOLUSDT' }, 'portfolio-tracker': { a: 5, customBalanceFonts: [{ name: 'Mine' }] } };
+  const legacy = {
+    readState: async id => { if (failing && id in page) throw new Error('page not ready'); return page[id] ?? null; },
+    readIndexedDB: async () => { if (failing) throw new Error('page not ready'); return { stores: { assets: [['portfolio-tracker:chart-hidden', [{ from: 1, to: 2 }]]] } }; },
+    readLocalStorage: async () => ({}),
+  };
+  const start = () => startFrame(core, 'engine', { legacy, indexedDB: idb.indexedDB, storage });
+  const engine = await start();
+  engine.registerStateNamespace('markets', { defaults: { lastQuery: 'BTCUSDT overview' } });
+  engine.registerStateNamespace('portfolio-tracker', { defaults: { a: 0, customBalanceFonts: [] }, large: ['customBalanceFonts'] });
+  engine.save();
+  await settle();
+  idb.data.set('portfolio-tracker:chart-hidden', []); // the panel writes its ranges as it goes
+  failing = false;
+  await start();
+  assert.equal(core.state.settingsLayout, 2);
+  assert.equal(core.state['ns:markets:lastQuery'], 'SOLUSDT', 'a default written meanwhile is not "saved since"');
+  assert.equal(core.state['ns:portfolio-tracker:a'], 5);
+  assert.deepEqual(JSON.parse(storage.get('finance:state:portfolio-tracker:customBalanceFonts')), [{ name: 'Mine' }]);
+  assert.deepEqual(idb.data.get('portfolio-tracker:chart-hidden'), [{ from: 1, to: 2 }], 'nor is an empty list');
 });

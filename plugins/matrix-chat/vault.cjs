@@ -42,19 +42,15 @@ function createVault({ safeStorage, fs, path, crypto, file }) {
       const key = crypto.randomBytes(32);
       return { key, protected: await write(key), created: true };
     }
+    let plainKey = null;
     try {
       if (stored[0] === PROTECTED) {
         const key = Buffer.from(safeStorage.decryptString(stored.subarray(1)), 'base64');
         if (key.length !== 32) throw new Error('vault key has the wrong length');
         return { key, protected: true, created: false };
       }
-      if (stored[0] === PLAIN && stored.length === 33) {
-        const key = Buffer.from(stored.subarray(1));
-        // Secure storage became available since: protect the key now.
-        const nowProtected = safeStorage.isEncryptionAvailable() ? await write(key) : false;
-        return { key, protected: nowProtected, created: false };
-      }
-      throw new Error('vault key file is not recognised');
+      if (stored[0] !== PLAIN || stored.length !== 33) throw new Error('vault key file is not recognised');
+      plainKey = Buffer.from(stored.subarray(1));
     } catch (error) {
       // Unreadable (another user's or computer's secure storage, or damaged).
       // Keep the old file for inspection and start a new key: saved sessions
@@ -63,6 +59,16 @@ function createVault({ safeStorage, fs, path, crypto, file }) {
       await fs.promises.rename(file, `${file}.unreadable-${Date.now()}`).catch(() => {});
       const key = crypto.randomBytes(32);
       return { key, protected: await write(key), created: true, replaced: true };
+    }
+    // Read. Secure storage became available since: protect the key now. A
+    // write that fails leaves it as it was (tried again next start); it's
+    // still the key, and what it encrypted still opens.
+    if (!safeStorage.isEncryptionAvailable()) return { key: plainKey, protected: false, created: false };
+    try {
+      return { key: plainKey, protected: await write(plainKey), created: false };
+    } catch (error) {
+      console.warn('[matrix-chat] could not protect the vault key with secure storage yet:', error.message);
+      return { key: plainKey, protected: false, created: false };
     }
   }
 

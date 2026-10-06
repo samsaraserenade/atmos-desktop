@@ -3,8 +3,10 @@ import { EventEmitter } from 'node:events';
 export const matrixState = { matrixSession: null, matrixSessions: [], pendingStoreDeletions: [] };
 // Stand-in for src/vault.js.
 export const cryptoStoreKey = () => new Uint8Array(32);
-export const save = () => {};
-export const flush = async () => {};
+// What client.js asked state.js to do: 'save' (soon) or 'flush' (now).
+export const writes = [];
+export const save = () => { writes.push('save'); };
+export const flush = async () => { writes.push('flush'); if (controls.flush) await controls.flush(); };
 // Stand-in for the atmos-sdk module (matrix-fetch.js, notifications.js).
 export default {
   invoke: async () => ({ ok: false, name: 'TypeError', message: 'offline in tests' }),
@@ -20,9 +22,21 @@ export const HttpApiEvent = { SessionLoggedOut: 'Session.logged_out' };
 export class TokenRefreshLogoutError extends Error {}
 export const decryptAttachment = async bytes => bytes;
 export const encryptAttachment = async data => ({ data, info: {} });
+// Stand-in for src/oauth.js (the browser sign-in): `controls.authorize` plays the browser.
+export const CLIENT_URI = 'https://atmos.test/';
+export const revoked = [];
+export class OAuthSignInError extends Error {}
+export const supportsSignUp = () => false;
+export const registerClient = async () => 'client-id';
+export const sessionAuthFields = (metadata, clientId) => ({ issuer: metadata.issuer, clientId, revocationEndpoint: 'https://auth.test/revoke' });
+export const authorize = (...args) => controls.authorize(...args);
+export const refreshTokens = async () => { throw new Error('no refresh in tests'); };
+export const revokeToken = async (_auth, token) => { revoked.push(token); };
 export function createClient(options) {
   const client = Object.assign(new EventEmitter(), {
     options, starts: 0, stops: 0,
+    getAuthMetadata: () => controls.authMetadata ? controls.authMetadata() : Promise.reject(new Error('no OAuth')),
+    whoami: () => controls.whoami(),
     getUserId: () => options.userId,
     getRooms: () => [],
     getUser: () => null,

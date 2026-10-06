@@ -1,5 +1,9 @@
 'use strict';
 
+// A candle counts as finished this long after its end, for a clock a little
+// ahead of the exchange's (whose forming candle would otherwise pass).
+const SETTLE_MS = 5_000;
+
 function clone(value) {
   return value == null ? value : structuredClone(value);
 }
@@ -94,24 +98,37 @@ class MarketState {
   // later historical backfill for the same bar (see seedCandleHistory).
   _appendCandleHistory(provider, intervalMs, candle) {
     const list = provider.candleHistory.get(intervalMs) || [];
-    if (list.length && list[list.length - 1].start === candle.start) list[list.length - 1] = candle;
-    else list.push(candle);
+    // In its place by time: newer finished candles can be there already
+    // (filled in from the exchange while this one was forming).
+    let index = list.length;
+    while (index > 0 && list[index - 1].start > candle.start) index -= 1;
+    if (index > 0 && list[index - 1].start === candle.start) {
+      // One seen only in part doesn't replace a whole one (the exchange's).
+      if (!candle.partial || list[index - 1].partial) list[index - 1] = candle;
+    } else list.splice(index, 0, candle);
     if (list.length > this.candleHistoryLimit) list.splice(0, list.length - this.candleHistoryLimit);
     provider.candleHistory.set(intervalMs, list);
   }
 
   // Backfills the bars a fresh subscription hasn't lived through yet from a
   // REST history fetch (see history.js / MarketDataService#_ensureCandleHistory).
-  // Never clobbers a bar this process has already built live -- REST candles
-  // can lag or aggregate slightly differently than our own trade-by-trade feed.
+  // Never clobbers a bar this process has built live from the whole of its
+  // period -- REST candles can lag or aggregate slightly differently than our
+  // own trade-by-trade feed -- but does replace one seen only in part
+  // (`partial`: watching began partway, or the feed dropped).
+  // Only finished bars: exchanges send the one still forming too (its end
+  // still ahead, give or take SETTLE_MS of clock), which is the live
+  // candle's, not history's.
   seedCandleHistory(symbol, exchange, intervalMs, candles = []) {
     if (!candles.length) return null;
     const { state, provider } = this._exchange(symbol, exchange);
     const existing = provider.candleHistory.get(intervalMs) || [];
     const byStart = new Map(existing.map(candle => [candle.start, candle]));
+    const now = this.now();
     let added = false;
     for (const candle of candles) {
-      if (byStart.has(candle.start)) continue;
+      if (candle.end > now - SETTLE_MS) continue;
+      if (byStart.has(candle.start) && !byStart.get(candle.start).partial) continue;
       byStart.set(candle.start, candle);
       added = true;
     }
@@ -133,7 +150,9 @@ class MarketState {
       const forming = value.candles.get(intervalMs);
       const latestCandle = forming || history[history.length - 1];
       if (!latestCandle) continue;
-      const priorHistory = forming ? history : history.slice(0, -1);
+      // Each time once: a bar history has at the forming candle's time (a
+      // clock behind the exchange's) is the forming one's.
+      const priorHistory = forming ? history.filter(candle => candle.start < forming.start) : history.slice(0, -1);
       result[latestCandle.interval] = { ...clone(latestCandle), history: clone(priorHistory) };
     }
     return result;

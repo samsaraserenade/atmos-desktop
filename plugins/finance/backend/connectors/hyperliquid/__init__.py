@@ -28,22 +28,43 @@ STABLE_SYMBOLS = {"USDC", "USDT", "USDHL"}
 
 # spotMeta (the token/pair universe) barely ever changes, so it's fetched
 # once per process rather than once per poll -- same reasoning as the
-# Solana connector's SYMBOL_CACHE.
+# Solana connector's SYMBOL_CACHE. Only once it has been read: a failed
+# read is asked again at the next poll. Read again when a held token isn't
+# in it (listed since), at most every SPOT_META_REFRESH_S.
 _SPOT_META_CACHE: dict[str, Any] | None = None
+_SPOT_META_READ_AT = 0.0
+SPOT_META_REFRESH_S = 600
 
 
 def _info(body: dict[str, Any]) -> Any:
     return http.post(API, body)
 
 
-def _spot_meta() -> dict[str, Any]:
-    global _SPOT_META_CACHE
-    if _SPOT_META_CACHE is None:
+def _spot_meta(refresh: bool = False) -> dict[str, Any] | None:
+    """The token/pair universe, or None when it couldn't be read. With
+    `refresh`, read again unless that was done in the last
+    SPOT_META_REFRESH_S; a failed read keeps the one before."""
+    global _SPOT_META_CACHE, _SPOT_META_READ_AT
+    due = refresh and time.monotonic() - _SPOT_META_READ_AT >= SPOT_META_REFRESH_S
+    if _SPOT_META_CACHE is None or due:
         try:
-            _SPOT_META_CACHE = _info({"type": "spotMeta"})
+            meta = _info({"type": "spotMeta"})
         except CollectorError:
-            _SPOT_META_CACHE = {}
+            return _SPOT_META_CACHE
+        if isinstance(meta, dict):
+            _SPOT_META_CACHE = meta
+            _SPOT_META_READ_AT = time.monotonic()
     return _SPOT_META_CACHE
+
+
+def _token_names(spot_meta: dict[str, Any]) -> dict[int, str]:
+    names: dict[int, str] = {}
+    for token in spot_meta.get("tokens") or []:
+        try:
+            names[int(token.get("index"))] = str(token.get("name") or "").strip()
+        except (TypeError, ValueError):
+            continue
+    return names
 
 
 def _spot_price(symbol: str, all_mids: dict[str, Any], spot_meta: dict[str, Any]) -> float:
@@ -205,11 +226,11 @@ def collect(config: dict[str, Any]) -> dict[str, Any]:
         raise CollectorError("addresses not configured")
     wallet_address = watched[0] if len(watched) == 1 else None
 
-    spot_meta = _spot_meta()
+    errors = 0
     try:
         all_mids = _info({"type": "allMids"})
     except CollectorError:
-        all_mids = {}
+        all_mids = None
     funding_rates = _funding_rates()
 
     quantities: dict[str, float] = {}
@@ -219,14 +240,10 @@ def collect(config: dict[str, Any]) -> dict[str, Any]:
     earn_values: dict[str, float] = {}
     earn_bases: dict[str, float] = {}
     earn_market_prices: dict[str, float] = {}
-    errors = 0
-
-    token_names: dict[int, str] = {}
-    for token in spot_meta.get("tokens") or []:
-        try:
-            token_names[int(token.get("index"))] = str(token.get("name") or "").strip()
-        except (TypeError, ValueError):
-            continue
+    # Priced once every address is read (below): spot symbols held, and
+    # Earn supply as token index -> [current, basis].
+    spot_held: set[str] = set()
+    earn_supply: dict[int, list[float]] = {}
 
     for address in watched:
         try:
@@ -238,9 +255,8 @@ def collect(config: dict[str, Any]) -> dict[str, Any]:
                 symbol = str(bal.get("coin") or "").strip()
                 if not symbol:
                     continue
-                price = _spot_price(symbol, all_mids, spot_meta)
+                spot_held.add(symbol)
                 quantities[symbol] = quantities.get(symbol, 0.0) + amount
-                prices[symbol] = price
                 kinds[symbol] = "cash" if symbol.upper() in STABLE_SYMBOLS else "invested"
                 # Held on Hyperliquid's exchange, not in the Perp account.
                 metas.setdefault(symbol, {"instrument": "spot", "protocolType": "Exchange"})
@@ -266,12 +282,9 @@ def collect(config: dict[str, Any]) -> dict[str, Any]:
                 if current <= 0:
                     continue
                 basis = max(0.0, float(supply.get("basis") or 0))
-                symbol = token_names.get(token_index) or f"Token {token_index}"
-                market_price = _spot_price(symbol, all_mids, spot_meta)
-                earn_symbol = f"{symbol} Earn"
-                earn_values[earn_symbol] = earn_values.get(earn_symbol, 0.0) + current
-                earn_bases[earn_symbol] = earn_bases.get(earn_symbol, 0.0) + basis
-                earn_market_prices[earn_symbol] = market_price
+                totals = earn_supply.setdefault(token_index, [0.0, 0.0])
+                totals[0] += current
+                totals[1] += basis
         except (CollectorError, ValueError, TypeError, AttributeError):
             errors += 1
 
@@ -377,6 +390,39 @@ def collect(config: dict[str, Any]) -> dict[str, Any]:
                 # getFuturesSourceTotal). Idle collateral keeps this label too.
                 metas["USDC"] = {"instrument": "perp-cash", "group": "perp", **({"walletAddress": wallet_address} if wallet_address else {})}
         except (CollectorError, ValueError, TypeError):
+            errors += 1
+
+    # Spot and Earn prices. Only those need Hyperliquid's price and token
+    # lists: without them a held token reads as $0, so an outage counts as an
+    # error only then (the collector keeps the last snapshot). Both lists
+    # read, a token with no price has no market: $0, not an error, or the
+    # account would keep its last snapshot for good.
+    if spot_held or earn_supply:
+        spot_meta = _spot_meta()
+        if spot_meta is not None:
+            names = _token_names(spot_meta)
+            listed = set(names.values())
+            if any(symbol.upper() not in STABLE_SYMBOLS and symbol not in listed for symbol in spot_held) \
+                    or any(index not in names for index in earn_supply):
+                spot_meta = _spot_meta(refresh=True)
+        mids = all_mids if isinstance(all_mids, dict) else {}
+        lists_down = spot_meta is None or not mids
+        spot_meta = spot_meta or {}
+        token_names = _token_names(spot_meta)
+        unresolved = False
+        for symbol in spot_held:
+            prices[symbol] = _spot_price(symbol, mids, spot_meta)
+            unresolved = unresolved or prices[symbol] <= 0
+        for token_index, (current, basis) in earn_supply.items():
+            symbol = token_names.get(token_index)
+            unresolved = unresolved or not symbol
+            symbol = symbol or f"Token {token_index}"
+            earn_symbol = f"{symbol} Earn"
+            earn_values[earn_symbol] = earn_values.get(earn_symbol, 0.0) + current
+            earn_bases[earn_symbol] = earn_bases.get(earn_symbol, 0.0) + basis
+            earn_market_prices[earn_symbol] = _spot_price(symbol, mids, spot_meta)
+            unresolved = unresolved or earn_market_prices[earn_symbol] <= 0
+        if unresolved and lists_down:
             errors += 1
 
     # Unified-account collateral remains Perp even when every position is closed.

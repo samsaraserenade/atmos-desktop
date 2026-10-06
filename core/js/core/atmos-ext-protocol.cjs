@@ -2,8 +2,8 @@
 /**
  * atmos-ext://: what extension frames load. Each extension's files from its
  * own origin (frames.frameHost), Core's SDK files to origins that have an
- * extension, a frame's document with that extension's Content-Security-
- * Policy, a library service's modules to the frames that declared it, and
+ * extension, a frame's document and each of its files with that extension's
+ * Content-Security-Policy, a library service's modules to the frames that declared it, and
  * Core's storage pages only to the move or removal running now. Moved out
  * of main.js so it can be unit-tested (atmos-ext-protocol.test.cjs); main.js
  * registers `handle` with protocol.handle and gives it what it reads:
@@ -81,6 +81,21 @@ function createAtmosExtHandler({
   moveInProgress = () => null, sdkDir, originMoveScript, error = console.error,
 }) {
   const noStore = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+  // Core's own scripts and styles: nothing loaded as a document from them.
+  const coreFile = { ...noStore, 'Content-Security-Policy': "default-src 'none'" };
+
+  /**
+   * An extension's Content-Security-Policy, built from its permissions. Sent
+   * with its frame document and with every file of its own, since a frame
+   * may navigate within its origin: its own HTML page, an SVG or a worker's
+   * script would otherwise run with no network limits.
+   */
+  const policyFor = entry => frames.frameCsp({
+    permissions: trustOf(entry)?.permissions,
+    inlineScriptHashes: [frames.IMPORT_MAP_HASH],
+    libraryOrigins: libraryOriginsFor(entry),
+    resourceProviders: resourceProvidersFor(entry),
+  });
 
   async function serve(request) {
     const url = new URL(request.url);
@@ -92,14 +107,8 @@ function createAtmosExtHandler({
       const [kind, id] = (url.searchParams.get('ext') || '').split(':');
       const entry = owners.find(candidate => candidate.kind === kind && candidate.id === id);
       if (!entry) return new Response('Forbidden', { status: 403 });
-      const csp = frames.frameCsp({
-        permissions: trustOf(entry)?.permissions,
-        inlineScriptHashes: [frames.IMPORT_MAP_HASH],
-        libraryOrigins: libraryOriginsFor(entry),
-        resourceProviders: resourceProvidersFor(entry),
-      });
       return new Response(frames.frameDocument(), {
-        headers: { ...noStore, 'Content-Type': MIME_BY_EXT['.html'], 'Content-Security-Policy': csp },
+        headers: { ...noStore, 'Content-Type': MIME_BY_EXT['.html'], 'Content-Security-Policy': policyFor(entry) },
       });
     }
     // Core's pages that copy an extension's storage into its own origin, or
@@ -117,7 +126,7 @@ function createAtmosExtHandler({
       }
       if (role) {
         return new Response(await fs.promises.readFile(originMoveScript), {
-          headers: { ...noStore, 'Content-Type': MIME_BY_EXT['.js'] },
+          headers: { ...coreFile, 'Content-Type': MIME_BY_EXT['.js'] },
         });
       }
     }
@@ -132,7 +141,7 @@ function createAtmosExtHandler({
       if (!owners.length) return new Response('Not found', { status: 404 });
       const filePath = path.join(sdkDir, SDK_FILES[rel]);
       return new Response(await fs.promises.readFile(filePath), {
-        headers: { ...noStore, 'Content-Type': mimeFor(filePath) },
+        headers: { ...coreFile, 'Content-Type': mimeFor(filePath) },
       });
     }
 
@@ -160,6 +169,7 @@ function createAtmosExtHandler({
     if (!buf) return new Response('Not found', { status: 404 });
     // A developer folder changes under Atmos: never serve a stale copy.
     if (entry.source === 'developer') headers['Cache-Control'] = 'no-store';
+    headers['Content-Security-Policy'] = policyFor(entry);
     return new Response(buf, { headers: { ...headers, 'Content-Type': mimeFor(filePath) } });
   }
 

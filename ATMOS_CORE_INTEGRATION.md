@@ -977,7 +977,7 @@ it may load and do. The extension names its tabs (1–64 letters, digits,
 
 | Call | What it does |
 |---|---|
-| `atmos.web.open(tabId, { url, private })` / `close(tabId)` | A page for the tab, loading `url` (`private: true` for the in-memory session); the page goes (the tab is the extension's to keep) |
+| `atmos.web.open(tabId, { url, private })` / `close(tabId, { sleep })` | A page for the tab, loading `url` (`private: true` for the in-memory session); the page goes (the tab is the extension's to keep), its `beforeunload`, `pagehide` and `unload` first. With `sleep: true` (putting a background tab away), only if the page lets go: one with unsaved changes stays, without a dialog, and it resolves `false` |
 | `atmos.web.show(tabId \| null)` / `list()` | Which tab's page the panel shows; the pages open, with their state |
 | `atmos.web.setSurface({ x, y, width, height, over })` / `setSurface(null)` | Panel only: where the page goes, in the frame's pixels. The frame is cut away there, so the page shows through; `over` (up to 8 rectangles) is where the frame draws over the page itself (suggestions, prompts), and keeps. The page follows the panel through layout changes; a panel frame that goes takes it off screen |
 | `atmos.web.navigate(tabId, url)`, `back`, `forward`, `reload(tabId, { hard })`, `stop`, `zoom(tabId, 'in' \| 'out' \| 'reset')`, `find(tabId, text, { forward, findNext })`, `stopFind`, `print`, `mute(tabId, muted)`, `edit(tabId, 'copy' …)`, `download(tabId, url)`, `copyImage(tabId, x, y)`, `focus`, `state` | What a browser does to a page. `navigate` is checked in the main process like any navigation; zoom is kept per site. A page's state has `blocked` (ads and trackers blocked on it) and `shield` (`'on'`, `'off'`, `'disabled'` or `'none'`) |
@@ -1383,6 +1383,14 @@ Other extensions reach only the handlers and events it shares (`exports`,
 section 7), and every call arrives stamped with the extension making it. Its
 resource providers serve its own frames only.
 
+**Which frame called.** Every call comes through the Atmos page, so a
+handler's `event.sender` is the page, whichever frame asked, and it outlives
+them all. `event.callerFrame` is the frame: `{ id, isDestroyed() }`, and
+`once('destroyed', fn)` / `removeListener` for when it goes (closed, or its
+extension stopped). Keep what a frame started (a subscription, a stream)
+with it, and end it there. `send(event.sender, …)` still delivers events;
+they reach every frame listening, so say whose they are.
+
 **The context** gives, each only when `extension.json` declares it:
 
 | Member | Declared with |
@@ -1708,7 +1716,12 @@ user data). Unpackaged, `--extension-source=<folder or url>` (or
 - **At the next start**, before anything is listed, pending changes apply:
   staged packages move into the installed folder, removed ones are deleted.
   The version an update replaced is kept in `extension-previous/` and loads
-  instead if the new one can't; it's deleted once the new one has loaded.
+  instead if the new one can't; it's deleted once the new one has run a
+  whole session. An official update that loads but doesn't start (its
+  `main.cjs` fails, Atmos stops while it starts, or one of its frames'
+  entry file fails to load in its first session) runs the version before
+  from the next start, and Settings says so; Update tries it again,
+  keeping the version before.
   Deleting data removes the extension's state file, a `userData/<id>`
   folder, and its own origin's storage: the IndexedDB and localStorage its
   frames used (from Atmos 0.17; before, they stayed) and, for Atmos

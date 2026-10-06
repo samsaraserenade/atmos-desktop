@@ -397,6 +397,15 @@ function routeLinks() {
   };
 }
 
+/**
+ * Internal, for /__atmos/frame.js: the surface's entry file failed to load.
+ * Core is told, so an update that can't start falls back to the version it
+ * replaced.
+ */
+export function __loadFailed(error) {
+  notify('frame.loadFailed', String(error?.message || error || '').slice(0, 200));
+}
+
 /** Internal: called by /__atmos/frame.js before the entry file loads. */
 export function __connect() {
   return new Promise(resolve => {
@@ -1147,7 +1156,9 @@ export async function background({ timeout = 15000 } = {}) {
  * extension's own name for a tab (1–64 letters, digits, - or _).
  *
  *   open(tabId, { url, private })   a page for the tab (loads url)
- *   close(tabId)                    its page goes (the tab is the extension's to keep)
+ *   close(tabId, { sleep })         its page goes (the tab is the extension's to keep);
+ *                                   sleep: only if the page lets go (resolves false
+ *                                   and keeps it when it objects: unsaved changes)
  *   show(tabId | null)              which tab's page the panel shows
  *   navigate/back/forward/reload/stop/zoom/find/stopFind/print/mute/edit/download/copyImage/focus/state
  *   media(tabId, action, value)     what plays in the page (1.4): toggle, next, previous, seek
@@ -1163,7 +1174,7 @@ export async function background({ timeout = 15000 } = {}) {
 const webAsk = (tabId, name, ...args) => ask('web.do', tabId, name, ...args);
 export const web = Object.freeze({
   open: (tabId, options = {}) => ask('web.open', tabId, options),
-  close: tabId => ask('web.close', tabId),
+  close: (tabId, options = {}) => ask('web.close', tabId, { sleep: options.sleep === true }),
   show: tabId => ask('web.show', tabId ?? null),
   list: () => ask('web.list'),
   navigate: (tabId, url) => webAsk(tabId, 'navigate', url),

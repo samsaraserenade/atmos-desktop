@@ -353,6 +353,43 @@ test('audio: a call made before the Audio service has started waits for it', asy
   assert.deepEqual(calls.sort(), ['play', 'watch']);
 });
 
+test('an audio call waiting for Audio to start is dropped if the frame goes meanwhile (R38)', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  let start;
+  const started = new Promise(resolve => { start = resolve; });
+  const calls = [];
+  const channel = { load: (...args) => { calls.push('load'); return args; }, play: () => calls.push('play') };
+  const { bridge, request } = harness(createExtensionBridge, {
+    extension: { permissions: { invokes: ['service:audio'] } },
+    deps: { audio: { channel: () => started.then(() => channel), watch: async () => {} } },
+  });
+  const load = request('audio.load', new Blob(['x'], { type: 'audio/wav' }), { play: true, loop: true });
+  const play = request('audio.play');
+  await new Promise(resolve => setImmediate(resolve));
+  bridge.dispose(); // its frame goes (say, its approval removed) before Audio starts
+  start();
+  await Promise.all([load, play]);
+  assert.deepEqual(calls, [], 'nothing reaches the channel');
+});
+
+test('a service call waiting for its service to start is dropped if the frame goes meanwhile (R38)', async t => {
+  const { createExtensionBridge } = await loadBridge(t);
+  let started;
+  const calls = [];
+  const service = { methods: ['save'], call: (method, args) => { calls.push([method, ...args]); return 'saved'; } };
+  const { bridge, request } = harness(createExtensionBridge, {
+    extension: { permissions: { invokes: ['service:store'] }, frame: { reach: { 'service:store': { ipc: [], events: [], methods: ['save'], resources: [] } } } },
+    deps: { awaitService: () => new Promise(resolve => { started = () => resolve(service); }) },
+  });
+  const pending = request('call', 'service:store', 'save', { draft: 1 });
+  await new Promise(resolve => setImmediate(resolve));
+  bridge.dispose(); // its frame closes while the service is still starting
+  started();
+  const reply = await pending;
+  assert.deepEqual(calls, [], 'the call never reaches the service');
+  assert.match(reply?.error?.message || '', /went away/);
+});
+
 test('fetch: declared https hosts only, stamped with the caller, abortable, cleaned up with the frame', async t => {
   const { createExtensionBridge } = await loadBridge(t);
   const calls = [];
@@ -460,6 +497,10 @@ test('web pages: official extensions declaring "web" only; tab ids, commands and
   assert.equal((await official.request('web.open', 'tab-1', { url: 'https://example.com/', private: true })).result, true);
   assert.deepEqual(calls.at(-1), ['open', 'tab-1', { url: 'https://example.com/', private: true }]);
   assert.equal((await official.request('web.open', 'bad id!', {})).error.name, 'TypeError', 'a tab id is letters, digits, - and _');
+  await official.request('web.close', 'tab-1', { sleep: 'yes', evil: true });
+  assert.deepEqual(calls.at(-1), ['close', 'tab-1', { sleep: false }], 'closing, or putting to sleep only when asked for exactly');
+  await official.request('web.close', 'tab-1', { sleep: true });
+  assert.deepEqual(calls.at(-1), ['close', 'tab-1', { sleep: true }]);
   assert.equal((await official.request('web.do', 'tab-1', 'executeJavaScript', 'alert(1)')).error.name, 'TypeError', 'only the listed commands');
   assert.equal((await official.request('web.do', 'tab-1', 'navigate', 42)).error.name, 'TypeError');
   assert.equal((await official.request('web.do', 'tab-1', 'copyImage', 'x', 1)).error.name, 'TypeError');

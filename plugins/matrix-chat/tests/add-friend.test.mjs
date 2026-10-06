@@ -15,7 +15,7 @@ function setup() {
     setAccountData: async (type, content) => { direct = content; },
   };
   const service = createRoomService({ client, assertCurrent() { if (retired) throw new Error('Session changed'); } }, () => {});
-  return { service, client, calls, rooms, direct: () => direct, retire: () => { retired = true; } };
+  return { service, client, calls, rooms, direct: () => direct, setDirect: value => { direct = value; }, retire: () => { retired = true; } };
 }
 
 test('invites a friend to an encrypted DM and preserves other direct rooms', async () => {
@@ -53,4 +53,17 @@ test('retrying an account-data failure does not send another invitation', async 
   await s.service.addFriend('@friend:example.org');
   assert.equal(s.calls.length, 1);
   assert.deepEqual(s.direct()['@friend:example.org'], ['!new']);
+});
+
+test('accepting two invitations at once keeps both conversations (R39)', async () => {
+  const s = setup();
+  const invite = (roomId, inviter) => s.rooms.set(roomId, { roomId, getMyMembership: () => 'invite', getDMInviter: () => inviter });
+  invite('!one', '@one:example.org');
+  invite('!two', '@two:example.org');
+  // As the SDK's: written, then seen here once the server echoes it back.
+  s.client.setAccountData = async (_type, content) => { await new Promise(resolve => setTimeout(resolve, 5)); s.setDirect(content); };
+  s.client.joinRoom = async () => {};
+  await Promise.all([s.service.acceptDirectRequest('!one'), s.service.acceptDirectRequest('!two')]);
+  assert.deepEqual(s.direct()['@one:example.org'], ['!one']);
+  assert.deepEqual(s.direct()['@two:example.org'], ['!two']);
 });

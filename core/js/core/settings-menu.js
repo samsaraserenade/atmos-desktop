@@ -1652,7 +1652,8 @@ function _renderExtensionManagerPage() {
 
   const failed = (status.applied || []).filter(record => record.failed);
   for (const record of failed) {
-    sections.push(`<div class="sm-trust-note sm-trust-alert sm-manager-problem">The update of ${escapeHtml(record.id)} to ${escapeHtml(record.version)} couldn't load${record.running ? `; ${escapeHtml(record.running.version || '')} is running instead` : ''}.</div>`);
+    const what = record.reason ? `didn't start (${escapeHtml(record.reason)})` : "couldn't load";
+    sections.push(`<div class="sm-trust-note sm-trust-alert sm-manager-problem">The update of ${escapeHtml(record.id)} to ${escapeHtml(record.version)} ${what}${record.running ? `; ${escapeHtml(record.running.version || '')} is running instead` : record.reason ? '; the version before it runs from the next start' : ''}.</div>`);
   }
 
   if (status.pending.length) {

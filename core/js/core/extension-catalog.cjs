@@ -43,7 +43,7 @@
  * extension that can't load, and stood in the official one's way.
  *
  * A third place, `previousRoot`, holds the version an update replaced
- * (extension-manager.cjs keeps it until the new one has started once). Its
+ * (extension-manager.cjs keeps it until the new one has run a session). Its
  * copies only count if officially signed, and lose ties, so they only load
  * when the newer copy can't.
  */

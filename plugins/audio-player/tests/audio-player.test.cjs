@@ -51,7 +51,7 @@ test('sound comes from the Audio service; the engine owns the queue', () => {
   const engine = read('src/engine.js');
   assert.match(engine, /const audio = atmos\.audio;/);
   assert.match(engine, /audio\.load\(track\.source, \{ id: track\.key \|\| track\.name, position, play \}\)/);
-  assert.match(engine, /value\.type === 'ended'\) \{ void loadTrack\(getNextIndex\(\)\)/);
+  assert.match(engine, /value\.type === 'ended'\) \{[^}]*getNextIndex\(\{ ended: true \}\)/);
   assert.match(engine, /atmos\.surface\.onKey\(\(\{ code \}\) => \{ if \(code === 'Space'\) void togglePlay\(\); \}\)/);
   assert.match(engine, /await atmos\.expose\(\{/);
   assert.doesNotMatch(engine, /document\.createElement\('audio'\)|new Audio\(/);
@@ -275,4 +275,92 @@ test('sidecar artwork reports WebP with the correct media type', () => {
   const { imageContentType } = require('../main.cjs')._test;
   assert.equal(imageContentType('cover.webp'), 'image/webp');
   assert.equal(imageContentType('cover.WEBP'), 'image/webp');
+});
+
+// IndexedDB with one store, kept in `data`; `fail.get` / `fail.put` make
+// reads or writes fail.
+function fakeIndexedDB() {
+  const data = new Map();
+  const fail = { get: false, put: false };
+  const later = fn => setTimeout(fn, 0);
+  const db = {
+    objectStoreNames: ['assets'],
+    createObjectStore() {},
+    transaction() {
+      const transaction = { error: null };
+      const request = (failing, done) => {
+        const req = {};
+        later(() => {
+          if (failing) { req.error = transaction.error = new Error('IndexedDB failed'); req.onerror?.(); transaction.onerror?.(); return; }
+          req.result = done();
+          req.onsuccess?.();
+          transaction.oncomplete?.();
+        });
+        return req;
+      };
+      transaction.objectStore = () => ({
+        get: key => request(fail.get, () => data.get(key)),
+        put: (value, key) => request(fail.put, () => { data.set(key, value); }),
+      });
+      return transaction;
+    },
+  };
+  const indexedDB = { open() { const req = { result: db }; later(() => { req.onupgradeneeded?.({ target: req }); req.onsuccess?.({ target: req }); }); return req; } };
+  return { data, fail, indexedDB };
+}
+
+test('a copy from the page that fails is tried again next start (R16)', async () => {
+  const vm = require('node:vm');
+  const idb = fakeIndexedDB();
+  let legacy = async () => { throw new Error('page not ready'); };
+  const start = async () => {
+    const context = vm.createContext({ indexedDB: idb.indexedDB, console: { ...console, warn() {}, error() {} }, setTimeout });
+    const sdk = new vm.SyntheticModule(['default'], function () {
+      this.setExport('default', { legacy: { readIndexedDB: (...args) => legacy(...args) } });
+    }, { context });
+    const store = new vm.SourceTextModule(read('src/store.js'), { context });
+    await store.link(() => sdk);
+    await store.evaluate();
+    return store.namespace.copyFromPage();
+  };
+  await start();
+  assert.equal(idb.data.get('copied-from-page'), undefined, "a failed read isn't done");
+  legacy = async () => ({ stores: { assets: [['audio-player:playlist', ['a.mp3']], ['library-meta', { albums: { x: 1 }, folders: [] }]] } });
+  idb.fail.put = true;
+  await start();
+  assert.equal(idb.data.get('copied-from-page'), undefined, "nor a failed write");
+  idb.fail.put = false;
+  idb.data.set('library-meta', { albums: {}, folders: ['mine'] });
+  idb.fail.get = true;
+  await start();
+  assert.deepEqual(idb.data.get('library-meta'), { albums: {}, folders: ['mine'] }, "what couldn't be read isn't written over");
+  idb.fail.get = false;
+  assert.equal(await start(), true);
+  assert.deepEqual(idb.data.get('playlist'), ['a.mp3']);
+  assert.deepEqual(idb.data.get('library-meta'), { albums: {}, folders: ['mine'] }, 'kept: saved here already');
+  assert.equal(idb.data.get('copied-from-page'), true);
+  legacy = async () => { throw new Error('not asked again'); };
+  assert.equal(await start(), false);
+});
+
+test('what plays next: repeat off stops at the end (R24)', async () => {
+  const { nextIndex } = await importSource('src/queue.js');
+  const at = (index, options) => nextIndex({ index, length: 2, repeatMode: 'none', shuffleOn: false, ...options });
+  assert.equal(at(0, { ended: true }), 1);
+  assert.equal(at(1, { ended: true }), null, 'the last song ending with repeat off: the end');
+  assert.equal(at(1, { ended: true, repeatMode: 'all' }), 0);
+  assert.equal(at(1, {}), 0, 'Next on the last song goes round');
+  assert.equal(nextIndex({ index: 0, length: 1, repeatMode: 'none', shuffleOn: true, ended: true }), null, 'one song, shuffled, repeat off: the end too');
+  assert.equal(nextIndex({ index: 0, length: 3, repeatMode: 'none', shuffleOn: true, random: () => 0.5 }), 1);
+  assert.equal(nextIndex({ index: 0, length: 0, repeatMode: 'all', shuffleOn: false }), null);
+  const engine = read('src/engine.js');
+  assert.match(engine, /value\.type === 'ended'\) \{[^}]*getNextIndex\(\{ ended: true \}\)/);
+});
+
+test('repeat one replays a song when it ends, but Next goes to the next (R47)', async () => {
+  const { nextIndex } = await importSource('src/queue.js');
+  const at = options => nextIndex({ index: 0, length: 2, repeatMode: 'one', shuffleOn: false, ...options });
+  assert.equal(at({ ended: true }), 0, 'the same song again when it ends');
+  assert.equal(at({}), 1, 'Next: the next one');
+  assert.equal(at({ shuffleOn: true, random: () => 0.9 }), 1, 'shuffled too');
 });

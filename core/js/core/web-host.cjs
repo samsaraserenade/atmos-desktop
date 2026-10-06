@@ -45,6 +45,7 @@ const LISTS_PARTITION = 'atmos-browser-lists';
 const MAX_LIST_BYTES = 16 * 1024 * 1024;
 const STORAGE_FLUSH_MS = 30_000;                 // pages' storage and cookies to disk
 const CLOSE_PAGE_MS = 3000;                      // a page's last events, before it's closed regardless
+const PRIVATE_END_MS = 10_000;                   // clearing the private session, before new private pages go on regardless
 const HTTPS_FALLBACK_MS = 3000;                  // an upgraded page with no answer by then loads over http (Chrome's)
 const MEMORY_CHECK_MS = 30_000;                  // how often each tab's process is measured
 const MEMORY_STEP_BYTES = 2 * 1024 ** 3;         // a 'memory' event at 2 GB, 4 GB, 6 GB…
@@ -117,6 +118,8 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   const navigations = new Map();     // webContents id -> its page navigations started (the token budget's)
   const budgetFor = new Map();       // webContents id -> the navigation its token budget was armed for
   const closing = new Set();         // webContents ids Atmos is closing (closePage)
+  const sleeping = new Map();        // webContents id -> settle(closed): a page asked to let go (sleepPage)
+  const SLEEP_PAGE_MS = 10_000;      // …and how long it may take to answer
   // What a page may do because the user just used it (web-policy.cjs):
   // pop-ups, and links Atmos opens here coming to the front ('atmos', the
   // Atmos window's own input).
@@ -126,6 +129,8 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   const leaveRefusedAt = new Map();  // webContents id -> when "Leave site?" was last answered Cancel
   const coreActedAt = new Map();     // webContents id -> when the user last moved it from the browser (address bar, Back…)
   let quitting = false;              // Atmos is quitting: its windows close next
+  let privateEnding = null;          // the last private session being cleared (endPrivateSession)
+  const endsPrivate = new Set();     // webContents ids whose closing ended private browsing (closePage)
   app.on('before-quit', () => { quitting = true; });
   let adblock = null;                // web-adblock.cjs, made with the sessions
 
@@ -841,6 +846,8 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     // askBeforeLeaving), so a page can't bring it back again and again.
     contents.on('will-prevent-unload', event => {
       if (closing.has(contents.id)) { event.preventDefault(); return; }
+      // Being put to sleep, nobody asked to leave it: it stays (sleepPage).
+      if (sleeping.has(contents.id)) { sleeping.get(contents.id)(false); return; }
       const actedAt = Math.max(activations.lastAt(contents.id), coreActedAt.get(contents.id) || 0);
       if (!policy.askBeforeLeaving({ refusedAt: leaveRefusedAt.get(contents.id) || 0, actedAt, now: Date.now() })) return;
       const owner = (contents.getType() === 'window' && BrowserWindow.fromWebContents(contents)) || atmosWindow;
@@ -991,7 +998,7 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     activations.forget(guestId);
     downloadReady.delete(guestId);
     for (const key of [...expectedDownloads.keys()]) if (key.startsWith(`${guestId}\n`)) expectedDownloads.delete(key);
-    if (gone?.private && ![...live.values()].some(other => other.private)) void endPrivateSession();
+    if (gone?.private && !endsPrivate.delete(guestId) && ![...live.values()].some(other => other.private)) void endPrivateSession();
   }
 
   /**
@@ -1006,8 +1013,9 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
   function closePage(contents) {
     if (!contents || contents.isDestroyed()) return Promise.resolve();
     const id = contents.id;
+    const already = closing.has(id);
     closing.add(id);
-    return new Promise(resolve => {
+    const gone = new Promise(resolve => {
       let timer = null;
       const done = () => { clearTimeout(timer); resolve(); };
       timer = setTimeout(() => {
@@ -1017,20 +1025,88 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       contents.once('destroyed', done);
       try { contents.close({ waitForBeforeUnload: true }); } catch { done(); }
     });
+    // The last private page closing: private browsing ends as it goes. A
+    // private page opened while it runs its last events waits for that,
+    // rather than sharing what this one kept (R27).
+    if (!already && live.get(id)?.private && ![...live].some(([other, entry]) => other !== id && entry.private && !closing.has(other))) {
+      endsPrivate.add(id);
+      void endPrivateSession(gone);
+    }
+    return gone;
+  }
+  /**
+   * Put a page to sleep (Atmos Browser does it to background tabs): its
+   * beforeunload, pagehide and unload run as closePage runs them, but a page
+   * that objects to being left (unsaved changes) stays as it is, without a
+   * dialog: the user didn't ask to leave it. Closing can't do that for a
+   * tab: Electron closes a <webview>'s page whatever its beforeunload says.
+   * Leaving it can (a refused navigation is cancelled), so the page first
+   * goes to about:blank, then closes. A page that doesn't answer in
+   * SLEEP_PAGE_MS isn't refusing: it's closed. Resolves whether it closed.
+   */
+  function sleepPage(contents) {
+    if (!contents || contents.isDestroyed()) return Promise.resolve(true);
+    const id = contents.id;
+    if (closing.has(id) || sleeping.has(id)) return Promise.resolve(false);
+    return new Promise(resolve => {
+      let timer = null;
+      const settle = closed => {
+        if (!sleeping.has(id)) return;
+        clearTimeout(timer);
+        sleeping.delete(id);
+        contents.removeListener('destroyed', gone);
+        resolve(closed);
+      };
+      const gone = () => settle(true);
+      // Left: it goes. Not answering either way (a hung page isn't
+      // refusing): it goes after SLEEP_PAGE_MS, as closePage closes one.
+      const close = () => {
+        if (!sleeping.has(id)) return;
+        settle(true);
+        void closePage(contents);
+      };
+      sleeping.set(id, settle);
+      contents.once('destroyed', gone);
+      timer = setTimeout(close, SLEEP_PAGE_MS);
+      contents.loadURL('about:blank').then(close, () => settle(contents.isDestroyed()));
+    });
   }
   const openTabs = () => [...live.entries()].filter(([, entry]) => entry.tab)
     .map(([id]) => webContents.fromId(id)).filter(contents => contents && !contents.isDestroyed());
   /** Every tab's page, closed that way: before the Atmos window, or its page, goes. */
   const closePages = () => Promise.all(openTabs().map(closePage));
 
-  /** The last private tab closed: everything it kept goes. */
-  async function endPrivateSession() {
+  /**
+   * The last private tab closed: everything it kept goes (once `after`,
+   * the page going, is done). A private page opened meanwhile waits for
+   * it (R27: 'web:do'), or the clearing would take what that page keeps;
+   * one more closing after it clears again. A clearing that hasn't ended
+   * in PRIVATE_END_MS lets them go on (nothing else would, until a restart).
+   */
+  function endPrivateSession(after = null) {
+    const limit = testOptions.privateEndMs || PRIVATE_END_MS;
+    const ending = (privateEnding || Promise.resolve()).then(() => after).then(() => {
+      let timer = null;
+      const late = new Promise(resolve => {
+        timer = setTimeout(() => { console.warn('[web] the private session is taking long to clear; private pages go on'); resolve(); }, limit);
+      });
+      return Promise.race([clearPrivateSession().finally(() => clearTimeout(timer)), late]);
+    })
+      .catch(error => console.warn('[web] could not end private browsing:', error.message))
+      .finally(() => { if (privateEnding === ending) privateEnding = null; });
+    privateEnding = ending;
+    return ending;
+  }
+  async function clearPrivateSession() {
     const privateSession = configureSessions().private;
     settings.clearPrivate();
     httpOnly.private.clear();
     for (const cache of [faviconCache, artworkCache]) for (const key of [...cache.keys()]) if (key.startsWith('p|')) cache.delete(key);
     for (const [id, entry] of [...downloads]) {
-      if (entry.record.private && entry.record.state !== 'progressing') { downloads.delete(id); send(null, 'download-removed', { id }); }
+      if (!entry.record.private) continue;
+      // One still running is forgotten once it ends (R29: startDownload).
+      if (entry.record.state === 'progressing') entry.forget = true;
+      else { downloads.delete(id); send(null, 'download-removed', { id }); }
     }
     try {
       await privateSession.clearStorageData();
@@ -1262,13 +1338,17 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     const id = `d${nextId++}`;
     const record = downloadRecord(id, item, contents, isPrivate);
     const folder = testOptions.downloadsDir || app.getPath('downloads');
-    const taken = name => fs.existsSync(path.join(folder, name));
-    if (testOptions.downloadsDir || !settings.options().askWhereToSave) {
-      item.setSavePath(path.join(folder, policy.uniqueName(record.name, taken)));
-    } else {
-      item.setSaveDialogOptions({ title: 'Save file', defaultPath: path.join(folder, policy.uniqueName(record.name, taken)) });
-    }
-    downloads.set(id, { item, record });
+    // On disk, or given to a download still running (R30: two at once
+    // would write the same file), or offered to one whose save dialog is
+    // still open. Compared without case, as Windows and macOS compare names.
+    const running = new Set([...downloads.values()].filter(({ record }) => record.state === 'progressing')
+      .map(({ item: other, offered }) => (other.getSavePath() || offered || '').toLowerCase()).filter(Boolean));
+    const taken = name => fs.existsSync(path.join(folder, name)) || running.has(path.join(folder, name).toLowerCase());
+    const offered = path.join(folder, policy.uniqueName(record.name, taken));
+    if (testOptions.downloadsDir || !settings.options().askWhereToSave) item.setSavePath(offered);
+    else item.setSaveDialogOptions({ title: 'Save file', defaultPath: offered });
+    const entry = { item, record, offered };
+    downloads.set(id, entry);
     while (downloads.size > MAX_DOWNLOADS) {
       const oldest = [...downloads.entries()].find(([, entry]) => entry.record.state !== 'progressing');
       if (!oldest) break;
@@ -1283,8 +1363,23 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
       record.openable = record.state === 'completed' && policy.openableDownload(record.name);
       send(record.guestId, 'download', { ...record });
     };
-    item.on('updated', update);
-    item.once('done', update);
+    // Private browsing ended while it ran (R29): once it ends, it goes as
+    // the private session's other downloads went.
+    const forget = () => {
+      if (downloads.get(id) !== entry) return;
+      downloads.delete(id);
+      send(null, 'download-removed', { id });
+    };
+    item.on('updated', () => {
+      // Stopped part-way (it could be resumed, so it isn't done): from a
+      // list it's no longer in, it won't be. Cancelled, and gone.
+      if (entry.forget && item.getState() === 'interrupted') { forget(); item.cancel(); return; }
+      update();
+    });
+    item.once('done', () => {
+      if (entry.forget) { forget(); return; }
+      update();
+    });
     send(record.guestId, 'download', { ...record });
   }
 
@@ -1406,8 +1501,10 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     },
     // After the page attached it: settle its zoom, and tell the layer where it stands.
     attached(contents) { applyZoom(contents); return { ...state(contents), private: isPrivateSession(contents.session) }; },
-    // The tab closing (or put away): its page's last events first (closePage).
+    // The tab closing: its page's last events first (closePage).
     close: contents => closePage(contents),
+    // The tab put to sleep: the same, if its page lets go (sleepPage).
+    sleep: contents => sleepPage(contents),
     // Out of a page's HTML fullscreen (Escape, wherever the keyboard is). In
     // a world of Core's own, where the page's scripts can't have replaced
     // document.exitFullscreen.
@@ -1425,10 +1522,17 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
     return fn(...args);
   });
 
-  handle('web:do', (id, name, ...args) => {
-    const contents = guestOf(id);
+  handle('web:do', async (id, name, ...args) => {
+    let contents = guestOf(id);
     if (!contents) throw new Error('That page is closed');
     if (!Object.hasOwn(commands, name)) throw new Error(`unknown command ${name}`);
+    // A private page opened as the last one's session is cleared goes
+    // nowhere until that's done (R27).
+    if (privateEnding && isPrivateSession(contents.session)) {
+      await privateEnding;
+      contents = guestOf(id);
+      if (!contents) throw new Error('That page is closed');
+    }
     return commands[name](contents, ...args);
   });
   handle('web:downloads', () => [...downloads.values()].map(({ record }) => ({ ...record })).reverse());

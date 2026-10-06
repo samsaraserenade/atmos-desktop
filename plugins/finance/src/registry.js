@@ -19,7 +19,7 @@ import {
   saveConnectionHistoryChunk, saveConnectionHistoryManifest,
 } from './storage.js';
 import { MAX_HISTORY_POINTS } from './history-constants.js';
-import { getConnection, startVpsPortfolio, fetchHoldingsHistory } from './remote.js';
+import { getConnection, startVpsPortfolio, fetchHoldingsHistory, fetchHoldingsPage } from './remote.js';
 import { renderConnections } from './connections-list.js';
 import { isEngine } from './host/frame.js';
 import { applyHistoryChange, composeHistoryChanges, diffHistoryTail } from './history-change.js';
@@ -38,7 +38,7 @@ const _remoteHistoryHooks = new Set();
 // (the existing pattern for getRemoteTotalHistory etc.) can reach the
 // new point-in-time holdings lookup the same way, without needing to
 // know it actually lives in remote.js.
-export { fetchHoldingsHistory };
+export { fetchHoldingsHistory, fetchHoldingsPage };
 export function isRemotePortfolioMode() { return _remoteMode; }
 export function getRemoteTotalHistory() { return _remoteTotalHistory; }
 /**
@@ -502,23 +502,33 @@ export async function initExchanges(context) {
   renderExchangeList(context);
 }
 
+let _connectSerial = 0;
+
 /** Engine: read the saved connection and, if there is one, start reading that server. */
 async function _connect() {
+  // A reconnect while this one is still starting supersedes it: what it
+  // reads then is the server paired before, and it stops (R13).
+  const serial = ++_connectSerial;
+  const current = () => serial === _connectSerial;
+  let connection;
   try {
-    _connection = await getConnection();
+    connection = await getConnection();
   } catch (error) {
-    _connection = { configured: false };
+    connection = { configured: false };
     console.warn('[registry] unable to check the portfolio server:', error.message);
   }
+  if (!current()) return;
+  _connection = connection;
   _remoteMode = !!_connection.configured;
   if (!_remoteMode) return;
   const remote = await startVpsPortfolio(_engineContext, {
-    publish: (id, data) => { _trackSource(id, data?.label); setPortfolioData(id, data); },
-    remove: id => { _forgetSource(id); setPortfolioData(id, null); },
-    setStatus: setExchangeStatus,
-    setHistory: points => _mergeRemoteTotalHistory(-Infinity, points),
-    mergeHistory: _mergeRemoteTotalHistory,
+    publish: (id, data) => { if (!current()) return; _trackSource(id, data?.label); setPortfolioData(id, data); },
+    remove: id => { if (!current()) return; _forgetSource(id); setPortfolioData(id, null); },
+    setStatus: (id, status) => { if (current()) setExchangeStatus(id, status); },
+    setHistory: points => { if (current()) _mergeRemoteTotalHistory(-Infinity, points); },
+    mergeHistory: (from, points) => { if (current()) _mergeRemoteTotalHistory(from, points); },
   });
+  if (!current()) { remote.stop(); return; }
   _remote = remote;
   _refreshRemoteHistory = remote.refreshHistory;
   for (const [id, data] of _portfolios) {

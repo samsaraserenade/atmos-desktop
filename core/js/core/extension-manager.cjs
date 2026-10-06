@@ -17,8 +17,10 @@
  * applyPending() (before the catalog looks at anything) moves staged
  * packages into the installed folder and deletes removed ones. The version
  * an update replaced is kept in extension-previous/<kind>/<id>, where the
- * catalog can fall back to it, until the new one has loaded once
- * (confirmApplied()).
+ * catalog can fall back to it, until the new one has run a whole session
+ * (confirmApplied()); one that didn't start (its main.cjs, or a frame that
+ * failed to load: startFailed()) falls back to it at the next start
+ * (failedUpdate()).
  *
  * Checking for updates only reads the indexes; nothing downloads until
  * the user presses Install or Update.
@@ -62,14 +64,28 @@ const MAX_INDEX_BYTES = 4 * 1024 * 1024;
 const MAX_PACKAGE_BYTES = 1024 * 1024 * 1024;
 
 /** Move a folder, copying when a rename can't (another volume). */
+// Moves are renames: whole or not at all, so a retry finds either folder
+// complete. On Windows a folder can't be renamed while something holds a
+// file in it (a virus scanner, for a moment): tried again for under a
+// second, then the move fails as a whole. Only across drives (which user
+// data never spans) is it a copy.
+const MOVE_RETRY_MS = [50, 100, 200, 400];
+const LOCKED = new Set(['EPERM', 'EACCES', 'EBUSY']);
 function moveFolder(from, to) {
   fs.mkdirSync(path.dirname(to), { recursive: true });
-  try {
-    fs.renameSync(from, to);
-  } catch (error) {
-    if (error.code !== 'EXDEV' && error.code !== 'EPERM') throw error;
-    fs.cpSync(from, to, { recursive: true });
-    fs.rmSync(from, { recursive: true, force: true });
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      if (error.code === 'EXDEV') {
+        fs.cpSync(from, to, { recursive: true });
+        fs.rmSync(from, { recursive: true, force: true });
+        return;
+      }
+      if (!LOCKED.has(error.code) || attempt >= MOVE_RETRY_MS.length) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, MOVE_RETRY_MS[attempt]);
+    }
   }
 }
 
@@ -898,9 +914,29 @@ function createExtensionManager({
             throw new Error('the downloaded package is missing');
           }
           const previous = previousFolder(kind, id);
-          fs.rmSync(previous, { recursive: true, force: true });
-          if (fs.existsSync(target)) moveFolder(target, previous);
-          moveFolder(staged, target);
+          // Kept aside by an attempt that stopped before the new copy was in
+          // place: it is still the installed one, so it goes back first.
+          if (!fs.existsSync(target) && fs.existsSync(previous)) moveFolder(previous, target);
+          // In place, an update that didn't start (it fell back): the version
+          // kept from before it stays the one to fall back to.
+          const fellBack = applied.some(item => item.kind === kind && item.id === id && item.failed) && fs.existsSync(previous);
+          if (fellBack) {
+            fs.rmSync(target, { recursive: true, force: true });
+          } else {
+            fs.rmSync(previous, { recursive: true, force: true });
+            if (fs.existsSync(target)) moveFolder(target, previous);
+          }
+          try {
+            moveFolder(staged, target);
+          } catch (error) {
+            // Not installed: the version it was to replace goes back in
+            // place (over whatever part of the new one a copy got there).
+            if (fs.existsSync(previous)) {
+              fs.rmSync(target, { recursive: true, force: true });
+              moveFolder(previous, target);
+            }
+            throw error;
+          }
           // Installed from a repository: the id is that repository's now.
           // An official package replacing it frees it.
           const community = change.community && typeof change.community.source === 'string' ? change.community : null;
@@ -912,6 +948,7 @@ function createExtensionManager({
             };
           } else delete bindings[ref(kind, id)];
           const record = { kind, id, version: change.version, previous: fs.existsSync(previous), appliedAt: new Date().toISOString() };
+          // (fellBack: what's kept is from before the failed update, still.)
           applied.splice(0, applied.length, ...applied.filter(item => !(item.kind === kind && item.id === id)), record);
           done.push({ action: 'install', kind, id, version: change.version });
         } else if (change.action === 'remove') {
@@ -925,7 +962,7 @@ function createExtensionManager({
               || installed().some(entry => entry.id === id && entry.kind === other);
             const folder = shared ? null : dataFolder(id);
             if (folder) fs.rmSync(folder, { recursive: true, force: true });
-            cleanup.push({ kind, id });
+            if (!cleanup.some(item => item.kind === kind && item.id === id)) cleanup.push({ kind, id });
           }
           applied.splice(0, applied.length, ...applied.filter(item => !(item.kind === kind && item.id === id)));
           delete bindings[ref(kind, id)];
@@ -945,20 +982,38 @@ function createExtensionManager({
   }
 
   /**
-   * After trust is decided: an update that loaded no longer needs the
-   * version it replaced; one that didn't stays on record, for Settings.
-   * `lookup(kind, id)` returns { entry, loadable, awaitingApproval }: a
-   * community extension waiting for approval (as each one does after it's
-   * installed or updated) hasn't failed.
+   * After trust is decided and official main.cjs files have started: an
+   * update that loaded and started keeps the version it replaced through
+   * its first session (a frame of it may still fail to load: startFailed),
+   * and once it has run one without failing, at the next start, no longer
+   * needs it. One that didn't load or start stays on record as failed, for
+   * Settings, and the next start runs the version it replaced
+   * (failedUpdate). `lookup(kind, id)` returns { entry, loadable,
+   * awaitingApproval, problem }: a community extension waiting for approval
+   * (as each one does after it's installed or updated) hasn't failed.
    */
   function confirmApplied(lookup) {
     const keep = [];
-    for (const record of appliedRecords()) {
-      const { entry, loadable, awaitingApproval } = lookup(record.kind, record.id) || {};
-      if (entry && entry.source === 'installed' && entry.version === record.version && (loadable || awaitingApproval)) {
-        fs.rmSync(previousFolder(record.kind, record.id), { recursive: true, force: true });
+    for (const { startingAt, ...record } of appliedRecords()) {
+      const { entry, loadable, awaitingApproval, problem, inactive } = lookup(record.kind, record.id) || {};
+      const isIt = !!entry && entry.source === 'installed' && entry.version === record.version;
+      if (!record.failed && isIt && inactive) {
+        // Switched off, or waiting for what it needs: it hasn't run yet.
+        keep.push(record);
+      } else if (!record.failed && isIt && (loadable || awaitingApproval)) {
+        // (Nothing to wait for when nothing was kept, or for a community
+        // extension, whose kept copy never runs in its place.)
+        if (record.startedAt || !record.previous || entry.tier === 'third-party') fs.rmSync(previousFolder(record.kind, record.id), { recursive: true, force: true });
+        else keep.push({ ...record, startedAt: new Date().toISOString() });
+      } else if (isIt && !entry.fallback) {
+        // Didn't start, with nothing to fall back to (a first install): that
+        // start's failure is shown; there's no update to keep on record.
       } else {
-        keep.push({ ...record, failed: true, running: entry ? { version: entry.version, source: entry.source } : null });
+        const why = problem || (startingAt && !isIt ? 'Atmos stopped while it was starting' : null);
+        keep.push({
+          ...record, failed: true, ...(why && !record.reason ? { reason: String(why).slice(0, 300) } : {}),
+          running: entry && entry.version !== record.version ? { version: entry.version, source: entry.source } : null,
+        });
       }
     }
     writeJson(files.applied, { format: 1, applied: keep });
@@ -970,11 +1025,85 @@ function createExtensionManager({
     }
   }
 
-  /** Extensions whose data the page should forget this start (their state namespaces). Read once. */
-  function takeDataCleanup() {
-    const list = readJson(files.cleanup, null)?.extensions || [];
-    fs.rmSync(files.cleanup, { force: true });
-    return list;
+  /**
+   * An update failed to start in its first session (a frame of it couldn't
+   * load): the version it replaced stays, and runs from the next start.
+   * Returns whether there was such an update on record.
+   */
+  function startFailed(kind, id, reason) {
+    const records = appliedRecords();
+    const record = records.find(item => item.kind === kind && item.id === id);
+    if (!record || record.failed) return false;
+    Object.assign(record, { failed: true, reason: String(reason || 'it failed to start').slice(0, 300) });
+    writeJson(files.applied, { format: 1, applied: records });
+    return true;
+  }
+
+  /**
+   * Updates about to run for the first time (`entries`: { kind, id,
+   * version } of what starts), marked before they do: a start that never
+   * gets as far as confirmApplied (Atmos crashed, or a main.cjs hung it)
+   * counts as a failed one at the next start (failedUpdate).
+   */
+  function markStarting(entries) {
+    const starting = new Set(entries.map(entry => `${ref(entry.kind, entry.id)}@${entry.version}`));
+    const records = appliedRecords();
+    const now = new Date().toISOString();
+    let changed = false;
+    for (const record of records) {
+      if (record.failed || record.startedAt || !starting.has(`${ref(record.kind, record.id)}@${record.version}`)) continue;
+      record.startingAt = now;
+      changed = true;
+    }
+    if (changed) writeJson(files.applied, { format: 1, applied: records });
+  }
+
+  /**
+   * Why an installed update mustn't run (it failed to start, or Atmos
+   * stopped while it was starting), or null. Trust then falls back to the
+   * copy before it, if there is one.
+   */
+  function failedUpdate(entry) {
+    if (entry?.source !== 'installed' || !KIND_FOLDER[entry.kind]) return null;
+    const record = appliedRecords().find(item => item.kind === entry.kind && item.id === entry.id && item.version === entry.version);
+    if (record?.failed) return record.reason || `version ${record.version} didn't start`;
+    if (record?.startingAt && !record.startedAt) return 'Atmos stopped while it was starting';
+    return null;
+  }
+
+  /**
+   * Extensions removed with their data whose data is still to be deleted
+   * (state file, storage, the page's namespaces). Listed at every start
+   * until finishDataCleanup() says it's done, so a delete that fails is
+   * tried again.
+   */
+  function dataCleanup() {
+    return readJson(files.cleanup, null)?.extensions || [];
+  }
+
+  /**
+   * A try to delete an extension's data failed: counted, and after three
+   * (each can cost a minute before the window opens) given up. Returns
+   * whether it was given up.
+   */
+  function dataCleanupFailed(kind, id) {
+    const list = dataCleanup();
+    const item = list.find(entry => entry.kind === kind && entry.id === id);
+    if (!item) return true;
+    item.attempts = (item.attempts || 0) + 1;
+    if (item.attempts >= 3) {
+      finishDataCleanup(kind, id);
+      return true;
+    }
+    writeJson(files.cleanup, { format: 1, extensions: list });
+    return false;
+  }
+
+  /** An extension's data is deleted: no longer listed. */
+  function finishDataCleanup(kind, id) {
+    const left = dataCleanup().filter(item => !(item.kind === kind && item.id === id));
+    if (left.length) writeJson(files.cleanup, { format: 1, extensions: left });
+    else fs.rmSync(files.cleanup, { force: true });
   }
 
   // ── First run: the extensions to choose from ─────────────────────────
@@ -1068,7 +1197,7 @@ function createExtensionManager({
 
   return {
     sources, addSource, removeSource, checkForUpdates, status, plan, install, remove, cancel, communityOrigin, installBuiltInRecommendations,
-    applyPending, confirmApplied, takeDataCleanup,
+    applyPending, confirmApplied, markStarting, startFailed, failedUpdate, dataCleanup, dataCleanupFailed, finishDataCleanup,
     setupDone, setupPending, beginSetup, finishSetup, seedPackages, installFromSeed,
     previousRoot: kind => path.join(dirs.previous, kind),
   };

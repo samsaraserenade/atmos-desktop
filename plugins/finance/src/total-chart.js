@@ -5,7 +5,7 @@ import { chartAxisOptions } from './chart-axes.js';
 import { bindChartResetMeasurement } from './chart-reset.js';
 import { splitPortfolio } from './portfolio-sections.js';
 import { scopedPortfolioData } from './portfolio-scope.js';
-import { getAllPortfolios } from './registry.js';
+import { getAllPortfolios, getServerConnection } from './registry.js';
 /** Portfolio chart data adapter. Rendering and chart behavior live in the charting service. */
 import {
   onPortfolioUpdate, getAllPortfolioHistories, getRemoteTotalHistory,
@@ -43,6 +43,7 @@ let mirrorsVps = false;
 // What the main chart shows (src/chart-sections.js); chosen in the picker.
 let section = 'total';
 let remoteSections = [];
+let sectionsPairing = null; // the paired server (main.cjs's id) remoteSections are from
 let releaseCoin = null;
 const sectionListeners = new Set();
 
@@ -356,7 +357,14 @@ function replaceHistoryFromVps(change) {
   const keep = change ? indexAtOrAfter(totalHistory, change.from) : 0;
   const fresh = (change ? change.points : getRemoteTotalHistory()).map(chartPointFromVps);
   if (!change) legacyTotalHistory.length = 0;
-  rememberSections(totalHistory.slice(keep)); // the points about to go, as before
+  // Another server's section points aren't this one's history (R13).
+  const pairing = getServerConnection()?.id ?? null;
+  if (pairing !== sectionsPairing) {
+    remoteSections = [];
+    sectionsPairing = pairing;
+  } else {
+    rememberSections(totalHistory.slice(keep)); // the points about to go, as before
+  }
   totalHistory.length = keep;
   for (const point of fresh) totalHistory.push(point);
   if (totalHistory.length > MAX_HISTORY_POINTS) totalHistory.splice(0, totalHistory.length - MAX_HISTORY_POINTS);
@@ -435,7 +443,10 @@ export async function initTotalChart(context) {
   const legacy = remote ? [] : savedHistory.filter(point => point.t < splitStart);
   legacyTotalHistory.push(...legacy.slice(-MAX_HISTORY_POINTS));
   totalHistory.push(...legacy.concat(rebuilt).slice(-MAX_HISTORY_POINTS));
-  if (remote) rememberSections(totalHistory);
+  if (remote) {
+    sectionsPairing = getServerConnection()?.id ?? null;
+    rememberSections(totalHistory);
+  }
   mirrorsVps = remote;
   history = totalHistory;
   hiddenRanges = savedHidden;

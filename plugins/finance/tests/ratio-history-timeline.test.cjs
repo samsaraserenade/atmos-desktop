@@ -70,7 +70,7 @@ console.log('Passed: holdings-history rows bucket by poll and resolve to the nea
 // and the server ran out of memory).
 (async () => {
   const MIN = 60_000;
-  const context = vm.createContext({ Map, Set, Promise, Number, Math, Array });
+  const context = vm.createContext({ Map, Set, Promise, Number, Math, Array, getServerConnection: () => ({ configured: true, id: 'a' }) });
   vm.runInContext(timelineSource, context);
   const polls = [10 * MIN, 11 * MIN, 12 * MIN, 200 * MIN];
   const asked = [];
@@ -116,4 +116,97 @@ console.log('Passed: holdings-history rows bucket by poll and resolve to the nea
   assert.doesNotMatch(balance, /loadHoldingsTimeline\(/, 'no range of every poll is read for one snapshot');
   assert.match(balance, /if \(!_compositionEl\) \{\r?\n\s+if \(minute !== _relayedMinute\)/, 'a frame without the composition bar reads nothing, it tells the frame that has it');
   console.log('Passed: a snapshot is read from a few minutes of polls, wider only when there\'s none, and kept');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
+// ── R7: a window holding more rows than the server sends ──────────────────
+// The server sends at most so many rows: the oldest first, unless asked for
+// the newest (order=desc), and only whole polls, saying `truncated`. Looking
+// back from a time, the snapshot must be the newest poll, whole, not the
+// newest of the oldest rows that fitted.
+(async () => {
+  const MIN = 60_000;
+  const context = vm.createContext({ Map, Set, Promise, Number, Math, Array, getServerConnection: () => ({ configured: true, id: 'a' }) });
+  vm.runInContext(timelineSource, context);
+  const LIMIT = 5;
+  const polls = [1, 2, 3, 4, 5, 6].map(m => m * MIN); // three holdings each: 18 rows
+  const fetch = async ({ from, to, order }) => {
+    let rows = polls.filter(ts => ts >= from && ts <= to).flatMap(ts => ['SOL', 'ETH', 'BTC'].map(symbol => ({ ts_ms: ts, source_id: 'a', symbol, value: 1 })));
+    if (order === 'desc') rows.reverse();
+    const truncated = rows.length > LIMIT;
+    if (truncated) {
+      rows = rows.slice(0, LIMIT);
+      const last = rows.at(-1).ts_ms;
+      rows = rows.filter(row => row.ts_ms !== last); // whole polls only
+    }
+    return { points: rows, truncated, order: order === 'desc' ? 'desc' : 'asc' };
+  };
+  const snapshot = await context.loadSnapshotNear(6 * MIN + 30_000, { before: 5 * MIN, fetch });
+  assert.equal(snapshot?.ts, 6 * MIN, 'the newest poll at or before, not the newest of the oldest rows that fitted');
+  assert.equal(snapshot.holdings.length, 3, 'whole');
+
+  // A server from before order=desc sends the oldest rows, truncated: its
+  // newest poll isn't the nearest, so there's no snapshot rather than a wrong one.
+  const oldServer = async range => fetch({ ...range, order: undefined });
+  assert.equal(await context.loadSnapshotNear(6 * MIN + 40_000, { before: 5 * MIN, fetch: oldServer }), null);
+  // Not truncated, an old server's answer is complete: used as before.
+  assert.equal((await context.loadSnapshotNear(2 * MIN + 30_000, { before: 60_000, fetch: oldServer }))?.ts, 2 * MIN);
+  console.log('Passed: a snapshot looking back is the newest whole poll, even when the window holds more than the server sends (R7)');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
+// ── R12: a poll where nothing was held ────────────────────────────────────
+// The server names every poll in the range (`polls`), so one without
+// holdings rows is an empty snapshot, not skipped for the one before.
+(async () => {
+  const MIN = 60_000;
+  const context = vm.createContext({ Map, Set, Promise, Number, Math, Array, getServerConnection: () => ({ configured: true, id: 'a' }) });
+  vm.runInContext(timelineSource, context);
+  const fetch = async ({ from, to, order }) => ({
+    points: [{ ts_ms: 10 * MIN, source_id: 'w', symbol: 'SOL', value: 100 }].filter(row => row.ts_ms >= from && row.ts_ms <= to),
+    polls: [20 * MIN, 10 * MIN].filter(ts => ts >= from && ts <= to),
+    truncated: false, order: order === 'desc' ? 'desc' : 'asc',
+  });
+  const emptied = await context.loadSnapshotNear(25 * MIN, { before: 60 * MIN, fetch });
+  assert.equal(emptied?.ts, 20 * MIN, 'the poll after the withdrawal');
+  assert.equal(emptied.holdings.length, 0, 'nothing held then');
+  const before = await context.loadSnapshotNear(15 * MIN, { before: 60 * MIN, fetch });
+  assert.equal(before.holdings.length, 1);
+  console.log('Passed: a poll where nothing was held is an empty snapshot (R12)');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
+// ── R13: answers from the server paired before ─────────────────────────────
+// Kept answers are per server: after a switch they're dropped, and an answer
+// for a server no longer paired (in flight across the switch, or from the
+// new one before this frame heard of it) isn't kept or shown.
+(async () => {
+  const MIN = 60_000;
+  let paired = { configured: true, id: 'A' };
+  const context = vm.createContext({ Map, Set, Promise, Number, Math, Array, getServerConnection: () => paired });
+  vm.runInContext(timelineSource, context);
+  const held = { A: 100, B: 200 };
+  let serving = 'A', asked = 0;
+  const fetch = async () => {
+    asked++;
+    return { points: [{ ts_ms: 10 * MIN, source_id: 'w', symbol: 'SOL', value: held[serving] }], polls: [10 * MIN], truncated: false, order: 'desc', connection: serving };
+  };
+  const near = (at, ask = fetch) => context.loadSnapshotNear(at, { before: 60 * MIN, fetch: ask });
+  assert.equal((await near(15 * MIN)).holdings[0].value, 100);
+  serving = 'B'; paired = { configured: true, id: 'B' };
+  assert.equal((await near(15 * MIN)).holdings[0].value, 200, "the new server's, not the one kept from before");
+  assert.equal(asked, 2);
+  // Switched back while asking.
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const slow = async range => { const answer = await fetch(range); await gate; return answer; };
+  const pending = near(16 * MIN, slow);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  serving = 'A'; paired = { configured: true, id: 'A' };
+  release();
+  assert.equal(await pending, null, 'answered for a server no longer paired');
+  assert.equal((await near(16 * MIN)).holdings[0].value, 100, 'and not kept');
+  // Atmos switched to B before this frame heard of it.
+  serving = 'B';
+  assert.equal(await near(17 * MIN), null, "another server's answer");
+  paired = { configured: true, id: 'B' };
+  assert.equal((await near(17 * MIN)).holdings[0].value, 200);
+  console.log("Passed: a snapshot is never another server's (R13)");
 })().catch(error => { console.error(error); process.exitCode = 1; });

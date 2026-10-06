@@ -50,8 +50,12 @@ function world(t) {
     fs.writeFileSync(path.join(ext, 'boot.js'), `export default 'bundled ${version}';`);
   }
 
-  /** One "start of Atmos": apply pending changes, then catalog + trust + manager. `off`: ids switched off. */
-  function start({ seed = false, appVersion = null, builtIn = undefined, off = [] } = {}) {
+  /**
+   * One "start of Atmos": apply pending changes, then catalog + trust + manager.
+   * `off`: ids switched off. `failsToStart`: ids whose main.cjs throws.
+   * `stops`: Atmos stops (a crash, a hang) while these ids' main.cjs start.
+   */
+  function start({ seed = false, appVersion = null, builtIn = undefined, off = [], failsToStart = [], stops = [] } = {}) {
     let entries = [];
     const installedRoot = kind => root('installed', kind);
     const manager = createExtensionManager({
@@ -63,13 +67,17 @@ function world(t) {
       bundledRoot: kind => root('bundled', kind), installedRoot, previousRoot: manager.previousRoot, trustedKeys, warn() {},
     });
     const trust = createExtensionTrust({ approvalsFile: path.join(userData, 'approvals.json'), bundledRoot: kind => root('bundled', kind), trustedKeys, warn() {} });
-    trust.assessAll(catalog);
+    trust.assessAll(catalog, { refuse: entry => manager.failedUpdate?.(entry) ?? null });
     entries = [...catalog.list('plugins'), ...catalog.list('services')].map(entry => ({ ...entry, loadable: trust.get(entry).loadable, active: !off.includes(entry.id) }));
+    manager.markStarting?.(entries.filter(entry => entry.active && entry.loadable));
+    const find = (kind, id) => entries.find(entry => entry.kind === kind && entry.id === id) || null;
+    if (stops.length) return { manager, catalog, trust, applied, find, entries };
     manager.confirmApplied((kind, id) => {
       const entry = catalog.find(`${kind}s`, id);
-      return entry ? { entry, loadable: trust.get(entry).loadable } : null;
+      const failed = failsToStart.includes(id);
+      const loadable = trust.get(entry)?.loadable;
+      return entry ? { entry, loadable: loadable && !failed, problem: failed ? 'boom' : null, inactive: loadable && !failed && off.includes(id) } : null;
     });
-    const find = (kind, id) => entries.find(entry => entry.kind === kind && entry.id === id) || null;
     return { manager, catalog, trust, applied, find, entries };
   }
 
@@ -147,6 +155,186 @@ test('update keeps the previous version until the new one loads, and falls back 
   assert.deepEqual(s.manager.status().applied, []);
 });
 
+test('an update that can\'t be moved into place keeps the version it was to replace, however often it fails (R3)', async t => {
+  const w = world(t);
+  w.publish('plugin', 'sounds', '1.0.0');
+  let s = w.start();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  w.publish('plugin', 'sounds', '1.1.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  // Moving the staged 1.1.0 into place fails (a folder locked by another
+  // program), at two starts in a row.
+  const rename = fs.renameSync;
+  const staging = path.join(w.userData, 'extension-staging');
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (path.resolve(from).startsWith(staging)) throw Object.assign(new Error('EBUSY: resource busy or locked, rename'), { code: 'EBUSY' });
+    return rename(from, to);
+  });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    s = w.start();
+    const sounds = s.find('plugin', 'sounds');
+    assert.equal(sounds?.version, '1.0.0', `attempt ${attempt}: the kept version runs`);
+    assert.equal(sounds.loadable, true);
+    assert.equal(s.manager.status().pending.length, 1, 'the update is tried again at the next start');
+  }
+  // Once it can be moved, the update goes in and the old version is kept until it loads.
+  t.mock.restoreAll();
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.1.0');
+  assert.deepEqual(s.manager.status().pending, []);
+});
+
+test('a folder that can\'t be moved is never half-moved: no copy left part-deleted (R3)', async t => {
+  const w = world(t);
+  w.publish('plugin', 'sounds', '1.0.0');
+  let s = w.start();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  w.publish('plugin', 'sounds', '1.1.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  // Windows: a file in the installed folder held open, so the folder can't
+  // be renamed, and deleting it stops part-way.
+  const installed = path.join(w.root('installed', 'plugins'), 'sounds');
+  const rename = fs.renameSync;
+  const rm = fs.rmSync;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (path.resolve(from) === installed) throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+    return rename(from, to);
+  });
+  t.mock.method(fs, 'rmSync', (target, options) => {
+    if (path.resolve(target) === installed) {
+      fs.unlinkSync(path.join(installed, 'boot.js'));
+      throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' });
+    }
+    return rm(target, options);
+  });
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds')?.version, '1.0.0', 'the installed version still runs');
+  assert.equal(s.find('plugin', 'sounds').loadable, true, 'whole');
+  // Next start: the folder is free, but the update can't be moved in.
+  t.mock.restoreAll();
+  const staging = path.join(w.userData, 'extension-staging');
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (path.resolve(from).startsWith(staging)) throw Object.assign(new Error('EBUSY: resource busy or locked, rename'), { code: 'EBUSY' });
+    return rename(from, to);
+  });
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds')?.version, '1.0.0', 'the installed version still runs, whole');
+  assert.equal(s.find('plugin', 'sounds').loadable, true);
+  t.mock.restoreAll();
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.1.0', 'and the update goes in once it can');
+});
+
+test('an update is confirmed only once it has started: one whose frame or main.cjs fails falls back to the version it replaced (R4)', async t => {
+  const w = world(t);
+  const previous = path.join(w.userData, 'extension-previous', 'plugins', 'sounds');
+  w.publish('plugin', 'sounds', '1.0.0');
+  let s = w.start();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  w.publish('plugin', 'sounds', '1.1.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  // Signed and verified, so it loads; its frames haven't run yet.
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.1.0');
+  assert.ok(fs.existsSync(previous), 'the version it replaced is kept until the update has started');
+  // Its background frame then fails to load.
+  assert.equal(s.manager.startFailed('plugin', 'sounds', 'its background frame failed to load: boom'), true);
+  s = w.start();
+  let sounds = s.find('plugin', 'sounds');
+  assert.equal(sounds.version, '1.0.0', 'the next start runs the version before');
+  assert.equal(sounds.source, 'previous');
+  assert.equal(s.trust.get(sounds).fellBackFrom.version, '1.1.0');
+  assert.match(s.trust.get(sounds).fellBackFrom.reason, /background frame failed to load/);
+  assert.equal(s.manager.status().applied[0].failed, true);
+
+  // An update whose main.cjs throws: the same.
+  w.publish('plugin', 'sounds', '1.2.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start({ failsToStart: ['sounds'] });
+  assert.ok(fs.existsSync(previous));
+  assert.match(s.manager.status().applied[0].reason, /boom/);
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').source, 'previous');
+
+  // One that starts and runs a whole session: the kept version goes at the next start.
+  w.publish('plugin', 'sounds', '1.3.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.3.0');
+  assert.ok(fs.existsSync(previous), 'kept through its first session');
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.3.0');
+  assert.equal(fs.existsSync(previous), false);
+  assert.deepEqual(s.manager.status().applied, []);
+  assert.equal(s.manager.startFailed('plugin', 'sounds', 'late'), false, 'nothing to fail once confirmed');
+});
+
+test('after an update fell back, updating again keeps the working version; a first install that fails once isn\'t failed for good (R4)', async t => {
+  const w = world(t);
+  const previous = path.join(w.userData, 'extension-previous', 'plugins', 'sounds');
+  w.publish('plugin', 'sounds', '1.0.0');
+  let s = w.start();
+  await s.manager.install('plugin', 'sounds');
+  // A first install whose main.cjs fails: nothing to fall back to, so it's
+  // not kept as a failed update (Settings shows that start's failure).
+  s = w.start({ failsToStart: ['sounds'] });
+  assert.deepEqual(s.manager.status().applied, []);
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.0.0');
+
+  w.publish('plugin', 'sounds', '1.1.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start({ failsToStart: ['sounds'] });
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.0.0', 'fell back');
+  // Update pressed again (the same 1.1.0), and it fails again: 1.0.0 is still kept and runs.
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start({ failsToStart: ['sounds'] });
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.0.0', 'the working version, not the failed one, is the fallback');
+  assert.equal(s.find('plugin', 'sounds').source, 'previous');
+});
+
+test('an update while Atmos stops as it starts falls back; one switched off isn\'t confirmed before it has run (R4)', async t => {
+  const w = world(t);
+  const previous = path.join(w.userData, 'extension-previous', 'plugins', 'sounds');
+  w.publish('plugin', 'sounds', '1.0.0');
+  let s = w.start();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  w.publish('plugin', 'sounds', '1.1.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  // Atmos stops (a crash, or a main.cjs that hangs) while 1.1.0 starts.
+  s = w.start({ stops: ['sounds'] });
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.0.0', 'the next start runs the version before');
+  assert.match(s.manager.status().applied[0].reason, /stopped while it was starting/);
+
+  // Switched off when an update is applied: it hasn't run, so it isn't confirmed.
+  w.publish('plugin', 'sounds', '1.2.0');
+  await s.manager.checkForUpdates();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start({ off: ['sounds'] });
+  s = w.start({ off: ['sounds'] });
+  assert.ok(fs.existsSync(previous), 'still kept: it has never run');
+  assert.equal(s.manager.status().applied.length, 1);
+  s = w.start();
+  assert.equal(s.find('plugin', 'sounds').version, '1.2.0');
+  s = w.start();
+  assert.equal(fs.existsSync(previous), false, 'confirmed after a session it ran');
+});
+
 test('an update of a bundled extension goes into the installed folder and wins by version', async t => {
   const w = world(t);
   w.bundle('plugin', 'sounds', '1.0.0');
@@ -184,8 +372,43 @@ test('remove refuses while something needs it, and can delete the extension\'s d
   assert.equal(s.find('plugin', 'finance'), null);
   assert.equal(s.find('service', 'charting'), null);
   assert.equal(fs.existsSync(path.join(w.userData, 'finance')), false);
-  assert.deepEqual(s.manager.takeDataCleanup(), [{ kind: 'plugin', id: 'finance' }]);
-  assert.deepEqual(s.manager.takeDataCleanup(), [], 'handed over once');
+  assert.deepEqual(s.manager.dataCleanup(), [{ kind: 'plugin', id: 'finance' }]);
+  s.manager.finishDataCleanup('plugin', 'finance');
+  assert.deepEqual(s.manager.dataCleanup(), [], 'gone once done');
+});
+
+test('data to delete stays listed, start after start, until it has been deleted (R5)', async t => {
+  const w = world(t);
+  w.publish('plugin', 'sounds', '1.0.0');
+  let s = w.start();
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  s.manager.remove('plugin', 'sounds', { deleteData: true });
+  // What main.js does at each start: read the list, try to delete; here the
+  // delete fails, so it says nothing more.
+  const listed = manager => (manager.dataCleanup ? manager.dataCleanup() : manager.takeDataCleanup());
+  s = w.start();
+  assert.deepEqual(listed(s.manager), [{ kind: 'plugin', id: 'sounds' }]);
+  s = w.start();
+  assert.deepEqual(listed(s.manager), [{ kind: 'plugin', id: 'sounds' }], 'still there to retry after a failed delete');
+  // Removed with its data again before the retry worked: listed once.
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  s.manager.remove('plugin', 'sounds', { deleteData: true });
+  s = w.start();
+  assert.deepEqual(listed(s.manager), [{ kind: 'plugin', id: 'sounds' }]);
+  s.manager.finishDataCleanup('plugin', 'sounds');
+  assert.deepEqual(listed(s.manager), []);
+  // A delete that keeps failing is given up after three starts (each try
+  // can take a minute before the window opens).
+  await s.manager.install('plugin', 'sounds');
+  s = w.start();
+  s.manager.remove('plugin', 'sounds', { deleteData: true });
+  s = w.start();
+  assert.equal(s.manager.dataCleanupFailed('plugin', 'sounds'), false);
+  assert.equal(s.manager.dataCleanupFailed('plugin', 'sounds'), false);
+  assert.equal(s.manager.dataCleanupFailed('plugin', 'sounds'), true, 'given up');
+  assert.deepEqual(listed(s.manager), []);
 });
 
 test('keeping data leaves the folder; cancel undoes a pending change', async t => {
@@ -206,7 +429,7 @@ test('keeping data leaves the folder; cancel undoes a pending change', async t =
   s = w.start();
   assert.equal(s.find('plugin', 'sounds'), null);
   assert.equal(fs.existsSync(path.join(w.userData, 'sounds')), true);
-  assert.deepEqual(s.manager.takeDataCleanup(), []);
+  assert.deepEqual(s.manager.dataCleanup(), []);
 });
 
 test('sources must be signed with an official key, and packages must match the index and their signature', async t => {

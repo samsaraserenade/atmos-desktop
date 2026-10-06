@@ -96,7 +96,10 @@ function groupHeader(key, label, leafNames, expanded, rootPath) {
   header.className = `lib-folder-row lib-group-header${expanded ? ' expanded' : ''}`;
   header.innerHTML = `${CHEVRON_ICON}${FOLDER_ICON}<span class="lib-folder-name"></span>` +
     '<span class="lib-group-badge"></span><span class="lib-folder-count"></span>' +
-    `<button class="lib-rescan-row-btn" title="Rescan everything in this folder">${RESCAN_ICON}</button>`;
+    `<button class="lib-rescan-row-btn" title="Rescan everything in this folder">${RESCAN_ICON}</button>` +
+    // The folder you picked: removed with everything from it (one deleted
+    // whole stays in the library, as an unplugged drive's does).
+    (rootPath ? '<button class="lib-rm-btn" title="Remove this folder and everything in it">✕</button>' : '');
   const name = header.querySelector('.lib-folder-name');
   name.textContent = label;
   name.title = label;
@@ -106,6 +109,10 @@ function groupHeader(key, label, leafNames, expanded, rootPath) {
     event.stopPropagation(); // not also expand/collapse
     // The outermost header also finds new folders under the picked root.
     call('rescanFolders', leafNames, rootPath || null);
+  });
+  header.querySelector('.lib-rm-btn')?.addEventListener('click', event => {
+    event.stopPropagation();
+    call('removePickedFolder', rootPath);
   });
   header.addEventListener('click', () => {
     if (expandedGroups.has(key)) expandedGroups.delete(key);

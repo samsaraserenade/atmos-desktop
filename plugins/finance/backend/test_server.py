@@ -226,10 +226,209 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(history[0]["holding_id"], "SOL:invested")
         self.assertEqual(server.integrity_check(old_db), "ok")
 
+    def test_a_sample_from_the_future_is_refused(self):
+        # Review of R10: a sample dated ahead (a wrong ts_ms imported) would
+        # stay the newest, and its holdings the current ones, until then.
+        import time as clock
+        ahead = int(clock.time() * 1000) + 3_600_000
+        with self.assertRaises(ValueError):
+            server.ingest(self.db, {"ts_ms": ahead, "sources": [{"id": "w", "value": 1}]})
+        self.assertIsNone(server.latest(self.db)["timestamp"])
+        server.ingest(self.db, {"ts_ms": int(clock.time() * 1000) + 60_000, "sources": [{"id": "w", "value": 1}]})
+
+    def test_an_older_sample_arriving_late_doesnt_replace_the_current_holdings(self):
+        # R10: every ingestion rewrote current holdings and source status,
+        # whatever its time, while latest() takes the newest total.
+        server.ingest(self.db, {"ts_ms": 2000, "sources": [{"id": "w", "value": 40, "holdings": [{"symbol": "ETH", "value": 40}]}]})
+        server.ingest(self.db, {"ts_ms": 1000, "sources": [{"id": "w", "value": 20, "holdings": [{"symbol": "SOL", "value": 20}]}]})
+        current = server.latest(self.db)
+        self.assertEqual(current["timestamp"], 2000)
+        self.assertEqual([(h["symbol"], h["value"]) for h in current["holdings"]], [("ETH", 40.0)])
+        self.assertEqual(current["sources"][0]["value"], 40)
+        # The late sample is still history.
+        self.assertEqual([row["symbol"] for row in server.holdings_history(self.db, 1000, 1000)], ["SOL"])
+
+    def test_a_replaced_sample_leaves_none_of_its_old_holdings_in_history(self):
+        # R11: samples are replaced by time, holdings history only holding by
+        # holding, so A replaced by B gave current [B] but history [A, B].
+        server.ingest(self.db, {"ts_ms": 1000, "sources": [{"id": "w", "value": 10, "holdings": [{"symbol": "AAA", "value": 10}]}]})
+        server.ingest(self.db, {"ts_ms": 1000, "sources": [{"id": "w", "value": 10, "holdings": [{"symbol": "BBB", "value": 10}]}]})
+        self.assertEqual([row["symbol"] for row in server.latest(self.db)["holdings"]], ["BBB"])
+        self.assertEqual([row["symbol"] for row in server.holdings_history(self.db, 1000, 1000)], ["BBB"])
+
+    def test_latest_reads_one_snapshot_while_a_collection_commits(self):
+        # R9: totals, sources and holdings were three reads; a collection
+        # committing between them gave a $20 total with $40 of holdings.
+        snapshot = lambda ts, value: {"ts_ms": ts, "sources": [{"id": "w", "value": value, "holdings": [{"symbol": "SOL", "value": value}]}]}
+        server.ingest(self.db, snapshot(1000, 20))
+        real_connect = server.connect
+        db_path = self.db
+
+        class CollectionMidRead:
+            def __init__(self, db):
+                self.db, self.done = db, False
+            def __enter__(self):
+                self.db.__enter__()
+                return self
+            def __exit__(self, *args):
+                return self.db.__exit__(*args)
+            def execute(self, sql, *args):
+                cursor = self.db.execute(sql, *args)
+                if not self.done and "portfolio_samples" in sql:
+                    rows = cursor.fetchall()
+                    self.done = True
+                    server.connect = real_connect
+                    server.ingest(db_path, snapshot(2000, 40))  # another process's collection commits now
+                    return iter_rows(rows)
+                return cursor
+
+        class iter_rows(list):
+            def fetchone(self):
+                return self[0] if self else None
+
+        server.connect = lambda path: CollectionMidRead(real_connect(path))
+        try:
+            current = server.latest(self.db)
+        finally:
+            server.connect = real_connect
+        values = (current["total"], current["sources"][0]["value"], current["holdings"][0]["value"])
+        self.assertIn(values, [(20, 20, 20), (40, 40, 40)], "one snapshot, whichever it is")
+
+    def test_a_migration_interrupted_anywhere_loses_nothing(self):
+        # R6: the table rebuilds ran statement by statement; stopped after
+        # the replacement table was made, it stayed empty while the rows sat
+        # in the *_legacy table, and the next start saw the new shape and
+        # never looked back. SQLite's progress handler stops the migration
+        # at each point in turn, as a crash or a kill would; then it runs
+        # again, as the next start does.
+        def old_database(path):
+            db = sqlite3.connect(path)
+            try:
+                db.executescript("""
+                  CREATE TABLE current_holdings (
+                    source_id TEXT NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL,
+                    value REAL NOT NULL, currency TEXT NOT NULL, updated_at_ms INTEGER NOT NULL,
+                    quantity REAL NOT NULL DEFAULT 0, price REAL NOT NULL DEFAULT 0, meta TEXT,
+                    PRIMARY KEY(source_id, symbol, kind)
+                  ) WITHOUT ROWID;
+                  CREATE TABLE holdings_history (
+                    ts_ms INTEGER NOT NULL, source_id TEXT NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL,
+                    quantity REAL NOT NULL, price REAL NOT NULL, value REAL NOT NULL, currency TEXT NOT NULL, meta TEXT,
+                    PRIMARY KEY(ts_ms, source_id, symbol, kind)
+                  ) WITHOUT ROWID;
+                  INSERT INTO current_holdings VALUES ('wallet','SOL','invested',10,'USD',1000,1,10,NULL);
+                  INSERT INTO holdings_history VALUES (1000,'wallet','SOL','invested',1,10,10,'USD',NULL);
+                  INSERT INTO holdings_history VALUES (2000,'wallet','SOL','invested',2,10,20,'USD',NULL);
+                """)
+                db.commit()
+            finally:
+                db.close()
+
+        real_connect = server.connect
+        stop_at = [0]
+
+        def interrupting_connect(path):
+            db = real_connect(path)
+            calls = [0]
+
+            def tick():
+                calls[0] += 1
+                return 1 if calls[0] == stop_at[0] else 0
+            db.set_progress_handler(tick, 10)
+            return db
+
+        stopped = 0
+        for step in range(1, 5000):
+            path = str(Path(self.temp.name) / f"interrupted-{step}.sqlite3")
+            old_database(path)
+            stop_at[0] = step
+            server.connect = interrupting_connect
+            try:
+                server.migrate(path)
+                finished = True
+            except sqlite3.OperationalError:
+                finished = False
+            finally:
+                server.connect = real_connect
+            server.migrate(path)
+            with self.subTest(step=step):
+                with server.connect(path) as db:
+                    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                    current = [tuple(row) for row in db.execute("SELECT holding_id, value FROM current_holdings")]
+                history = [(row["ts_ms"], row["holding_id"], row["value"]) for row in server.holdings_history(path, 0, 3000)]
+                self.assertEqual(current, [("SOL:invested", 10.0)])
+                self.assertEqual(history, [(1000, "SOL:invested", 10.0), (2000, "SOL:invested", 20.0)])
+                self.assertFalse({"current_holdings_legacy", "holdings_history_legacy"} & tables)
+            Path(path).unlink()
+            if finished:
+                break
+            stopped += 1
+        self.assertGreater(stopped, 20)
+
+    def test_an_upgrade_names_the_polls_already_recorded(self):
+        # R12: polls are recorded from this version on; the ones before are
+        # the times holdings_history already has (an empty one left none).
+        server.ingest(self.db, {"ts_ms": 1000, "sources": [{"id": "w", "value": 1, "holdings": [{"symbol": "SOL", "value": 1}]}]})
+        server.ingest(self.db, {"ts_ms": 2000, "sources": [{"id": "w", "value": 0, "holdings": []}]})
+        with server.connect(self.db) as db:
+            db.execute("DROP TABLE holdings_polls")
+        server.migrate(self.db)
+        self.assertEqual(server.holdings_history_page(self.db, 0, 3000)[1], [1000])
+        server.migrate(self.db)
+        server.ingest(self.db, {"ts_ms": 3000, "sources": [{"id": "w", "value": 0, "holdings": []}]})
+        self.assertEqual(server.holdings_history_page(self.db, 0, 3000)[1], [1000, 3000])
+
+    def test_two_starts_at_once_both_list_the_polls(self):
+        # Review of R12: the table was checked for outside the transaction
+        # that made it, so of two migrations at once one failed.
+        from unittest import mock
+        has_table = server._has_table
+        with mock.patch.object(server, "_has_table", side_effect=lambda db, name: False if name == "holdings_polls" else has_table(db, name)):
+            server.migrate(self.db)  # as if the other made it after the check
+        server.ingest(self.db, {"ts_ms": 1000, "sources": []})
+        self.assertEqual(server.holdings_history_page(self.db, 0, 2000)[1], [1000])
+
+    def test_rows_an_older_server_left_in_legacy_tables_come_back(self):
+        # What 0.9.1 could leave after a rebuild stopped part-way (R6): the
+        # rows in *_legacy, the new tables empty or with what was collected
+        # since.
+        path = str(Path(self.temp.name) / "stranded.sqlite3")
+        server.migrate(path)
+        with server.connect(path) as db:
+            db.executescript("""
+              CREATE TABLE current_holdings_legacy (
+                source_id TEXT NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL,
+                value REAL NOT NULL, currency TEXT NOT NULL, updated_at_ms INTEGER NOT NULL,
+                quantity REAL NOT NULL DEFAULT 0, price REAL NOT NULL DEFAULT 0, meta TEXT,
+                PRIMARY KEY(source_id, symbol, kind)
+              ) WITHOUT ROWID;
+              CREATE TABLE holdings_history_legacy (
+                ts_ms INTEGER NOT NULL, source_id TEXT NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL,
+                quantity REAL NOT NULL, price REAL NOT NULL, value REAL NOT NULL, currency TEXT NOT NULL, meta TEXT,
+                PRIMARY KEY(ts_ms, source_id, symbol, kind)
+              ) WITHOUT ROWID;
+              INSERT INTO current_holdings_legacy VALUES ('wallet','SOL','invested',10,'USD',1000,1,10,NULL);
+              INSERT INTO current_holdings_legacy VALUES ('exchange','BTC','invested',50,'USD',1000,1,50,NULL);
+              INSERT INTO holdings_history_legacy VALUES (1000,'wallet','SOL','invested',1,10,10,'USD',NULL);
+              INSERT INTO holdings_history_legacy VALUES (2000,'exchange','BTC','invested',1,40,40,'USD',NULL);
+              -- Collected since: the exchange's newer holdings, and its row at 2000 already moved.
+              INSERT INTO current_holdings (source_id,holding_id,symbol,kind,value,currency,updated_at_ms)
+                VALUES ('exchange','btc','BTC','invested',60,'USD',3000);
+              INSERT INTO holdings_history (ts_ms,source_id,holding_id,symbol,kind,quantity,price,value,currency)
+                VALUES (2000,'exchange','BTC:invested','BTC','invested',1,40,40,'USD');
+            """)
+        server.migrate(path)
+        with server.connect(path) as db:
+            current = sorted(tuple(row) for row in db.execute("SELECT source_id, holding_id, value FROM current_holdings"))
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        history = [(row["ts_ms"], row["holding_id"], row["value"]) for row in server.holdings_history(path, 0, 3000)]
+        self.assertEqual(current, [("exchange", "btc", 60.0), ("wallet", "SOL:invested", 10.0)])
+        self.assertEqual(history, [(1000, "SOL:invested", 10.0), (2000, "BTC:invested", 40.0)])
+        self.assertFalse({"current_holdings_legacy", "holdings_history_legacy"} & tables)
+
 
 if __name__ == "__main__":
     unittest.main()
-
 
 class ApiTests(unittest.TestCase):
     """The HTTP routes Finance uses to pair and read, on a real socket."""
@@ -317,9 +516,64 @@ class ApiTests(unittest.TestCase):
         lines = []
         with mock.patch.object(server.ApiHandler, "log_message", lambda handler, fmt, *args: lines.append(fmt % args)):
             self.assertEqual(self.get("/v1/history?from=0&to=9999&exclude=wallet%7Csecret-coin")[0], 200)
+            # The server logs once the answer is sent, so the client can be
+            # back first: wait for the line.
+            import time as clock
+            deadline = clock.monotonic() + 5
+            while not lines and clock.monotonic() < deadline:
+                clock.sleep(0.01)
         self.assertEqual(len(lines), 1)
         self.assertRegex(lines[0], r"^/v1/history 200 \d+ ms \d+ bytes$")
         self.assertNotIn("secret", lines[0])
+
+    def test_holdings_history_sends_whole_polls_newest_first_when_asked(self):
+        # R7: past the row limit the server sent the oldest rows, the last
+        # poll cut part-way, so "the newest poll before T" came out older
+        # and incomplete.
+        from unittest import mock
+        for minute in range(1, 7):
+            server.ingest(self.db, {"ts_ms": minute * 60_000, "sources": [{"id": "w", "value": 3, "holdings": [
+                {"symbol": "SOL", "value": 1}, {"symbol": "ETH", "value": 1}, {"symbol": "BTC", "value": 1}]}]})
+        with mock.patch.object(server, "MAX_HOLDINGS_HISTORY_ROWS", 5):
+            status, newest = self.get("/v1/holdings-history?from=0&to=400000&order=desc")
+            _, oldest = self.get("/v1/holdings-history?from=0&to=400000")
+        self.assertEqual(status, 200)
+        self.assertEqual(newest["order"], "desc")
+        self.assertTrue(newest["truncated"])
+        times = [point["ts_ms"] for point in newest["points"]]
+        self.assertEqual(times, [360_000] * 3, "the newest poll, whole")
+        self.assertEqual(oldest["order"], "asc")
+        self.assertTrue(oldest["truncated"])
+        self.assertEqual([point["ts_ms"] for point in oldest["points"]], [60_000] * 3, "whole polls only, the cut one left for the next page")
+
+    def test_holdings_history_names_its_polls_so_an_empty_one_shows(self):
+        # R12: a poll with no holdings wrote a sample but no holdings rows,
+        # so "what was held at 2000" found the holding from before ($100).
+        server.ingest(self.db, {"ts_ms": 1_000_000, "sources": [{"id": "w", "value": 100, "holdings": [{"symbol": "SOL", "value": 100}]}]})
+        server.ingest(self.db, {"ts_ms": 2_000_000, "sources": [{"id": "w", "value": 0, "holdings": []}]})
+        _, answer = self.get("/v1/holdings-history?from=900000&to=2500000&order=desc")
+        self.assertEqual(answer["polls"], [2_000_000, 1_000_000], "every poll in the range, holdings or not")
+        self.assertEqual([point["ts_ms"] for point in answer["points"]], [1_000_000])
+
+    def test_holdings_history_polls_end_where_its_points_do(self):
+        # R12: a page names only the polls it covers whole, whichever of
+        # rows or polls the limit cuts first.
+        from unittest import mock
+        server.ingest(self.db, {"ts_ms": 60_000, "sources": [{"id": "w", "value": 1, "holdings": [{"symbol": "SOL", "value": 1}]}]})
+        for minute in range(2, 7):
+            server.ingest(self.db, {"ts_ms": minute * 60_000, "sources": [{"id": "w", "value": 0, "holdings": []}]})
+        with mock.patch.object(server, "MAX_HOLDINGS_HISTORY_ROWS", 3):
+            _, oldest = self.get("/v1/holdings-history?from=10000&to=400000")
+            _, newest = self.get("/v1/holdings-history?from=10000&to=400000&order=desc")
+        self.assertEqual((oldest["polls"], len(oldest["points"]), oldest["truncated"]), ([60_000, 120_000, 180_000], 1, True))
+        self.assertEqual((newest["polls"], newest["points"], newest["truncated"]), ([360_000, 300_000, 240_000], [], True))
+        for minute in range(7, 10):
+            server.ingest(self.db, {"ts_ms": minute * 60_000, "sources": [{"id": "w", "value": 2, "holdings": [
+                {"symbol": "SOL", "value": 1}, {"symbol": "ETH", "value": 1}]}]})
+        with mock.patch.object(server, "MAX_HOLDINGS_HISTORY_ROWS", 3):
+            _, cut = self.get("/v1/holdings-history?from=400000&to=600000")
+        self.assertEqual((cut["polls"], [p["ts_ms"] for p in cut["points"]], cut["truncated"]),
+                         ([420_000], [420_000, 420_000], True), "the poll the rows' limit cut isn't named either")
 
     def test_history_answers_are_built_one_at_a_time(self):
         # What takes the memory: two big answers at once had 0.9.0 killed.

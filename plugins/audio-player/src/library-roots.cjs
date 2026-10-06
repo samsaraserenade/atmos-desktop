@@ -48,6 +48,23 @@ function createLibraryRoots({ fs, path, file }) {
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
   };
   const clean = value => (typeof value === 'string' && path.isAbsolute(value) ? path.resolve(value) : null);
+  // Where a path really leads (links and junctions followed), or null when
+  // there's nothing there (yet). The system's own call first; where it
+  // fails (EISDIR on some Windows drives: RAM disks, Google Drive's), the
+  // one in JavaScript.
+  const realBy = (resolve, value) => {
+    try { return resolve(value); }
+    catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
+  };
+  const real = value => {
+    if (typeof fs.realpathSync !== 'function') return value;
+    if (typeof fs.realpathSync.native !== 'function') return realBy(fs.realpathSync, value);
+    try { return realBy(fs.realpathSync.native, value); }
+    catch { return realBy(fs.realpathSync, value); }
+  };
+  // A picked folder whose own real path can't be read leads nowhere; the
+  // others still count.
+  const realRoot = root => { try { return real(root) ?? root; } catch { return null; } };
 
   return {
     list() { load(); return [...roots]; },
@@ -80,11 +97,26 @@ function createLibraryRoots({ fs, path, file }) {
       return { adopted: true, folders: [...roots] };
     },
 
-    /** Whether `target` (a file or folder) is inside one of the folders. */
+    /**
+     * Whether `target` (a file or folder) is inside one of the folders: as
+     * written, and, if it's there, where it really leads, since reading
+     * follows links (a link inside a folder can lead out of it). A folder
+     * you picked may be a link itself.
+     */
     contains(target) {
       load();
       const resolved = clean(target);
-      return Boolean(resolved) && roots.some(root => insideRoot(resolved, root));
+      if (!resolved) return false;
+      if (!roots.some(root => insideRoot(resolved, root))) return false;
+      const actual = real(resolved);
+      if (actual === null) return true;
+      // The folder it's in as written first: nearly always the one, and
+      // each is a call to the disk.
+      const ordered = [...roots.filter(root => insideRoot(resolved, root)), ...roots.filter(root => !insideRoot(resolved, root))];
+      return ordered.some(root => {
+        const target = realRoot(root);
+        return target !== null && insideRoot(actual, target);
+      });
     },
 
     /** The resolved path, or an error naming why it was refused. */

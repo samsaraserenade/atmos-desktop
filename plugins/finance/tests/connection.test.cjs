@@ -137,6 +137,15 @@ test('IPC: status never includes the token; connect saves only a server that ans
   assert.equal(status.address, 'https://portfolio.test');
   assert.equal(JSON.stringify([status, tested, connected]).includes(TOKEN), false, 'the token never goes back to the renderer');
 
+  // R13: each pairing has its own id, and every answer says whose it is.
+  assert.equal(typeof status.id, 'string');
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ name: 'atmos-portfolio', version: '0.6.0', sources: 1, lastUpdate: 1 }), text: async () => '{"points":[]}' });
+  assert.equal((await call('vps:fetch', '/v1/holdings-history?from=1&to=2')).connection, status.id);
+  await call('vps:connect', { code: createPairingCode('https://portfolio.test', TOKEN) });
+  const again = await call('vps:status');
+  assert.notEqual(again.id, status.id, 'paired again: a new id');
+  assert.equal((await call('vps:fetch', '/v1/holdings-history?from=1&to=2')).connection, again.id);
+
   await call('vps:disconnect');
   assert.deepEqual(await call('vps:status'), { configured: false });
 });

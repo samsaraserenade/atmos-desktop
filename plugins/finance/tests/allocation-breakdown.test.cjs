@@ -38,4 +38,8 @@ assert.equal(exposure.entries.find(item => item.label === 'BTC').value, 500, 'sp
 assert.equal(exposure.entries.some(item => item.label === 'USDC'), false, 'stablecoins and perp collateral belong to capital, not directional exposure');
 portfolios.get('hyperliquid-wallet').holdings[0].value = 0;
 assert.equal(context.buildNetExposure(portfolios).entries.find(item => item.label === 'BTC').value, 500, 'zero-equity open perps retain notional exposure');
+// R15: a null notional is "not available", not 0: the position's equity stands in.
+portfolios.get('hyperliquid-wallet').holdings[0].value = 200;
+portfolios.get('hyperliquid-wallet').holdings[0].meta.positionValue = null;
+assert.equal(context.buildNetExposure(portfolios).entries.find(item => item.label === 'BTC').value, 1300, 'an unknown notional is not a zero one');
 console.log('Passed: capital location stays separate from signed net exposure');

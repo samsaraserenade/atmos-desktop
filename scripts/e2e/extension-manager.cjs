@@ -8,7 +8,8 @@
 //  2. After the restart it loads as Official from the installed folder. A
 //     value saved in its state stands in for its data.
 //  3. 0.9.1 is published: the update shows (nothing downloads until
-//     Update), Update, restart: 0.9.1 runs and the kept 0.9.0 is gone.
+//     Update), Update, restart: 0.9.1 runs, and the kept 0.9.0 stays
+//     through that first session and is gone at the next start (R4).
 //  4. Remove, keeping its data (the default), restart: gone. Install again:
 //     its saved value is still there.
 //  5. Remove, deleting its data: after reinstalling, the value is gone.
@@ -16,6 +17,9 @@
 //     with the reason shown.
 //  7. The index names a newer Atmos: "Atmos 99.0.0 is available" on the
 //     page and in the footer's tooltip.
+//  8. A signed 0.9.4 whose background frame fails to load: it loads, its
+//     frame fails, Settings says the update didn't start; at the next start
+//     the kept 0.9.1 runs instead (R4).
 //
 // Usage: node scripts/e2e/extension-manager.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
@@ -40,12 +44,14 @@ fs.writeFileSync(trustedFile, JSON.stringify({ format: 1, keys: [trustedKeyEntry
 // The source: Sample packed and signed as pack:extensions does.
 const source = path.join(home, 'source');
 fs.mkdirSync(source, { recursive: true });
-function publish(version) {
+function publish(version, { broken = false } = {}) {
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-pack-'));
   const dir = path.join(staging, 'sample');
   copyBundled(path.join(__dirname, 'fixtures', 'official'), 'plugins', 'sample', dir, bundleFilters(repo));
   const manifest = path.join(dir, 'extension.json');
   fs.writeFileSync(manifest, fs.readFileSync(manifest, 'utf8').replace(/"version": "[^"]+"/, `"version": "${version}"`));
+  // Signed and verified, but its background frame throws as it loads.
+  if (broken) fs.writeFileSync(path.join(dir, 'boot.js'), "throw new Error('broken on purpose');\n");
   signExtension(dir, { kind: 'plugin', id: 'sample', privateKey: key.privateKey, hasher: createHasher(null) });
   fs.writeFileSync(path.join(source, `sample-${version}.atmos`), packFolder(dir, listFiles));
   fs.rmSync(staging, { recursive: true, force: true });
@@ -166,6 +172,9 @@ const r = { home };
   r['3-after'] = await sample(s.page);
   r['3-previousKept'] = fs.existsSync(path.join(userData, 'extension-previous', 'plugins', 'sample'));
   r['3-state'] = await sampleState(s.page);
+  await s.app.close();
+  s = await launch();
+  r['3-previousGoneNextStart'] = !fs.existsSync(path.join(userData, 'extension-previous', 'plugins', 'sample'));
 
   // 4. Remove, keeping its data (the default choice).
   await openManager(s.page);
@@ -235,7 +244,34 @@ const r = { home };
   r['7-download'] = await s.page.evaluate(() => !!document.querySelector('.sm-manager-row[data-key="atmos"] [data-manager-action="download-atmos"]'));
   r['7-footer'] = await s.page.evaluate(() => { const v = document.getElementById('sidebar-footer-version'); return { text: v.textContent, title: v.title }; });
   r['errors'] = s.errors;
+
+  // 8. An update that loads but doesn't start: its background frame throws.
+  buildIndex(source, key.privateKey, 'Test source');
+  publish('0.9.4', { broken: true });
+  await openManager(s.page);
+  await s.page.click('[data-manager-action="check"]');
+  await waitFor(s.page, () => /0\.9\.4/.test(document.getElementById('settings-menu-list').textContent));
+  await press(s.page, 'plugin:sample', 'install');
+  await waitFor(s.page, () => /Update to 0\.9\.4/.test(document.getElementById('settings-menu-list').textContent));
   await s.app.close();
+  s = await launch();
+  r['8-loaded'] = await sample(s.page);
+  const failedRecord = async () => (await s.page.evaluate(async () => (await window.atmosCore.extensionManager.status()).status.applied))
+    .find(record => record.id === 'sample' && record.failed) || null;
+  for (let i = 0; i < 50 && !(await failedRecord()); i++) await s.page.waitForTimeout(200);
+  r['8-recorded'] = await failedRecord();
+  await openManager(s.page);
+  r['8-says'] = await s.page.evaluate(() => [...document.querySelectorAll('.sm-manager-problem')].map(el => el.textContent.trim()).find(text => /sample/.test(text)) || null);
+  await s.app.close();
+  s = await launch();
+  r['8-next'] = await sample(s.page);
+  r['8-state'] = await sampleState(s.page);
+  await s.app.close();
+  // What this script checks for R4 (the rest is read from its report).
+  r.ok = r['3-previousKept'] === true && r['3-previousGoneNextStart'] === true
+    && /installed 0\.9\.4$/.test(r['8-loaded'] || '') && r['8-recorded']?.failed === true
+    && /didn't start/.test(r['8-says'] || '') && /previous 0\.9\.1$/.test(r['8-next'] || '');
 
   console.log(JSON.stringify(r, null, 1));
+  if (!r.ok) process.exit(1);
 })().catch(e => { console.log(JSON.stringify(r, null, 1)); console.error(e); process.exit(1); });

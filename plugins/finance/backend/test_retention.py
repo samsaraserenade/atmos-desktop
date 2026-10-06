@@ -59,6 +59,25 @@ class RetentionTests(unittest.TestCase):
         with server.connect(self.db) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM portfolio_samples").fetchone()[0], 12, "totals are never thinned")
 
+    def test_thinned_polls_are_not_named_as_empty(self):
+        # R12: the holdings-history answer names its polls so an empty one
+        # shows; one whose holdings were thinned away isn't empty.
+        day = ((NOW - 60 * DAY) // DAY) * DAY
+        self.poll_every(day, day + 2 * HOUR, 15 * 60_000)
+        server.prune(self.db, NOW, SETTINGS)
+        rows, polls, truncated = server.holdings_history_page(self.db, day, day + 2 * HOUR)
+        self.assertEqual(polls, [day + 45 * 60_000, day + HOUR + 45 * 60_000])
+        self.assertEqual(sorted({row["ts_ms"] for row in rows}), polls)
+        self.assertFalse(truncated)
+        # Empty polls alone are thinned too.
+        later = day + DAY
+        for ts in range(later, later + HOUR, 15 * 60_000):
+            server.ingest(self.db, {"ts_ms": ts, "sources": []})
+        with server.connect(self.db) as db:
+            db.execute("DELETE FROM holdings_history")
+        server.prune(self.db, NOW, SETTINGS)
+        self.assertEqual(server.holdings_history_page(self.db, later, later + HOUR)[1], [later + 45 * 60_000])
+
     def test_older_than_hourly_days_keeps_the_last_poll_of_each_day(self):
         day = ((NOW - 400 * DAY) // DAY) * DAY
         self.poll_every(day, day + 2 * DAY, 4 * HOUR)

@@ -161,7 +161,17 @@ export function createFakeAtmos(options = {}) {
         if (url !== 'about:blank') go(tabId, url);
         return webState(tabId, page(tabId));
       }),
-      close: guard('close', tabId => { const had = webPages.delete(tabId); if (webRecord.shown === tabId) webRecord.shown = null; return had; }),
+      close: guard('close', async (tabId, { sleep = false } = {}) => {
+        // Put to sleep, a page that objects to being left stays (Atmos asks it without a dialog).
+        if (sleep === true) {
+          const held = webPages.get(tabId)?.held;
+          if (held) await held;
+          if (webPages.get(tabId)?.unsaved) return false;
+        }
+        const had = webPages.delete(tabId);
+        if (webRecord.shown === tabId) webRecord.shown = null;
+        return had;
+      }),
       show: guard('show', tabId => { if (tabId !== null) page(tabId); webRecord.shown = tabId ?? null; return true; }),
       list: guard('list', () => [...webPages].map(([tabId, value]) => webState(tabId, value))),
       navigate: guard('navigate', (tabId, url) => {
@@ -242,6 +252,20 @@ export function createFakeAtmos(options = {}) {
     get web() { return { ...clone(webRecord), pages: Object.fromEntries([...webPages].map(([tabId, value]) => [tabId, webState(tabId, value)])) }; },
     /** What Atmos would tell the extension's frames about its pages (atmos.web.onEvent listeners hear it). */
     webEvent(event) { deliver('web', event); },
+    /** Putting a tab's page to sleep takes until the returned function is called (its page unloading). */
+    webHoldSleep(tabId) {
+      const current = webPages.get(tabId);
+      if (!current) throw new Error(`no tab ${tabId}`);
+      let release;
+      current.held = new Promise(resolve => { release = resolve; }).then(() => { current.held = null; });
+      return release;
+    },
+    /** A tab's page objects to being left (its beforeunload: unsaved changes), or no longer does. */
+    webUnsaved(tabId, unsaved) {
+      const current = webPages.get(tabId);
+      if (!current) throw new Error(`no tab ${tabId}`);
+      current.unsaved = unsaved === true;
+    },
     /** `count` ads and trackers blocked on a tab's page, as Atmos would report it. */
     webBlocked(tabId, count) {
       const current = webPages.get(tabId);

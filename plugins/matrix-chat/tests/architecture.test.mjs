@@ -47,10 +47,32 @@ test('overlapping activation cannot start a superseded account', async () => {
     ticket.attach(fakeClient());
     starts.push('next');
   });
-  assert.deepEqual(starts, []);
+  await next;
+  assert.deepEqual(starts, ['next'], 'not held up by the account it replaced (R35)');
   crypto.resolve();
-  await Promise.all([rejected, next]);
-  assert.deepEqual(starts, ['next']);
+  await rejected;
+  assert.deepEqual(starts, ['next'], "and that one's late finish doesn't take over");
+});
+
+test('work on the same account store still runs one after another (R35)', async () => {
+  const coordinator = new SessionCoordinator();
+  const stuck = deferred();
+  const order = [];
+  const first = coordinator.run(async ticket => {
+    await ticket.claim('store-a');
+    order.push('a1');
+    await stuck.promise;
+  });
+  const firstRejected = assert.rejects(first, { name: 'AbortError' });
+  await tick();
+  const other = coordinator.run(async ticket => { await ticket.claim('store-b'); order.push('b'); });
+  await other;
+  const again = coordinator.run(async ticket => { await ticket.claim('store-a'); order.push('a2'); ticket.attach(fakeClient()); });
+  await tick();
+  assert.deepEqual(order, ['a1', 'b'], 'A again waits for the A it replaced, B never did');
+  stuck.resolve();
+  await Promise.all([firstRejected, again]);
+  assert.deepEqual(order, ['a1', 'b', 'a2']);
 });
 
 test('logout cancels queued activation and delayed login', async () => {
@@ -100,6 +122,51 @@ for (const encrypted of [false, true]) {
     assert.deepEqual(calls, ['upload']);
   });
 }
+
+test('a room that turns encryption on while the file is prepared gets it encrypted (R33)', async () => {
+  let encrypted = false;
+  const uploads = [];
+  const sent = [];
+  const probing = deferred();
+  const client = Object.assign(fakeClient(), {
+    isRoomEncrypted: () => encrypted,
+    uploadContent: async (data, options) => { uploads.push(options.type); return { content_uri: 'mxc://test/file' }; },
+    sendEvent: async (_room, _type, content) => { sent.push(content); },
+  });
+  const runtime = new SessionRuntime(client);
+  const encryptedWith = [];
+  const result = createMediaService(runtime, {
+    probe: () => probing.promise,
+    encryptAttachment: async data => { encryptedWith.push(data); return { data, info: { key: 'k' } }; },
+  }).sendFileMessage('!room', new File(['bytes'], 'file.txt', { type: 'text/plain' }));
+  await tick();
+  encrypted = true; // turned on while the file was being looked at
+  probing.resolve({});
+  await result;
+  assert.equal(encryptedWith.length, 1, 'encrypted before upload');
+  assert.deepEqual(uploads, ['application/octet-stream']);
+  assert.equal(sent[0].url, undefined, 'no plain link');
+  assert.equal(sent[0].file.url, 'mxc://test/file');
+  // Turned on during a plain upload: sent encrypted after all, with no
+  // plain link (failing instead lost the file: the composer had let go).
+  encrypted = false;
+  const plainUploads = [];
+  const plainSent = [];
+  const plainClient = Object.assign(fakeClient(), {
+    isRoomEncrypted: () => encrypted,
+    uploadContent: async (_data, options) => { plainUploads.push(options.type); encrypted = true; return { content_uri: `mxc://test/${plainUploads.length}` }; },
+    sendEvent: async (_room, _type, content) => { plainSent.push(content); },
+  });
+  const plainRuntime = new SessionRuntime(plainClient);
+  await createMediaService(plainRuntime, { probe: async () => ({}), encryptAttachment: async data => ({ data, info: { key: 'k' } }) })
+    .sendFileMessage('!room', new File(['bytes'], 'file.txt', { type: 'text/plain' }));
+  assert.deepEqual(plainUploads, ['text/plain', 'application/octet-stream']);
+  assert.equal(plainSent.length, 1);
+  assert.equal(plainSent[0].url, undefined, 'no plain link');
+  assert.equal(plainSent[0].file.url, 'mxc://test/2');
+  plainRuntime.dispose();
+  runtime.dispose();
+});
 
 test('account switch during file preparation prevents upload', async () => {
   const reading = deferred();

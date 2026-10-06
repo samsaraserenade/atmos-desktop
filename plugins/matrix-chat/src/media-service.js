@@ -268,7 +268,6 @@ export function createMediaService(runtime, { encryptAttachment, probe, buildPre
   async function sendFileMessage(roomId, file, { caption } = {}) {
     if (!client) throw new Error('matrix-chat: no active client');
     runtime.assertCurrent();
-    const isEncrypted = !!client.isRoomEncrypted?.(roomId);
 
     const mimetype = file.type || 'application/octet-stream';
     const msgtype = msgtypeFor(mimetype);
@@ -283,9 +282,7 @@ export function createMediaService(runtime, { encryptAttachment, probe, buildPre
       : null;
 
     runtime.assertCurrent();
-    let content;
-
-    if (isEncrypted) {
+    const encryptedContent = async () => {
       const buffer = await file.arrayBuffer();
       runtime.assertCurrent();
       const encrypted = await encryptAttachment(buffer);
@@ -320,14 +317,15 @@ export function createMediaService(runtime, { encryptAttachment, probe, buildPre
         info['xyz.amorgan.blurhash'] = preview.blurhash;
       }
 
-      content = {
+      return {
         msgtype,
         body,
         filename: file.name,
         info,
         file: { ...encrypted.info, url: content_uri },
       };
-    } else {
+    };
+    const plainContent = async () => {
       runtime.assertCurrent();
       const { content_uri } = await client.uploadContent(file, { type: mimetype, abortController: runtime.controller });
       const info = { mimetype, size: file.size, ...extraInfo };
@@ -343,14 +341,24 @@ export function createMediaService(runtime, { encryptAttachment, probe, buildPre
         info['xyz.amorgan.blurhash'] = preview.blurhash;
       }
 
-      content = {
+      return {
         msgtype,
         body,
         filename: file.name,
         info,
         url: content_uri,
       };
-    }
+    };
+
+    // Asked only now, with nothing to wait for before the upload: a room
+    // that turned encryption on while the file was looked at gets it
+    // encrypted (R33).
+    const isEncrypted = !!client.isRoomEncrypted?.(roomId);
+    let content = isEncrypted ? await encryptedContent() : await plainContent();
+    // Turned on while it uploaded: sent encrypted after all, so no plain
+    // link goes into an encrypted room (the plain copy, already on the
+    // server, is linked from nothing).
+    if (!isEncrypted && client.isRoomEncrypted?.(roomId)) content = await encryptedContent();
 
     runtime.assertCurrent();
 

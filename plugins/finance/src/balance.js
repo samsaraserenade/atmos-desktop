@@ -30,7 +30,8 @@
 
 import { isPrivate, MASK, privateFormat } from './privacy.js';
 import { smoothingAlpha } from './chart-service.js';
-import { getPortfolioComposition, compositionFromHoldingsSnapshot } from './totals.js';
+import { getPortfolioComposition, compositionFromHoldingsSnapshot, getOutputCurrency } from './totals.js';
+import { getServerConnection } from './registry.js';
 import { renderCompositionMarkup } from './composition.js';
 import { loadSnapshotNear } from './holdings-timeline.js';
 import { computeDailyAttribution } from './daily-attribution.js';
@@ -337,7 +338,19 @@ const PERIOD_ATTRIBUTION = Object.freeze({
 const ATTRIBUTION_REFRESH_MS = 5 * 60_000;
 const MAX_MOVERS = 6; // one list, ranked by the size of the $ move
 
-const _attribution = { '1d': null, '1w': null }; // period → { movers, flow, flowConfident } | null
+const _attribution = { '1d': null, '1w': null }; // period → { movers, flow, flowConfident, key } | null
+// Whose and in what an attribution is: the server paired (R13) and the
+// currency shown (R14) when it was worked out.
+const _attributionKey = () => `${getServerConnection()?.id ?? ''}|${getOutputCurrency()}`;
+
+/** The period's attribution if it's still for the server paired and the currency shown; else none, read again. */
+function _currentAttribution(period) {
+  const attribution = _attribution[period];
+  if (!attribution || attribution.key === _attributionKey()) return attribution;
+  _attribution[period] = null;
+  void _refreshAttribution(period);
+  return null;
+}
 let _lastAthRenderKey = null;
 let _lastMoversRenderKey = null;
 let _lastFlowRenderKey = null;
@@ -457,6 +470,7 @@ function _activePeriod() {
 async function _refreshAttribution(period = _activePeriod()) {
   const spec = PERIOD_ATTRIBUTION[period];
   if (!spec) return;
+  const key = _attributionKey();
   try {
     // To the minute: refreshed every five minutes, a past poll read once.
     const target = Math.floor((Date.now() - spec.range) / 60_000) * 60_000;
@@ -466,7 +480,7 @@ async function _refreshAttribution(period = _activePeriod()) {
     } else {
       const previous = compositionFromHoldingsSnapshot(snapshot.holdings);
       const current = compositionSnapshot();
-      _attribution[period] = computeDailyAttribution(current, previous);
+      _attribution[period] = { ...computeDailyAttribution(current, previous), key };
     }
   } catch (error) {
     if (!error.unconfigured) console.warn(`[portfolio-tracker] ${spec.label} attribution unavailable:`, error.message);
@@ -512,7 +526,7 @@ function _renderMovers() {
   const period = _activePeriod();
   const spec = PERIOD_ATTRIBUTION[period];
   // Already sorted by |valueChange| descending (see daily-attribution.js).
-  const movers = spec ? (_attribution[period]?.movers ?? []).slice(0, MAX_MOVERS) : [];
+  const movers = spec ? (_currentAttribution(period)?.movers ?? []).slice(0, MAX_MOVERS) : [];
   const show = portfolioState.moversVisible !== false && movers.length > 0;
   _moversEl.style.display = show ? '' : 'none';
   if (!show) return;
@@ -557,7 +571,7 @@ function _renderFlow() {
   if (!_flowEl) return;
   const period = _activePeriod();
   const spec = PERIOD_ATTRIBUTION[period];
-  const attribution = spec ? _attribution[period] : null;
+  const attribution = spec ? _currentAttribution(period) : null;
   const flow = attribution?.flow;
   const show = portfolioState.flowVisible !== false && !!flow && attribution.flowConfident;
   _flowEl.style.display = show ? '' : 'none';

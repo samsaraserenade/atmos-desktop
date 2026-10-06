@@ -9,6 +9,11 @@ const HISTORY_TIERS = [
 ];
 
 async function fetchJson(route) {
+  return (await fetchAnswer(route)).data;
+}
+
+/** { data, connection }: the answer, and the pairing that gave it (main.cjs's id). */
+async function fetchAnswer(route) {
   const result = await invoke('vps:fetch', route);
   // "VPS unavailable: no answer in 20 s", "…: its address didn't resolve (DNS)".
   if (!result?.ok) {
@@ -17,11 +22,11 @@ async function fetchJson(route) {
     if (result?.configured === false) error.unconfigured = true;
     throw error;
   }
-  try { return JSON.parse(result.body); }
+  try { return { data: JSON.parse(result.body), connection: result.connection ?? null }; }
   catch { throw new Error('VPS returned invalid data'); }
 }
 
-/** { configured, address?, protected? } from main.cjs. The token never leaves the main process. */
+/** { configured, address?, protected?, id? } from main.cjs (id: this pairing's). The token never leaves the main process. */
 export async function getConnection() {
   return (await invoke('vps:status')) || { configured: false };
 }
@@ -146,14 +151,36 @@ export async function loadHoldingsValueHistory(keys, { from = null } = {}) {
  * @returns {Promise<Array<{ts_ms: number, source_id: string, symbol: string, kind: string, quantity: number, price: number, value: number, currency: string}>>}
  */
 export async function fetchHoldingsHistory({ from, to, source, symbol } = {}) {
+  return (await fetchHoldingsPage({ from, to, source, symbol })).points;
+}
+
+/**
+ * fetchHoldingsHistory with what the server says of its answer: at most so
+ * many rows, the oldest polls first or (order 'desc') the newest, whole
+ * polls only, `truncated` when more were left out. `polls` are the times of
+ * every poll the page covers, so one with no rows held nothing. `order` is
+ * what the server did: one from 0.9.1 or before sends the oldest first,
+ * whatever was asked, may cut its last poll and names no polls (null).
+ * `connection` is the pairing that answered (vps:status's id).
+ *
+ * @returns {Promise<{ points: Array, polls: number[] | null, truncated: boolean, order: 'asc' | 'desc', connection: string | null }>}
+ */
+export async function fetchHoldingsPage({ from, to, source, symbol, order } = {}) {
   const params = new URLSearchParams();
   if (Number.isFinite(from)) params.set('from', String(Math.trunc(from)));
   if (Number.isFinite(to)) params.set('to', String(Math.trunc(to)));
   if (source) params.set('source', String(source));
   if (symbol) params.set('symbol', String(symbol));
+  if (order === 'desc') params.set('order', 'desc');
   const query = params.toString();
-  const data = await fetchJson(`/v1/holdings-history${query ? `?${query}` : ''}`);
-  return Array.isArray(data.points) ? data.points : [];
+  const { data, connection } = await fetchAnswer(`/v1/holdings-history${query ? `?${query}` : ''}`);
+  return {
+    connection,
+    points: Array.isArray(data.points) ? data.points : [],
+    polls: Array.isArray(data.polls) ? data.polls : null,
+    truncated: data.truncated === true,
+    order: data.order === 'desc' ? 'desc' : 'asc',
+  };
 }
 
 /**

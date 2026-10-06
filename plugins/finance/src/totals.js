@@ -81,6 +81,15 @@ export function onRatesChange(fn) {
 
 export function getOutputCurrency() { return portfolioState.outputCurrency; }
 
+/**
+ * The sign for amounts converted to the output currency. Until the exchange
+ * rates arrive nothing is converted: the amounts are the server's dollars.
+ */
+export function outputSymbol() {
+  const ready = typeof ratesReady === 'function' && ratesReady();
+  return ready && typeof symbolForIso === 'function' ? symbolForIso(getOutputCurrency()) : '$';
+}
+
 /** GBP → the chosen output currency. */
 export function convertFromGbp(gbpAmount) {
   return _convertFromGbp(gbpAmount, getOutputCurrency());
@@ -131,7 +140,7 @@ export function getTotal() {
 
   const value = convertFromGbp(totalGbp);
   const iso   = getOutputCurrency();
-  const sym   = symbolForIso(iso);
+  const sym   = outputSymbol();
   return { value, symbol: sym, iso, ready: ratesReady(), liveCount, pendingCount, errorCount, gbp: totalGbp };
 }
 
@@ -278,7 +287,7 @@ export function getPortfolioComposition() {
     total: convertFromGbp(denominatorGbp),
     unknown: convertFromGbp(Math.max(0, denominatorGbp - reportedGbp)),
     coverage: denominatorGbp > 0 ? Math.min(1, reportedGbp / denominatorGbp) : 0,
-    symbol: symbolForIso(getOutputCurrency()),
+    symbol: outputSymbol(),
     assets: [...assets.values()]
       // Keep dust in the ratio/portfolio maths but omit it from the visible
       // list. Aggregate first so the same token held across wallets still
@@ -333,6 +342,10 @@ export function getSpotScopePositions() {
     .sort((a, b) => b.gbp - a.gbp);
 }
 
+// A figure the connector sent, or null when it didn't or sent null ("not
+// available"): Number(null) is 0, which would show as $0.00 or 0%.
+const _known = value => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
+
 // Leveraged positions (currently: Hyperliquid perps -- see the backend's
 // connectors/hyperliquid) carry a bunch of their own extra numbers -- funding
 // rate, leverage, entry/mark/liquidation price, margin, 24h fees -- that a
@@ -359,9 +372,16 @@ export function getFuturesPositions() {
       // keep them visible without adding fabricated value to account totals.
       const rawPositionValue = Number(holding?.meta?.positionValue);
       if (!(rawValue > 0) && !(rawPositionValue > 0)) continue;
-      const gbp = convertToGbp(rawValue, holding.currency ?? dataCurrency);
+      const currency = holding.currency ?? dataCurrency;
+      const gbp = convertToGbp(rawValue, currency);
       if (!(gbp >= 0)) continue;
       const meta = holding.meta;
+      // Amounts in the output currency, as `value` is; prices stay in the
+      // market's own (dollars), as quoted.
+      const amount = value => {
+        const known = _known(value);
+        return known == null ? null : convertFromGbp(convertToGbp(known, currency));
+      };
       positions.push({
         // Connectors publish the perp symbol as "<coin> Perp" (see
         // connectors/hyperliquid) -- stripped back to the plain coin here since the
@@ -371,19 +391,19 @@ export function getFuturesPositions() {
         connectionId,
         value: convertFromGbp(gbp),
         side: meta.side === 'short' ? 'short' : 'long',
-        leverage: Number.isFinite(Number(meta.leverage)) ? Number(meta.leverage) : null,
-        entryPrice: Number.isFinite(Number(meta.entryPrice)) ? Number(meta.entryPrice) : null,
-        markPrice: Number.isFinite(Number(meta.markPrice)) ? Number(meta.markPrice) : null,
-        liquidationPrice: Number.isFinite(Number(meta.liquidationPrice)) ? Number(meta.liquidationPrice) : null,
+        leverage: _known(meta.leverage),
+        entryPrice: _known(meta.entryPrice),
+        markPrice: _known(meta.markPrice),
+        liquidationPrice: _known(meta.liquidationPrice),
         // Notional exposure (size x mark price) -- distinct from `value`
         // above (the equity/PnL figure) and from marginUsed (collateral
         // locked, not shown in the Futures panel at all).
-        positionValue: Number.isFinite(Number(meta.positionValue)) ? Number(meta.positionValue) : null,
-        marginUsed: Number.isFinite(Number(meta.marginUsed)) ? Number(meta.marginUsed) : null,
-        unrealizedPnl: Number.isFinite(Number(meta.unrealizedPnl)) ? Number(meta.unrealizedPnl) : null,
-        fundingRate: Number.isFinite(Number(meta.fundingRate)) ? Number(meta.fundingRate) : null,
-        funding24h: Number.isFinite(Number(meta.funding24h)) ? Number(meta.funding24h) : null,
-        fees24h: Number.isFinite(Number(meta.fees24h)) ? Number(meta.fees24h) : null,
+        positionValue: amount(meta.positionValue),
+        marginUsed: amount(meta.marginUsed),
+        unrealizedPnl: amount(meta.unrealizedPnl),
+        fundingRate: _known(meta.fundingRate),
+        funding24h: amount(meta.funding24h),
+        fees24h: amount(meta.fees24h),
       });
     }
   }
@@ -448,9 +468,8 @@ export function getFuturesDirectionSplit() {
   // getFuturesPositions() above -- can be called (via this section's own
   // mount(), through onStateLoaded) before initCurrencyService() has
   // wired up symbolForIso/getOutputCurrency. getFuturesPositions() already
-  // guards this internally and returns [] rather than throwing, but
-  // symbolForIso(getOutputCurrency()) below is called unconditionally, so
-  // it needs its own guard rather than relying on positions being empty.
+  // guards this internally and returns [] rather than throwing; until then
+  // there's no sign to write either (nothing is drawn).
   if (typeof symbolForIso !== 'function' || typeof getOutputCurrency !== 'function') {
     return { long: 0, short: 0, symbol: '' };
   }
@@ -470,7 +489,7 @@ export function getFuturesDirectionSplit() {
     if (position.side === 'short') short += exposure;
     else long += exposure;
   }
-  return { long, short, symbol: symbolForIso(getOutputCurrency()) };
+  return { long, short, symbol: outputSymbol() };
 }
 
 // Same output shape as getPortfolioComposition(), but built from a single
@@ -537,7 +556,7 @@ export function compositionFromHoldingsSnapshot(holdings) {
     total: convertFromGbp(classifiedGbp),
     unknown: 0,
     coverage: classifiedGbp > 0 ? 1 : 0,
-    symbol: symbolForIso(getOutputCurrency()),
+    symbol: outputSymbol(),
     assets: [...assets.values()]
       .filter(asset => asset.gbp >= minimumVisibleHoldingGbp)
       .sort((a, b) => b.gbp - a.gbp)

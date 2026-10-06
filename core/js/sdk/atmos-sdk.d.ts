@@ -634,7 +634,13 @@ export interface WebMedia {
  */
 export interface WebApi {
   open(tabId: string, options?: { url?: string; private?: boolean }): Promise<WebTabState>;
-  close(tabId: string): Promise<boolean>;
+  /**
+   * The tab's page goes, its beforeunload, pagehide and unload first. With
+   * `sleep` (putting a background tab away), only if the page lets go: one
+   * that objects to being left (unsaved changes) stays, without a dialog,
+   * and this resolves false.
+   */
+  close(tabId: string, options?: { sleep?: boolean }): Promise<boolean>;
   show(tabId: string | null): Promise<boolean>;
   list(): Promise<WebTabState[]>;
   navigate(tabId: string, url: string): Promise<'loading' | 'external'>;

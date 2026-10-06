@@ -136,6 +136,19 @@ const frameFor = (page, ext, surface) => page.frames().find(f => f.url().include
   await s.page.screenshot({ path: path.join(out, '74-frame-settings.png') });
   await s.page.keyboard.press('Escape');
 
+  // The extension's own HTML page, navigated to from its frame (same
+  // origin, so allowed), is held to the same policy as frame.html (R1).
+  await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('hello-frame'));
+  for (let i = 0; i < 40 && !(panel = frameFor(s.page, 'plugin:hello-frame', 'panel')); i++) await s.page.waitForTimeout(100);
+  r.ownPage = await (async () => {
+    await panel.evaluate(() => { location.href = '/plugins/hello-frame/escape.html'; });
+    let page;
+    for (let i = 0; i < 50 && !(page = s.page.frames().find(f => f.url().endsWith('/plugins/hello-frame/escape.html'))); i++) await s.page.waitForTimeout(100);
+    if (!page) return 'navigation blocked';
+    await page.waitForFunction(() => window.__escape, null, { timeout: 5000 });
+    return page.evaluate(async () => ({ inlineRan: window.__escape.inlineRan, fetch: await window.__escape.fetch, violations: window.__escape.violations }));
+  })().catch(e => e.message);
+
   // Memory.
   r.metrics = await s.app.evaluate(({ app }) => {
     const m = app.getAppMetrics();

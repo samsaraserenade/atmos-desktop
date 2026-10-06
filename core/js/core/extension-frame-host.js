@@ -322,34 +322,63 @@ function _stateFor(extension) {
   return _states.get(k);
 }
 
+// A change stays unsaved until its write succeeds: a failed one is tried
+// again, after 5 s and then less often (one that's always refused, at most
+// every 5 minutes), and at the latest as the page goes; never forgotten.
+const STATE_RETRY_MS = 5000;
+const STATE_RETRY_MAX_MS = 5 * 60_000;
+const _stateUnsaved = new Set();
+const _stateFailures = new Map(); // "kind:id" -> writes failed in a row
+const _retryDelay = k => Math.min(STATE_RETRY_MS * 2 ** (_stateFailures.get(k) || 0), STATE_RETRY_MAX_MS);
+function _stateFailed(k) {
+  const delay = _retryDelay(k);
+  _stateFailures.set(k, (_stateFailures.get(k) || 0) + 1);
+  if (!_stateTimers.has(k)) _writeState(k, delay);
+}
+
 function _writeState(k, delay = STATE_WRITE_DELAY_MS) {
+  _stateUnsaved.add(k);
   clearTimeout(_stateTimers.get(k));
   _stateTimers.set(k, setTimeout(() => {
     _stateTimers.delete(k);
     const record = _states.get(k);
     if (!record || !_stateApi) return;
-    _stateApi.save(record.extension.kind, record.extension.id, record.value)
-      .catch(error => console.warn(`[extensions] ${k}'s state could not be saved:`, error.message));
+    _stateApi.save(record.extension.kind, record.extension.id, record.value).then(() => {
+      _stateFailures.delete(k);
+      // A change made meanwhile has a write of its own on the way.
+      if (!_stateTimers.has(k)) _stateUnsaved.delete(k);
+    }, error => {
+      console.warn(`[extensions] ${k}'s state could not be saved; trying again in ${Math.round(_retryDelay(k) / 1000)} s:`, error.message);
+      _stateFailed(k);
+    });
   }, delay));
 }
 
-/** Write an extension's state now, if a write is waiting; resolves once it's on disk. */
+/** Write an extension's state now, if a change is unsaved; resolves once it's on disk. */
 async function _saveStateNow(k) {
-  if (!_stateTimers.has(k)) return;
+  if (!_stateUnsaved.has(k)) return;
   clearTimeout(_stateTimers.get(k));
   _stateTimers.delete(k);
   const record = _states.get(k);
-  if (record && _stateApi) await _stateApi.save(record.extension.kind, record.extension.id, record.value);
+  if (!record || !_stateApi) return;
+  try {
+    await _stateApi.save(record.extension.kind, record.extension.id, record.value);
+    _stateFailures.delete(k);
+    if (!_stateTimers.has(k)) _stateUnsaved.delete(k);
+  } catch (error) {
+    _stateFailed(k);
+    throw error;
+  }
 }
 
-/** Write what is still waiting, synchronously (the page is going away). */
+/** Write what is still unsaved, synchronously (the page is going away). */
 function _flushStates() {
-  for (const [k, timer] of _stateTimers) {
-    clearTimeout(timer);
-    const record = _states.get(k);
-    if (record && _stateApi) _stateApi.saveSync(record.extension.kind, record.extension.id, record.value);
-  }
+  for (const timer of _stateTimers.values()) clearTimeout(timer);
   _stateTimers.clear();
+  for (const k of [..._stateUnsaved]) {
+    const record = _states.get(k);
+    if (record && _stateApi && _stateApi.saveSync(record.extension.kind, record.extension.id, record.value) !== false) _stateUnsaved.delete(k);
+  }
 }
 window.addEventListener('pagehide', _flushStates);
 window.addEventListener('beforeunload', _flushStates);
@@ -410,8 +439,15 @@ const _deps = {
       return () => { alive = false; off?.(); };
     },
   },
-  // Stamped with the calling extension; the main process checks it again.
-  invokeMain: (caller, kind, id, channel, ...args) => window.atmosCore.invokeExtensionAs(caller, kind, id, channel, ...args),
+  // Stamped with the calling extension, which the main process checks
+  // again, and its frame ({ caller, frame }); then that the frame went.
+  invokeMain: (stamp, kind, id, channel, ...args) => window.atmosCore.invokeExtensionAs(stamp, kind, id, channel, ...args),
+  frameClosed: frame => window.atmosCore.frameClosed?.(frame),
+  // A frame whose entry file didn't load: an update that can't start falls back (R4).
+  frameLoadFailed: (extension, type, message) => {
+    const reason = `its ${type === 'boot' ? 'background' : type} frame failed to load${message ? ` (${message})` : ''}`;
+    window.atmosCore?.extensionManager?.frameFailed?.(extension.kind, extension.id, reason)?.catch?.(() => {});
+  },
   onMain: (kind, id, channel, fn) => window.atmos.extensionOn(kind, id, channel, fn),
   services: _services,
   awaitService: _awaitService,
@@ -1224,8 +1260,9 @@ function _registerFramed({ plugins = [], services = [] }) {
  * Community extensions whose approval was just removed (the main process's
  * _stopNow decided which, and stopped serving their files): every frame of
  * theirs goes now (panel, widgets, settings page, background frame), their
- * widgets leave the sidebar, what they offered other extensions is
- * withdrawn, and a panel or settings page left showing says they stopped.
+ * widgets leave the sidebar, what they play stops, what they offered other
+ * extensions is withdrawn, and a panel or settings page left showing says
+ * they stopped.
  * Resolves how many stopped.
  */
 export function stopExtensions(refs = []) {
@@ -1237,6 +1274,10 @@ export function stopExtensions(refs = []) {
     count += 1;
     for (const record of [...(_frames.get(ref) || [])]) record.stop?.();
     _exposed.delete(ref);
+    // What it plays on its audio channel stops too: nothing of it is left
+    // to control it, and its Now Playing went with its last frame.
+    const audio = getCapability('media.audio');
+    if (audio?.listChannels().some(item => item.owner === ref)) audio.channel(ref).stop();
     for (const surface of extension.frame?.contributions || []) {
       if (surface.surface !== 'sidebar') continue;
       const sectionId = _sectionIds.get(surface) ?? surface.id;

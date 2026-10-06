@@ -147,14 +147,20 @@ export function save() {
   timer = setTimeout(flush, 100);
 }
 
-/** Save now. Saves run one after another, so an older one can't land last. */
+/**
+ * Save now. Saves run one after another, so an older one can't land last.
+ * Resolves once written; a failed write rejects (and is logged), and the
+ * next save still runs.
+ */
 export function flush() {
   clearTimeout(timer);
   timer = null;
-  writing = writing.then(async () => {
+  const attempt = writing.then(async () => {
     const payload = serialize();
     payload.sealedSessions = await seal(sessionPayload(matrixState), SESSIONS_PURPOSE);
     await atmos.state.set(payload);
-  }).catch(error => console.error('[matrix-chat] could not save state:', error));
-  return writing;
+  });
+  writing = attempt.catch(() => {});
+  attempt.catch(error => console.error('[matrix-chat] could not save state:', error));
+  return attempt;
 }

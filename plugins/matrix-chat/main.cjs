@@ -6,8 +6,10 @@ const path = require('path');
 const { createOAuthCallbacks } = require('./oauth-callback.cjs');
 const { createVault } = require('./vault.cjs');
 
+// A frame's own: every frame's call comes through the Atmos page (event.sender),
+// and Core names the frame (event.callerFrame; an older Atmos names none).
 function requestKey(event, requestId) {
-  return `${event.sender.id}:${requestId}`;
+  return `${event.sender.id}:${event.callerFrame?.id ?? ''}:${requestId}`;
 }
 
 // Headers a frame may not set on a relayed request: ones that would let it
@@ -20,6 +22,25 @@ function relayHeaders(headers) {
   return (Array.isArray(headers) ? headers : [])
     .filter(pair => Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'string' && !BLOCKED_HEADER.test(pair[0].trim()));
 }
+
+// A relayed answer is held whole in the main process, which runs all of
+// Atmos, before it goes to the frame: bound what one may hold (larger than a
+// homeserver's usual upload limit), what all of them being read at once may,
+// how many run at once (the rest wait their turn), and how long one may go
+// without a byte (well past /sync's 30 s long poll), plus, before the answer,
+// the time an upload takes on a slow uplink.
+const MAX_BODY_BYTES = 100 * 1024 * 1024;
+const MAX_READING_BYTES = 256 * 1024 * 1024;
+const MAX_RUNNING = 16;
+const STALL_MS = 5 * 60 * 1000;
+const SLOW_UPLOAD_BYTES_PER_MS = 64 * 1024 / 1000;
+
+function tooLarge(message) {
+  const error = new RangeError(`${message}: too large to relay.`);
+  error.name = 'TypeError';
+  return error;
+}
+const MB = bytes => `${bytes / 1024 / 1024} MB`;
 
 function assertRemoteUrl(value) {
   const url = new URL(value);
@@ -38,6 +59,71 @@ function assertRemoteUrl(value) {
  */
 exports.activate = function activate(context) {
   const controllers = new Map();
+  let running = 0;
+  const waiting = [];
+  let reading = 0;
+
+  /** A turn to run, in order; rejects if the request is aborted while it waits. */
+  function takeTurn(signal) {
+    if (running < MAX_RUNNING) {
+      running += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const turn = () => { signal.removeEventListener('abort', cancel); resolve(); };
+      const cancel = () => {
+        waiting.splice(waiting.indexOf(turn), 1);
+        reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
+      };
+      waiting.push(turn);
+      signal.addEventListener('abort', cancel, { once: true });
+    });
+  }
+  function endTurn() {
+    const next = waiting.shift();
+    if (next) next(); else running -= 1;
+  }
+
+  /**
+   * The answer's bytes, refused past the limits; `alive` is called on each
+   * chunk. Aborted, the read stops (whatever the stream does with the
+   * signal) and nothing cut short passes for the whole answer.
+   */
+  async function readBody(response, alive, signal) {
+    if (Number(response.headers.get('content-length')) > MAX_BODY_BYTES) {
+      response.body?.cancel().catch(() => {});
+      throw tooLarge(`The homeserver's answer is over ${MB(MAX_BODY_BYTES)}`);
+    }
+    if (!response.body) return new Uint8Array(0);
+    const reader = response.body.getReader();
+    const stop = () => { reader.cancel().catch(() => {}); };
+    signal.addEventListener('abort', stop, { once: true });
+    const chunks = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (signal.aborted) throw Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+        if (done) break;
+        alive();
+        size += value.byteLength;
+        reading += value.byteLength;
+        chunks.push(value);
+        if (size > MAX_BODY_BYTES) throw tooLarge(`The homeserver's answer is over ${MB(MAX_BODY_BYTES)}`);
+        if (reading > MAX_READING_BYTES) throw tooLarge(`The answers being read come to over ${MB(MAX_READING_BYTES)}`);
+      }
+    } catch (error) {
+      stop();
+      throw error;
+    } finally {
+      signal.removeEventListener('abort', stop);
+      reading -= size;
+    }
+    const body = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+    return body;
+  }
 
   // Frames can't start downloads: "Download" in a message's menu sends the
   // bytes here, and this asks where to save them.
@@ -105,6 +191,16 @@ exports.activate = function activate(context) {
     const key = requestKey(event, requestId);
     const controller = new AbortController();
     controllers.set(key, controller);
+    // A frame that goes takes its requests with it (a /sync, an upload).
+    const frameGone = () => controller.abort();
+    event.callerFrame?.once('destroyed', frameGone);
+    let turn = false;
+    let stalled = false;
+    let timer = null;
+    const alive = (extraMs = 0) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { stalled = true; controller.abort(); }, STALL_MS + extraMs);
+    };
 
     try {
       const url = assertRemoteUrl(payload?.url);
@@ -123,25 +219,36 @@ exports.activate = function activate(context) {
 
       if (method !== 'GET' && method !== 'HEAD' && payload?.body != null) {
         options.body = new Uint8Array(payload.body);
+        if (options.body.byteLength > MAX_BODY_BYTES) throw tooLarge(`The upload is over ${MB(MAX_BODY_BYTES)}`);
       }
 
+      await takeTurn(controller.signal);
+      turn = true;
+      // Nothing comes back while an upload is still being sent.
+      alive(options.body ? options.body.byteLength / SLOW_UPLOAD_BYTES_PER_MS : 0);
       const response = await net.fetch(url, options);
+      alive();
+      const body = await readBody(response, alive, controller.signal);
       return {
         ok: true,
         url: response.url,
         status: response.status,
         statusText: response.statusText,
         headers: [...response.headers.entries()],
-        body: new Uint8Array(await response.arrayBuffer()),
+        body,
       };
     } catch (error) {
+      if (stalled) return { ok: false, name: 'TypeError', message: 'The homeserver stopped answering.' };
       return {
         ok: false,
         name: error?.name || 'TypeError',
         message: error?.message || 'Matrix network request failed.',
       };
     } finally {
+      clearTimeout(timer);
+      event.callerFrame?.removeListener('destroyed', frameGone);
       controllers.delete(key);
+      if (turn) endTurn();
     }
   });
 };

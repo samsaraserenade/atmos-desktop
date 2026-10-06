@@ -8,7 +8,7 @@ import { portfolioState } from '../persist.js';
 import { tickerData, onUpdate, updateTickerActive, heldSymbols, accountShareFor, holdingValueFor } from './src/watchlist-data.js';
 import { queueMarketQuery } from './src/session.js';
 import { mountCompositionBar } from '../src/balance.js';
-import { getPortfolioComposition, getFuturesBalances, getFuturesPositions, getFuturesDirectionSplit, getSpotScopePositions } from '../src/totals.js';
+import { getPortfolioComposition, getFuturesBalances, getFuturesPositions, getFuturesDirectionSplit, getSpotScopePositions, outputSymbol } from '../src/totals.js';
 import { notifyPortfolioUpdate } from '../src/registry.js';
 import { setGroupIncluded, setHoldingIncluded, setSourceIncluded } from '../src/portfolio-scope.js';
 import { renderDirectionMarkup } from '../src/composition.js';
@@ -91,26 +91,28 @@ const formatPrice = price => {
   return leadingZeros >= 2 ? formatTinyPrice(price) : '$' + price.toPrecision(4);
 };
 const formatChange = change => change == null ? '' : `${change >= 0 ? '▲ ' : '▼ '}${Math.abs(change).toFixed(2)}%`;
-// A holding's total $ value, not a per-unit price -- so unlike formatPrice
-// above it's always rounded to the nearest whole dollar rather than
+// A holding's total value, not a per-unit price -- so unlike formatPrice
+// above it's always rounded to the nearest whole unit rather than
 // carrying cents or compressing into k/M/B: a position row is tight on
 // space and the cents on a "how much of this do I own" figure aren't
 // worth the extra characters the way they are on the headline balance.
+// Amounts are in your currency (totals.js converts them); prices stay in
+// dollars, as the markets quote them.
 const _holdingValueFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
-const formatHoldingValue = masked(value => '$' + _holdingValueFmt.format(value));
+const formatHoldingValue = masked(value => outputSymbol() + _holdingValueFmt.format(value));
 
 // ── Futures card formatting ──────────────────────────────────────────────────
 // Smaller figures than a headline holding value (PnL, funding, fees) are
 // worth showing to the cent and with an explicit sign, so "$0.00" and "did
 // nothing" aren't the same string, and a loss reads as a loss at a glance
 // rather than needing the reader to notice a bare minus sign.
-const formatSignedUsd = masked(formatSignedUsdPlain);
+const formatSignedAmount = masked(formatSignedAmountPlain);
 const HIDDEN_NOTE = 'Hidden while balances are hidden';
 
-function formatSignedUsdPlain(value) {
+function formatSignedAmountPlain(value) {
   if (value == null || !Number.isFinite(value)) return '—';
   const sign = value > 0 ? '+' : value < 0 ? '−' : '';
-  return `${sign}$${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${sign}${outputSymbol()}${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatEntryPrice(value) {
@@ -213,7 +215,7 @@ function updateFuturesCard(entry, position) {
   // getFuturesPositions() and the Hyperliquid connector's collect()).
   entry.valueEl.textContent = formatHoldingValue(position.positionValue ?? position.value);
   const pnl = position.unrealizedPnl;
-  entry.pnlEl.textContent = pnl == null ? '' : formatSignedUsd(pnl);
+  entry.pnlEl.textContent = pnl == null ? '' : formatSignedAmount(pnl);
   entry.pnlEl.style.color = pnl == null ? '' : _directionalColor(pnl >= 0, .95);
 
   entry.leverageEl.textContent = position.leverage ? `${position.leverage}×` : '—';
@@ -226,13 +228,13 @@ function updateFuturesCard(entry, position) {
   entry.fundingRateEl.textContent = formatFundingRate(position.fundingRate);
   entry.fundingRateEl.style.color = position.fundingRate == null ? '' : _directionalColor(position.fundingRate >= 0, .85);
 
-  entry.funding24hEl.textContent = formatSignedUsd(position.funding24h);
+  entry.funding24hEl.textContent = formatSignedAmount(position.funding24h);
   entry.funding24hEl.style.color = position.funding24h == null ? '' : _directionalColor(position.funding24h >= 0, .85);
 
-  // Fees are always a cost -- shown as a negative amount (formatSignedUsd
+  // Fees are always a cost -- shown as a negative amount (formatSignedAmount
   // takes the raw signed number, so this negates rather than string-hacks
   // a minus sign onto a formatted string) and colored as a loss, never a gain.
-  entry.fees24hEl.textContent = position.fees24h == null ? '—' : formatSignedUsd(-Math.abs(position.fees24h));
+  entry.fees24hEl.textContent = position.fees24h == null ? '—' : formatSignedAmount(-Math.abs(position.fees24h));
   entry.fees24hEl.style.color = position.fees24h == null ? '' : _directionalColor(false, .85);
 }
 
@@ -308,7 +310,7 @@ function updateFuturesDirectionBar() {
   // Match the invested/cash bar's cache behavior: palette colors are part
   // of the render key, so a price-color change repaints even when the ratio
   // values themselves have not moved.
-  const key = `${isPrivate()}|${longColor}|${shortColor}|${showAmount}|${split.long}|${split.short}`;
+  const key = `${isPrivate()}|${longColor}|${shortColor}|${showAmount}|${split.long}|${split.short}|${split.symbol}`;
   if (key === _lastFuturesDirectionKey) return;
   _lastFuturesDirectionKey = key;
   futuresDirectionEl.style.setProperty('--pt-long-fill', hexToRgba(longColor, .25));

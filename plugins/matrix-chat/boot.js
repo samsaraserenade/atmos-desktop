@@ -43,7 +43,9 @@ async function secureStart() {
   matrixState.matrixSessions = [];
   matrixState.framesFreshStart = true;
   matrixState.storageVersion = STORAGE_VERSION;
-  await flush(); // the plain-text tokens leave the disk here
+  // The plain-text tokens leave the disk here. A failed write is logged and
+  // Matrix Chat carries on; it's done again at the next start.
+  await flush().catch(() => {});
   atmos.legacy.deleteIndexedDB()
     .then(names => { if (names.length) console.info('[matrix-chat] deleted old key stores:', names.join(', ')); })
     .catch(error => console.warn('[matrix-chat] could not delete old key stores:', error));

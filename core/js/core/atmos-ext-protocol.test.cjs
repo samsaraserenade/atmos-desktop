@@ -15,6 +15,7 @@ write('plugins/weather/panel.js', 'export const weather = 1;');
 write('plugins/weather/styles/app.css', 'body{}');
 write('plugins/weather/icon.SVG', '<svg/>');
 write('plugins/weather/blob.bin', 'bytes');
+write('plugins/weather/page.html', '<script>fetch("https://anywhere.example/")</script>');
 write('plugins/weather/data/secret.json', '{"token":"weather"}');
 write('plugins/weather/tests/a.test.js', 'x');
 write('plugins/weather/.env', 'SECRET=1');
@@ -162,12 +163,30 @@ test('a frame’s document carries its own extension’s policy, and only on its
   assert.doesNotMatch(financeCsp, /open-meteo/);
 });
 
+test('every file an extension serves carries its policy, so its own pages and workers are held to it too (R1)', async () => {
+  const policy = (await get(`${W}/__atmos/frame.html?ext=plugin:weather`)).headers.get('content-security-policy');
+  // A frame may navigate within its origin: its own HTML page, an SVG, or a
+  // worker's script would otherwise run with no network limits.
+  for (const file of ['page.html', 'icon.SVG', 'panel.js', 'blob.bin']) {
+    const response = await get(`${W}/plugins/weather/${file}`);
+    assert.equal(response.status, 200, file);
+    assert.equal(response.headers.get('content-security-policy'), policy, file);
+  }
+  const financePolicy = (await get(`${FP}/__atmos/frame.html?ext=plugin:finance`)).headers.get('content-security-policy');
+  assert.equal((await get(`${FP}/plugins/finance/panel.js`)).headers.get('content-security-policy'), financePolicy);
+  // A library's modules carry the library's own policy, never its importer's.
+  const library = await get(`${FP}/services/charting/chart.js`, { origin: W });
+  assert.doesNotMatch(library.headers.get('content-security-policy'), /open-meteo/);
+  assert.match(library.headers.get('content-security-policy'), /default-src 'none'/);
+});
+
 test('Core’s SDK files, to origins that have an extension', async () => {
   for (const [rel, file] of Object.entries(SDK_FILES)) {
     const response = await get(`${W}${rel}`);
     assert.equal(response.status, 200, rel);
     assert.equal(response.body, fs.readFileSync(path.join(root, 'sdk', file), 'utf8'));
     assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(response.headers.get('content-security-policy'), "default-src 'none'", rel);
   }
   assert.equal((await get(`${W}/__atmos/sdk.js`)).headers.get('content-type'), 'text/javascript; charset=utf-8');
   assert.equal((await get(`${W}/__atmos/ui.css`)).headers.get('content-type'), 'text/css; charset=utf-8');

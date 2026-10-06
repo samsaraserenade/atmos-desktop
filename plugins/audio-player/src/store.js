@@ -56,6 +56,9 @@ export const saveTracks = files => saveValue('playlist', files);
 /**
  * Once: copy what the in-page Audio Player kept in the Atmos page's
  * database. Its newer `audio-player:<name>` keys win over the older bare ones.
+ * Done only once everything was read and written (no database there is
+ * nothing to copy); otherwise tried again next start, never over a value
+ * saved here since.
  */
 export async function copyFromPage() {
   if (await load(COPIED, false)) return false;
@@ -66,11 +69,15 @@ export async function copyFromPage() {
     for (const name of ['library-meta', 'waveform-cache', 'playlist']) {
       const value = records.get(`audio-player:${name}`) ?? records.get(name);
       if (value === undefined || value === null) continue;
-      if (await load(name, null) !== null) continue;
-      if (await saveValue(name, value)) copied++;
+      // Not load()/saveValue(): they take a failure for "nothing saved" and
+      // carry on.
+      if (await run('readonly', store => store.get(name)) != null) continue;
+      await run('readwrite', store => store.put(value, name));
+      copied++;
     }
   } catch (error) {
-    console.warn('[audio-player] nothing copied from the page:', error.message);
+    console.warn('[audio-player] could not copy everything from the page; trying again next start:', error?.message);
+    return copied > 0;
   }
   await saveValue(COPIED, true);
   return copied > 0;

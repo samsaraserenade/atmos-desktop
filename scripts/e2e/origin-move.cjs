@@ -9,9 +9,18 @@
 //  2. The current manifests, with the move made to time out: each runs
 //     from the shared origin once more (its data is still there), Settings
 //     says why, and the move is recorded as failed.
+//  2b. The copy works but its record can't be saved (R2): Finance runs
+//     from the shared origin once more, so what it saves that session
+//     (Finance's state key, changed) is still there for the next copy,
+//     instead of being saved in its own origin and copied over at the next
+//     start.
+//  2c. The record damaged (a power cut mid-write): its backup copy says the
+//     move hasn't happened, so Finance runs from the shared origin, where
+//     its data is, not from its own, empty one (R2).
 //  3. Normal start: the data is copied into each extension's own origin
-//     (Blobs and all), recorded as copied, its frames run there and read
-//     it; the shared copies are still there; the state value is kept.
+//     (Blobs and all, and the state key as changed in 2b), recorded as
+//     copied, its frames run there and read it; the shared copies are still
+//     there; the state value is kept.
 //  4. Next start: the shared copies of what was moved are gone, what nobody
 //     declared is still there, the moved data is intact.
 //
@@ -183,6 +192,28 @@ const readMoved = async page => ({
   r['2-problems'] = await s.page.evaluate(async () => (await window.atmosCore.extensionManager.status()).summary.problems.map(p => `${p.id}: ${p.reason.slice(0, 50)}`));
   r['2-finance'] = (await readMoved(s.page)).finance;
   r['2-errors'] = s.errors;
+  await s.app.close();
+  progress();
+
+  // 2b. The copy works but its record can't be saved (a directory where its
+  // temporary file goes): nothing may use the new origin, or the next start
+  // copies the shared data over what was saved there since (R2).
+  const blockRecord = path.join(installRoot, 'extension-origin-moves.json.tmp');
+  fs.mkdirSync(blockRecord, { recursive: true });
+  s = await launch(repo);
+  r['2b-origins'] = await origins(s.page);
+  r['2b-moves'] = summarize(movesRecord());
+  r['2b-saved'] = await within((await waitBoot(s.page, 'finance'))?.evaluate(() => { localStorage.setItem('finance:state:e2e', 'changed in 2b'); return localStorage.getItem('finance:state:e2e'); }).catch(e => e.message), '2b');
+  await s.page.waitForTimeout(600);
+  await s.app.close();
+  fs.rmSync(blockRecord, { recursive: true, force: true });
+  progress();
+
+  // 2c. The record damaged; the move still times out.
+  fs.writeFileSync(path.join(installRoot, 'extension-origin-moves.json'), '{"format":1,"mov');
+  s = await launch(repo, ['--origin-move-timeout=1']);
+  r['2c-origins'] = await origins(s.page);
+  r['2c-state'] = await within((await waitBoot(s.page, 'finance'))?.evaluate(() => localStorage.getItem('finance:state:e2e')).catch(e => e.message), '2c');
   await s.app.close();
   progress();
 

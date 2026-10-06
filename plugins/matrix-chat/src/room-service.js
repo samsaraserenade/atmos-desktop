@@ -1,10 +1,18 @@
 export function createRoomService(runtime, emit) {
   const client = runtime.client;
   const friendRooms = new Map();
-  let friendQueue = Promise.resolve();
+  // Changes to the conversation list (m.direct) one at a time: each reads
+  // the list the one before wrote (setAccountData waits for it to come
+  // back), so two at once can't drop one (R39).
+  let directQueue = Promise.resolve();
+  function queueDirect(work) {
+    const operation = directQueue.then(work);
+    directQueue = operation.catch(() => {});
+    return operation;
+  }
 
   function addFriend(value) {
-    const operation = friendQueue.then(async () => {
+    return queueDirect(async () => {
       runtime.assertCurrent();
       if (!client) throw new Error('Sign in before adding a friend.');
       const userId = String(value || '').trim();
@@ -32,8 +40,6 @@ export function createRoomService(runtime, emit) {
       runtime.assertCurrent();
       return { roomId, existing: Boolean(existing) };
     });
-    friendQueue = operation.catch(() => {});
-    return operation;
   }
   function getDirectRoomIds() {
     if (!client) return new Set();
@@ -58,9 +64,12 @@ export function createRoomService(runtime, emit) {
     const inviter = room.getDMInviter?.()
       || room.currentState.getStateEvents('m.room.member', requestClient.getUserId())?.getSender();
     if (!inviter) throw new Error('Unable to identify the sender');
-    const direct = { ...(requestClient.getAccountData('m.direct')?.getContent() || {}) };
-    direct[inviter] = [...new Set([...(Array.isArray(direct[inviter]) ? direct[inviter] : []), roomId])];
-    await requestClient.setAccountData('m.direct', direct);
+    await queueDirect(async () => {
+      runtime.assertCurrent();
+      const direct = { ...(requestClient.getAccountData('m.direct')?.getContent() || {}) };
+      direct[inviter] = [...new Set([...(Array.isArray(direct[inviter]) ? direct[inviter] : []), roomId])];
+      await requestClient.setAccountData('m.direct', direct);
+    });
     runtime.assertCurrent();
     return requestClient.joinRoom(roomId);
   }

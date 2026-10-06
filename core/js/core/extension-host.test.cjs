@@ -282,3 +282,54 @@ test('compatibility: "engines.atmos" against this Atmos, then the extension API 
   assert.match(at({ requires: { 'panel.pass-through': 1 } }).reason, /capability this Atmos doesn't have/);
   assert.equal(checkCompatibility({ engines: { atmos: '>=9.0.0' } }).compatible, true, 'no known Atmos version: not checked');
 });
+
+test('IPC handlers: a frame\'s call says which frame made it, and that frame says when it goes (R17)', async t => {
+  const { EventEmitter } = require('node:events');
+  const handlers = new Map();
+  const host = createExtensionHost({ ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, authorizeInvoke: () => null });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-host-frame-'));
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); delete global.__callerFrames; });
+  global.__callerFrames = [];
+  fs.mkdirSync(path.join(root, 'feeds'));
+  fs.writeFileSync(path.join(root, 'feeds', 'extension.json'), JSON.stringify({ permissions: { ipc: true } }));
+  fs.writeFileSync(path.join(root, 'feeds', 'main.cjs'), "module.exports = context => context.handle('watch', event => { global.__callerFrames.push(event.callerFrame); return event.sender.id; });");
+  await host.activateRoot('service', root);
+  const handler = handlers.get('atmos-extension:service:feeds:watch');
+  const page = Object.assign(new EventEmitter(), { id: 1 });
+  const seen = global.__callerFrames;
+  assert.equal(await handler({ sender: page }, { caller: 'plugin:a', frame: 'f1' }), 1, 'the rest of the event as it was');
+  await handler({ sender: page }, { caller: 'plugin:a', frame: 'f1' });
+  assert.equal(seen[0].id, 'f1');
+  assert.equal(seen[1], seen[0], 'one per frame');
+  assert.equal(seen[0].isDestroyed(), false);
+  let gone = 0;
+  seen[0].once('destroyed', () => gone++);
+  host.frameClosed(page, 'f1');
+  assert.equal(gone, 1);
+  assert.equal(seen[0].isDestroyed(), true);
+  await handler({ sender: page }, { caller: 'plugin:a', frame: 'f2' });
+  seen.at(-1).once('destroyed', () => gone++);
+  page.emit('destroyed');
+  assert.equal(gone, 2, 'the Atmos page going takes its frames');
+  await handler({ sender: page }, null);
+  await handler({ sender: page }, 'plugin:a');
+  assert.deepEqual(seen.slice(-2), [null, null], 'the page itself, or a caller stamped as before: no frame');
+  // The page loading again takes its frames too; a frame already gone still
+  // says so to a listener added late; many listeners are fine.
+  const reloaded = Object.assign(new EventEmitter(), { id: 2 });
+  await handler({ sender: reloaded }, { caller: 'plugin:a', frame: 'g1' });
+  const g1 = seen.at(-1);
+  let warnings = 0;
+  const warn = () => { warnings++; };
+  process.on('warning', warn);
+  for (let i = 0; i < 12; i++) g1.once('destroyed', () => gone++);
+  reloaded.emit('did-navigate');
+  assert.equal(g1.isDestroyed(), true);
+  assert.equal(gone, 14);
+  let late = false;
+  g1.once('destroyed', () => { late = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(late, true, 'told, though it went before');
+  process.removeListener('warning', warn);
+  assert.equal(warnings, 0, 'no MaxListeners warning');
+});

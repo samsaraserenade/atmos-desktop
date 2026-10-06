@@ -1,6 +1,6 @@
 {
   "name": "atmos",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "A modular personal desktop environment.",
   "license": "GPL-3.0-only",
   "author": "hashy",
@@ -10,7 +10,7 @@
     "test:core": "node --test core/js/core/*.test.cjs",
     "test:services": "node --experimental-vm-modules --test scripts/service-core-v2-contract.test.cjs",
     "test:permissions": "node --test scripts/extension-permissions.test.cjs",
-    "test:build": "node --test scripts/after-pack.test.cjs scripts/pack-extensions.test.cjs scripts/electron-current.test.cjs",
+    "test:build": "node --test scripts/after-pack.test.cjs scripts/pack-extensions.test.cjs scripts/electron-current.test.cjs scripts/publish-release.test.cjs",
     "test:finance": "node --experimental-vm-modules --test plugins/finance/tests/*.test.cjs plugins/finance/markets/tests/*.test.cjs",
     "test:sdk": "node --test scripts/new-extension.test.cjs scripts/sdk-contract.test.mjs",
     "test:all": "node scripts/test-all.cjs",

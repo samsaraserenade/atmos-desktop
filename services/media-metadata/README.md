@@ -36,7 +36,10 @@ they take any path.
 
 ## Cover art
 
-- MP3/MP2/MP1: embedded ID3v2 APIC frame (v2.3 and v2.4), `formats/id3.cjs`.
+- MP3/MP2/MP1: embedded ID3v2 APIC frame (v2.3 and v2.4; a PIC frame in
+  v2.2, which stays v2.2), `formats/id3.cjs`. A tag it can't rewrite
+  faithfully (another version, or unsynchronised or compressed as a whole)
+  is refused and the file left alone.
 - FLAC: METADATA_BLOCK_PICTURE, `formats/flac.cjs`.
 - Anything else: a `cover.jpg` / `cover.png` sidecar next to the file.
 

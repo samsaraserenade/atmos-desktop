@@ -241,7 +241,35 @@ test('views draw new samples by appending them, and reconvert all of it for new 
   assert.match(chart, /chart\.appendMany\(appended\)/);
   assert.match(chart, /view\.appendMany\(appended\)/);
   const registry = read('src/registry.js');
-  assert.match(registry, /mergeHistory: _mergeRemoteTotalHistory/);
-  assert.match(registry, /setHistory: points => _mergeRemoteTotalHistory\(-Infinity, points\)/, 'a full reload sends only what differs too');
+  assert.match(registry, /mergeHistory: \(from, points\) => \{ if \(current\(\)\) _mergeRemoteTotalHistory\(from, points\); \}/);
+  assert.match(registry, /setHistory: points => \{ if \(current\(\)\) _mergeRemoteTotalHistory\(-Infinity, points\); \}/, 'a full reload sends only what differs too');
   assert.match(registry, /historyChange: \{ base: sinceRevision/);
+});
+
+test('after pairing another server, the section charts are its history only (R13)', () => {
+  const chart = read('src/total-chart.js');
+  const fn = name => {
+    const start = chart.indexOf(`function ${name}(`);
+    let depth = 0, i = chart.indexOf('{', chart.indexOf(')', start));
+    for (; i < chart.length; i++) { if (chart[i] === '{') depth++; else if (chart[i] === '}') { depth--; if (!depth) break; } }
+    return chart.slice(chart.lastIndexOf('\n', start) + 1, i + 1).replace(/^export /, '');
+  };
+  let remote = [];
+  let pairing = 'A';
+  const context = vm.createContext({
+    isRemotePortfolioMode: () => true, getRemoteTotalHistory: () => remote, getServerConnection: () => ({ configured: true, id: pairing }),
+    MAX_HISTORY_POINTS: 100_000, convertToGbp: v => v, convertFromGbp: v => v, sectionCoin: () => null, coinHistory: () => ({ points: [] }),
+    balanceHistoryReplaced() {}, updateBalanceDisplay() {}, replaceChartData() {},
+    indexAtOrAfter: (list, t) => { const i = list.findIndex(p => p.t >= t); return i < 0 ? list.length : i; },
+  });
+  vm.runInContext(`var totalHistory = [], legacyTotalHistory = [], remoteSections = [], sectionsPairing = null, mirrorsVps = false, history, chart = null, cashInvestedData = [];
+${fn('chartPointFromVps')}\n${fn('rememberSections')}\n${fn('portfolioSectionHistory')}\n${fn('replaceHistoryFromVps')}`, context);
+  const replaceWhole = points => { remote = points; vm.runInContext('replaceHistoryFromVps(undefined)', context); };
+  const sample = (minutes, value) => minutes.map(m => ({ t: m * 60_000, value, spot: value, perp: 0, currency: 'GBP' }));
+  replaceWhole(sample([1, 2, 3], 100));
+  replaceWhole([]); // the engine forgets A's history
+  pairing = 'B';
+  replaceWhole(sample([1.5, 2.5], 900));
+  const spot = plain(vm.runInContext("portfolioSectionHistory('spot').map(p => [p.t / 60000, p.v])", context));
+  assert.deepEqual(spot, [[1.5, 900], [2.5, 900]], "not A's points between B's");
 });

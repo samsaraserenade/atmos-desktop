@@ -114,7 +114,11 @@ class>` to `language-*`, and bodies over 64 KB shown as plain text.
 <file>` writes the page for another Chromium). The frames declare no
 network beyond names that appear as text; every Matrix request goes through
 `main.cjs`, which sends no cookies and drops spoofing headers (Cookie,
-Origin, Host, Sec-*, proxy and framing). Homeservers must be `https://`
+Origin, Host, Sec-*, proxy and framing). It holds each answer whole in
+Atmos's main process, so it bounds them: 100 MB an answer or upload, 256
+MB of answers being read at once, 16 requests at a time (the rest wait
+their turn), and 5 minutes without a byte (plus, before the answer, time
+for an upload to be sent at 64 KB/s). Homeservers must be `https://`
 (plain http only on this computer).
 
 Run the checks from this directory, after `npm ci` (the tests import

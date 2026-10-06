@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { EventEmitter } = require('events');
 const { CONTEXT_ELECTRON, normalizePermissions } = require('./extension-permissions.cjs');
 const path = require('path');
 const { normalizeDependencies } = require('./extension-dependencies.cjs');
@@ -125,6 +126,60 @@ function createExtensionHost(dependencies) {
     return registrations.get(ref);
   };
 
+  // The extension frames that called a main.cjs (R17): every call comes
+  // through the Atmos page, so event.sender is the page, which outlives
+  // them. "senderId frameId" -> { sender, emitter, destroyed, view }.
+  const callerFrames = new Map();
+  const watchedSenders = new WeakSet();
+
+  /** What a handler sees as event.callerFrame: { id, isDestroyed(), on/once/removeListener('destroyed', fn) }. */
+  function callerFrame(sender, id) {
+    const key = `${sender.id} ${id}`;
+    const known = callerFrames.get(key);
+    if (known) return known.view;
+    const entry = { sender, emitter: new EventEmitter(), destroyed: false };
+    entry.emitter.setMaxListeners(0); // one per subscription it holds, say
+    // A frame already gone still says so to a listener added late.
+    const listen = method => (name, fn) => {
+      if (!entry.destroyed) entry.emitter[method](name, fn);
+      else if (name === 'destroyed' && typeof fn === 'function') queueMicrotask(fn);
+      return entry.view;
+    };
+    entry.view = Object.freeze({
+      id,
+      isDestroyed: () => entry.destroyed,
+      on: listen('on'),
+      once: listen('once'),
+      removeListener(name, fn) { entry.emitter.removeListener(name, fn); return entry.view; },
+      off(name, fn) { entry.emitter.removeListener(name, fn); return entry.view; },
+    });
+    callerFrames.set(key, entry);
+    if (!watchedSenders.has(sender)) {
+      watchedSenders.add(sender);
+      // The page going, or loading again, takes its frames with it.
+      const closeAll = () => { for (const [other, known] of callerFrames) if (known.sender === sender) closeFrame(other, known); };
+      sender.once?.('destroyed', closeAll);
+      sender.on?.('did-navigate', closeAll);
+    }
+    return entry.view;
+  }
+
+  function closeFrame(key, entry) {
+    callerFrames.delete(key);
+    entry.destroyed = true;
+    for (const fn of entry.emitter.listeners('destroyed')) {
+      try { fn(); } catch (error) { console.error('[extensions] a frame\'s "destroyed" listener failed:', error); }
+    }
+    entry.emitter.removeAllListeners();
+  }
+
+  /** The Atmos page says one of its extension frames went. */
+  function frameClosed(sender, id) {
+    const key = `${sender?.id} ${id}`;
+    const entry = callerFrames.get(key);
+    if (entry) closeFrame(key, entry);
+  }
+
   function scopedChannel(kind, id, name) {
     if (!['plugin', 'service'].includes(kind) || !VALID_ID.test(id) || !/^[a-z0-9][a-z0-9:-]*$/.test(name)) {
       throw new Error('Invalid extension IPC channel');
@@ -162,13 +217,21 @@ function createExtensionHost(dependencies) {
         if (ipcChannels.has(channel)) throw new Error(`Extension IPC handler already registered: ${name}`);
         // Every call arrives with the extension making it ("plugin:<id>",
         // stamped by Core's frame bridge, or null for the Atmos page
-        // itself) ahead of its arguments. Another extension gets through
-        // only if this one shares the handler with it ("exports.ipc").
-        dependencies.ipcMain.handle(channel, (event, caller, ...args) => {
+        // itself) and its frame ({ caller, frame }) ahead of its arguments.
+        // Another extension gets through only if this one shares the
+        // handler with it ("exports.ipc"). The handler's event says which
+        // frame called (callerFrame, null for the page): event.sender is
+        // the page, whichever frame it was.
+        dependencies.ipcMain.handle(channel, (event, stamp, ...args) => {
+          const caller = stamp && typeof stamp === 'object' ? stamp.caller : stamp;
           const refusal = dependencies.authorizeInvoke
             ? dependencies.authorizeInvoke(event, caller ?? null, { kind, id, name })
             : null;
           if (refusal) throw new Error(refusal);
+          if (event && typeof event === 'object') {
+            const frame = stamp && typeof stamp === 'object' && typeof stamp.frame === 'string' && event.sender ? stamp.frame : null;
+            event.callerFrame = frame ? callerFrame(event.sender, frame) : null;
+          }
           return handler(event, ...args);
         });
         ipcChannels.add(channel);
@@ -334,7 +397,7 @@ function createExtensionHost(dependencies) {
     });
   }
 
-  return { activateRoot, activateEntries, registerResourceProtocol, scopedChannel, supersededServices };
+  return { activateRoot, activateEntries, registerResourceProtocol, scopedChannel, supersededServices, frameClosed };
 }
 
 module.exports = { createExtensionHost, orderExtensions, checkCompatibility, CORE_API_VERSION, ACTIVATION_TIMEOUT_MS };

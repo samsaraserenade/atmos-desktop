@@ -43,10 +43,13 @@ contextBridge.exposeInMainWorld('atmosCore', {
   endWindowResize: ()                    => ipcRenderer.send('window-resize:end'),
   openExtensionRoot: kind                => ipcRenderer.invoke('extensions:open-root', kind),
   // A framed extension's invoke(), made by Core's bridge on its behalf:
-  // `caller` ("plugin:<id>") is who asked, which the main process checks
-  // against what the target shares ("exports.ipc"). The page's own code
-  // never invokes a main.cjs handler.
-  invokeExtensionAs: (caller, kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`, String(caller), ...args),
+  // `stamp.caller` ("plugin:<id>") is who asked, which the main process
+  // checks against what the target shares ("exports.ipc"); `stamp.frame`
+  // the frame, which frameClosed() says went (a handler's
+  // event.callerFrame). The page's own code never invokes a main.cjs handler.
+  invokeExtensionAs: (stamp, kind, id, name, ...args) => ipcRenderer.invoke(`atmos-extension:${kind}:${id}:${name}`,
+    stamp && typeof stamp === 'object' ? { caller: String(stamp.caller), frame: String(stamp.frame) } : String(stamp), ...args),
+  frameClosed: frame => ipcRenderer.send('extensions:frame-closed', String(frame)),
   showExtensionNotification: (kind, id, options) => ipcRenderer.invoke('extensions:notify', kind, id, options),
   openExtensionLink: (kind, id, url, info) => ipcRenderer.invoke('extensions:open-link', kind, id, url, info),
   // { x, y, ago }: the Atmos window's last mouse-button press (Now Playing).
@@ -117,6 +120,7 @@ contextBridge.exposeInMainWorld('atmosCore', {
     addSource:     location                => ipcRenderer.invoke('extensions:add-source', location),
     removeSource:  location                => ipcRenderer.invoke('extensions:remove-source', location),
     takeDataCleanup: ()                    => ipcRenderer.invoke('extensions:take-data-cleanup'),
+    frameFailed:   (kind, id, reason)      => ipcRenderer.invoke('extensions:frame-failed', kind, id, reason),
     setup:         ()                      => ipcRenderer.invoke('extensions:setup'),
     finishSetup:   chosen                  => ipcRenderer.invoke('extensions:finish-setup', chosen),
     openAtmosDownload: ()                  => ipcRenderer.invoke('extensions:open-atmos-download'),

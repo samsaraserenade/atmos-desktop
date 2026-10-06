@@ -239,6 +239,12 @@ module.exports = async function activate(context) {
     file: path.join(userData, 'finance', 'connection.bin'),
     legacyFile: path.join(userData, 'portfolio-vps.json'),
   });
+  // Which pairing an answer came from: new on every Connect and Disconnect,
+  // so frames drop what they kept from the server before (vps:status's id,
+  // each vps:fetch answer's connection).
+  let pairings = 0;
+  const pairingId = () => `${Date.now().toString(36)}-${++pairings}`;
+  let connectionId = pairingId();
 
   const networkCache = new Map();
   const networkPending = new Map();
@@ -299,7 +305,7 @@ module.exports = async function activate(context) {
   /** { configured, address?, protected? } — never the token. */
   context.handle('vps:status', () => {
     const server = connection.get();
-    return server ? { configured: true, address: server.baseUrl, protected: server.protected } : { configured: false };
+    return server ? { configured: true, address: server.baseUrl, protected: server.protected, id: connectionId } : { configured: false };
   });
 
   /** Check a server without saving it. */
@@ -318,11 +324,13 @@ module.exports = async function activate(context) {
     const result = await probeServer(server);
     if (!result.ok) return { ...result, address: server.baseUrl };
     const saved = connection.save(server);
+    connectionId = pairingId();
     return { ...result, address: saved.baseUrl, protected: saved.protected };
   });
 
   context.handle('vps:disconnect', () => {
     connection.clear();
+    connectionId = pairingId();
     return { configured: false };
   });
 
@@ -332,6 +340,7 @@ module.exports = async function activate(context) {
     try {
       const server = connection.get();
       if (!server) return { ok: false, status: 0, body: '', configured: false, error: 'No portfolio server is set up' };
+      const asked = connectionId;
       url = requireVpsRoute(route, server.baseUrl);
       return await vpsQueue.run(async () => {
         const started = Date.now();
@@ -344,7 +353,7 @@ module.exports = async function activate(context) {
           const ms = Date.now() - started;
           // Only the path: the query names your holdings.
           if (ms >= VPS_SLOW_MS) console.warn(`[finance] the portfolio server took ${(ms / 1000).toFixed(1)} s for ${url.pathname} (${Math.round(body.length / 1024)} KB)`);
-          return { ok: response.ok, status: response.status, body };
+          return { ok: response.ok, status: response.status, body, connection: asked };
         } catch (error) {
           const reason = describeNetworkError(error);
           console.warn(`[finance] no answer from the portfolio server for ${url.pathname} after ${((Date.now() - started) / 1000).toFixed(1)} s: ${reason}`);

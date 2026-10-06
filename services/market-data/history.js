@@ -117,22 +117,37 @@ function normalizeCandle(row, intervalMs) {
   });
 }
 
-async function fetchJson(fetchImpl, url) {
+/** `promise`, or a rejection as soon as `signal` aborts (a body that stalls, say). */
+function untilAborted(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      error => { signal.removeEventListener('abort', onAbort); reject(error); },
+    );
+  });
+}
+
+async function fetchJson(fetchImpl, url, signal) {
   if (typeof fetchImpl !== 'function') throw new Error('Historical market data requires fetch support.');
-  const response = await fetchImpl(url, { headers: { accept: 'application/json' } });
+  const response = await untilAborted(fetchImpl(url, { headers: { accept: 'application/json' }, signal }), signal);
   if (!response?.ok) {
     const error = new Error(`Historical market data request failed (${response?.status || 'network error'}).`);
     if (response?.status) error.status = response.status;
     throw error;
   }
-  return response.json();
+  return untilAborted(response.json(), signal);
 }
 
 // `exact: true` refuses to fetch a shorter interval than the one asked for
 // (market-data's own backfill files candles under the interval it asked).
 // Otherwise the result's `interval`/`intervalMs` say what was fetched, and
-// `requestedInterval`/`requestedIntervalMs` what was asked for.
-async function getMarketHistory(symbol, options = {}, fetchImpl = globalThis.fetch) {
+// `requestedInterval`/`requestedIntervalMs` what was asked for. `signal`
+// ends the request, the reading of its answer included.
+async function getMarketHistory(symbol, options = {}, fetchImpl = globalThis.fetch, signal = undefined) {
   const normalizedSymbol = normalizeSymbol(symbol);
   const requestedInterval = resolveInterval(options);
   // What was asked for: a name's length, or the length given (a custom one
@@ -154,7 +169,7 @@ async function getMarketHistory(symbol, options = {}, fetchImpl = globalThis.fet
     url.searchParams.set('symbol', normalizedSymbol);
     url.searchParams.set('interval', INTERVALS[interval].bybit);
     url.searchParams.set('limit', String(limit));
-    const payload = await fetchJson(fetchImpl, url);
+    const payload = await fetchJson(fetchImpl, url, signal);
     if (Number(payload?.retCode) !== 0 || !Array.isArray(payload?.result?.list)) throw new Error(payload?.retMsg || 'Bybit returned invalid historical data.');
     rows = payload.result.list;
   } else if (exchange === 'binance') {
@@ -162,7 +177,7 @@ async function getMarketHistory(symbol, options = {}, fetchImpl = globalThis.fet
     url.searchParams.set('symbol', normalizedSymbol);
     url.searchParams.set('interval', INTERVALS[interval].binance);
     url.searchParams.set('limit', String(limit));
-    rows = await fetchJson(fetchImpl, url);
+    rows = await fetchJson(fetchImpl, url, signal);
     if (!Array.isArray(rows)) throw new Error('Binance returned invalid historical data.');
   } else if (exchange === 'coinbase') {
     // Coinbase serves 1m, 5m, 15m, 1h, 6h and 1d, at most 300 bars, newest
@@ -183,7 +198,7 @@ async function getMarketHistory(symbol, options = {}, fetchImpl = globalThis.fet
         url.searchParams.set('start', new Date(end - pageMs).toISOString());
         url.searchParams.set('end', new Date(end).toISOString());
       }
-      const payload = await fetchJson(fetchImpl, url);
+      const payload = await fetchJson(fetchImpl, url, signal);
       if (!Array.isArray(payload)) throw new Error(payload?.message || 'Coinbase returned invalid historical data.');
       for (const [time, low, high, open, close, volume] of payload) byTime.set(Number(time) * 1000, [Number(time) * 1000, open, high, low, close, volume]);
       if (!payload.length) break; // nothing older
@@ -197,7 +212,7 @@ async function getMarketHistory(symbol, options = {}, fetchImpl = globalThis.fet
     const url = new URL('https://api.kraken.com/0/public/OHLC');
     url.searchParams.set('pair', toKraken(normalizedSymbol).replace('/', '').replace(/^BTC/, 'XBT'));
     url.searchParams.set('interval', String(minutes));
-    const payload = await fetchJson(fetchImpl, url);
+    const payload = await fetchJson(fetchImpl, url, signal);
     if (payload?.error?.length) throw new Error(`Kraken: ${payload.error.join(', ')}`);
     const key = Object.keys(payload?.result || {}).find(name => name !== 'last');
     if (!key || !Array.isArray(payload.result[key])) throw new Error('Kraken returned invalid historical data.');

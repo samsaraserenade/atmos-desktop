@@ -20,13 +20,14 @@ import {
 } from './store.js';
 import {
   getAlbums, resolveFile, getFilePath, reconnectFolders, mergeCompilations, setLibrary, library,
-  onLibraryUpdate, addFolder, removeFolderByPath, rescanFolder, rescanFolders, scanForNewFolders,
+  onLibraryUpdate, addFolder, removeFolderByPath, removePickedFolder, rescanFolder, rescanFolders, scanForNewFolders,
   rescanLibrary, getLibraryStatus, invalidateAlbumsCache,
 } from './library.js';
 import { persistCover } from './cover-writer.js';
 import { createWaveformLoader } from './waveform-loader.js';
 import { restorePlayback } from './restore-playback.js';
 import { handleCommands } from './commands.js';
+import { nextIndex } from './queue.js';
 
 const audio = atmos.audio;
 
@@ -177,15 +178,9 @@ function pruneWaveformCache() {
 
 // ── Playback ────────────────────────────────────────────────────────────────
 
-function getNextIndex() {
-  if (audioState.repeatMode === 'one') return audioState.trackIdx;
-  if (audioState.shuffleOn) {
-    let next;
-    do { next = Math.floor(Math.random() * playlist.length); }
-    while (playlist.length > 1 && next === audioState.trackIdx);
-    return next;
-  }
-  return (audioState.trackIdx + 1) % playlist.length;
+/** The next song (queue.js): `ended` when the one playing ended by itself. */
+function getNextIndex({ ended = false } = {}) {
+  return nextIndex({ index: audioState.trackIdx, length: playlist.length, repeatMode: audioState.repeatMode, shuffleOn: audioState.shuffleOn, ended });
 }
 
 export async function loadTrack(index, { play = true, position = 0 } = {}) {
@@ -230,7 +225,8 @@ export function playPrev() {
 }
 
 export function playNext() {
-  return playlist.length ? loadTrack(getNextIndex()) : false;
+  const next = getNextIndex();
+  return next === null ? false : loadTrack(next);
 }
 
 /** For rev/ commands (commands.js): what's playing, and how much is queued. */
@@ -415,7 +411,12 @@ export async function start() {
   audio.onChange(value => {
     const previous = now;
     now = value;
-    if (value.type === 'ended') { void loadTrack(getNextIndex()); return; }
+    if (value.type === 'ended') {
+      // The end of the queue with repeat off: back to the first song, stopped.
+      const next = getNextIndex({ ended: true });
+      void (next === null ? loadTrack(0, { play: false }) : loadTrack(next));
+      return;
+    }
     if (value.type === 'pause' && value.currentTime > 0) {
       audioState.trackPos = value.currentTime;
       save('trackPos');
@@ -458,7 +459,7 @@ export async function start() {
     mediaPathForAlbum,
     saveCover,
     libraryStatus: getLibraryStatus,
-    addFolder, removeFolder: removeFolderByPath, rescanFolder, rescanFolders, scanForNewFolders, rescanLibrary,
+    addFolder, removeFolder: removeFolderByPath, removePickedFolder, rescanFolder, rescanFolders, scanForNewFolders, rescanLibrary,
   });
 
   await restore();

@@ -98,7 +98,7 @@ export function buildNetExposure(portfolios, { convert = value => value, maxEntr
       if (!perp && (holding?.kind === 'cash' || STABLES.has(cleanSymbol(holding.symbol)))) continue;
       const symbol = cleanSymbol(holding.symbol);
       if (!symbol) continue;
-      const exposureValue = perp && Number.isFinite(Number(meta.positionValue))
+      const exposureValue = perp && meta.positionValue != null && Number.isFinite(Number(meta.positionValue))
         ? Math.abs(Number(meta.positionValue))
         : rawValue;
       const converted = Math.max(0, Number(convert(exposureValue, holding.currency || data.currency || 'USD')) || 0);

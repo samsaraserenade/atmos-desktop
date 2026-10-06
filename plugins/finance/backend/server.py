@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.9.1"
+VERSION = "0.10.0"
 API_VERSION = 1
 PAIRING_PREFIX = "atmos-finance:"
 DEFAULT_DB = "/var/lib/atmos-portfolio/portfolio.sqlite3"
@@ -78,6 +78,10 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 def _column_names(db: sqlite3.Connection, table: str) -> set[str]:
     return {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+
+
+def _has_table(db: sqlite3.Connection, table: str) -> bool:
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is not None
 
 
 def migrate(db_path: str) -> None:
@@ -155,9 +159,11 @@ def migrate(db_path: str) -> None:
         # collectors to merge the same token held by multiple wallets. A
         # stable holding_id retains account identity for counterparty and
         # wallet-allocation views while keeping old rows intact on upgrade.
+        # Each rebuild is one transaction: stopped part-way, it never happened.
         if "holding_id" not in _column_names(db, "current_holdings"):
             db.executescript(
                 """
+                BEGIN;
                 ALTER TABLE current_holdings RENAME TO current_holdings_legacy;
                 CREATE TABLE current_holdings (
                   source_id TEXT NOT NULL, holding_id TEXT NOT NULL, symbol TEXT NOT NULL,
@@ -172,6 +178,25 @@ def migrate(db_path: str) -> None:
                 SELECT source_id,symbol || ':' || kind,symbol,kind,value,currency,updated_at_ms,quantity,price,meta
                 FROM current_holdings_legacy;
                 DROP TABLE current_holdings_legacy;
+                COMMIT;
+                """
+            )
+        # Up to 0.9.1 each statement of a rebuild was its own transaction, so
+        # one stopped part-way left the rows in *_legacy beside a new table,
+        # perhaps empty, that hid them for good. Bring them back: a source's
+        # current holdings only if it has none since, history rows unless
+        # that time of that holding is already there.
+        if _has_table(db, "current_holdings_legacy"):
+            db.executescript(
+                """
+                BEGIN;
+                INSERT INTO current_holdings
+                  (source_id,holding_id,symbol,kind,value,currency,updated_at_ms,quantity,price,meta)
+                SELECT source_id,symbol || ':' || kind,symbol,kind,value,currency,updated_at_ms,quantity,price,meta
+                FROM current_holdings_legacy
+                WHERE source_id NOT IN (SELECT source_id FROM current_holdings);
+                DROP TABLE current_holdings_legacy;
+                COMMIT;
                 """
             )
 
@@ -185,6 +210,7 @@ def migrate(db_path: str) -> None:
         if "holding_id" not in _column_names(db, "holdings_history"):
             db.executescript(
                 """
+                BEGIN;
                 ALTER TABLE holdings_history RENAME TO holdings_history_legacy;
                 CREATE TABLE holdings_history (
                   ts_ms INTEGER NOT NULL, source_id TEXT NOT NULL, holding_id TEXT NOT NULL,
@@ -198,9 +224,36 @@ def migrate(db_path: str) -> None:
                 SELECT ts_ms,source_id,symbol || ':' || kind,symbol,kind,quantity,price,value,currency,meta
                 FROM holdings_history_legacy;
                 DROP TABLE holdings_history_legacy;
+                COMMIT;
+                """
+            )
+        if _has_table(db, "holdings_history_legacy"):
+            db.executescript(
+                """
+                BEGIN;
+                INSERT OR IGNORE INTO holdings_history
+                  (ts_ms,source_id,holding_id,symbol,kind,quantity,price,value,currency,meta)
+                SELECT ts_ms,source_id,symbol || ':' || kind,symbol,kind,quantity,price,value,currency,meta
+                FROM holdings_history_legacy;
+                DROP TABLE holdings_history_legacy;
+                COMMIT;
                 """
             )
         db.execute("CREATE INDEX IF NOT EXISTS holdings_history_lookup ON holdings_history(source_id, symbol, ts_ms)")
+        # Every poll whose holdings were recorded, held or not: an empty
+        # portfolio has no holdings_history rows, so without this it can't be
+        # told from no poll. Thinned with holdings_history. On upgrade, the
+        # polls before are the times holdings_history has (made under the
+        # write lock, so a second start at once finds it made, not fails).
+        if not _has_table(db, "holdings_polls"):
+            db.executescript(
+                """
+                BEGIN IMMEDIATE;
+                CREATE TABLE IF NOT EXISTS holdings_polls (ts_ms INTEGER PRIMARY KEY);
+                INSERT OR IGNORE INTO holdings_polls SELECT DISTINCT ts_ms FROM holdings_history;
+                COMMIT;
+                """
+            )
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS devices (
@@ -260,8 +313,17 @@ def _clean_holding_meta(raw_meta: object) -> str | None:
     return encoded[:MAX_HOLDING_META_JSON_CHARS] if len(encoded) <= MAX_HOLDING_META_JSON_CHARS else None
 
 
+# A sample dated further ahead than this is refused: it would stay the
+# newest, and its holdings the current ones (ingest), until then. The
+# collector stamps samples with this computer's clock.
+MAX_SAMPLE_AHEAD_MS = 5 * 60_000
+
+
 def clean_frame(raw: dict) -> dict:
-    ts_ms = int(raw.get("ts_ms") or int(time.time() * 1000))
+    now_ms = int(time.time() * 1000)
+    ts_ms = int(raw.get("ts_ms") or now_ms)
+    if ts_ms > now_ms + MAX_SAMPLE_AHEAD_MS:
+        raise ValueError("the sample is dated in the future")
     currency = str(raw.get("currency") or "USD")[:8]
     sources = []
     for item in raw.get("sources") or []:
@@ -344,11 +406,29 @@ def _is_persistable_holding(holding: dict) -> bool:
 def ingest(db_path: str, raw: dict) -> dict:
     frame = clean_frame(raw)
     with connect(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        # Only the newest sample is the current state: an older one arriving
+        # late (an import, the clock going back) is history only, or the
+        # current holdings would be older than the total latest() reports.
+        newest = db.execute("SELECT MAX(ts_ms) FROM portfolio_samples").fetchone()[0]
+        is_current = newest is None or frame["ts_ms"] >= newest
         db.execute(
             "INSERT OR REPLACE INTO portfolio_samples (ts_ms,total,invested,cash,currency,error_count,spot,perp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (frame["ts_ms"], frame["total"], frame["invested"], frame["cash"],
              frame["currency"], frame["error_count"], frame["spot"], frame["perp"]),
         )
+        # A sample replacing one at the same time replaces its holdings too.
+        db.execute("DELETE FROM holdings_history WHERE ts_ms = ?", (frame["ts_ms"],))
+        db.execute("INSERT OR IGNORE INTO holdings_polls (ts_ms) VALUES (?)", (frame["ts_ms"],))
+        for source in frame["sources"]:
+            db.executemany(
+                "INSERT OR REPLACE INTO holdings_history (ts_ms,source_id,holding_id,symbol,kind,quantity,price,value,currency,meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(frame["ts_ms"], source["id"], h["id"], h["symbol"], h["kind"],
+                 h["quantity"], h["price"], h["value"], frame["currency"], h["meta"])
+                 for h in source["holdings"] if _is_persistable_holding(h)],
+            )
+        if not is_current:
+            return frame
         live_ids = [source["id"] for source in frame["sources"]]
         if live_ids:
             placeholders = ",".join("?" for _ in live_ids)
@@ -368,12 +448,6 @@ def ingest(db_path: str, raw: dict) -> dict:
                 "INSERT INTO current_holdings (source_id,holding_id,symbol,kind,value,currency,updated_at_ms,quantity,price,meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(source["id"], h["id"], h["symbol"], h["kind"], h["value"], frame["currency"],
                   frame["ts_ms"], h["quantity"], h["price"], h["meta"])
-                 for h in source["holdings"] if _is_persistable_holding(h)],
-            )
-            db.executemany(
-                "INSERT OR REPLACE INTO holdings_history (ts_ms,source_id,holding_id,symbol,kind,quantity,price,value,currency,meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [(frame["ts_ms"], source["id"], h["id"], h["symbol"], h["kind"],
-                 h["quantity"], h["price"], h["value"], frame["currency"], h["meta"])
                  for h in source["holdings"] if _is_persistable_holding(h)],
             )
     return frame
@@ -400,6 +474,10 @@ def _holding_row(row: sqlite3.Row) -> dict:
 
 def latest(db_path: str) -> dict:
     with connect(db_path) as db:
+        # One read transaction: a collection committing between the three
+        # reads would otherwise mix two snapshots (a total with the next
+        # poll's holdings).
+        db.execute("BEGIN")
         sample = db.execute("SELECT * FROM portfolio_samples ORDER BY ts_ms DESC LIMIT 1").fetchone()
         sources = [dict(row) for row in db.execute("SELECT * FROM source_status ORDER BY value DESC")]
         holdings = [_holding_row(row) for row in db.execute("SELECT * FROM current_holdings ORDER BY value DESC")]
@@ -516,6 +594,19 @@ def history(db_path: str, start_ms: int, end_ms: int, resolution: str,
 def holdings_history(db_path: str, start_ms: int, end_ms: int,
                       source_id: str | None = None, symbol: str | None = None) -> list[dict]:
     """Point-in-time holdings: what was held, in what quantity, at what price."""
+    return holdings_history_page(db_path, start_ms, end_ms, source_id, symbol)[0]
+
+
+def holdings_history_page(db_path: str, start_ms: int, end_ms: int,
+                          source_id: str | None = None, symbol: str | None = None,
+                          newest_first: bool = False) -> tuple[list[dict], list[int], bool]:
+    """holdings_history, at most MAX_HOLDINGS_HISTORY_ROWS rows from the
+    oldest poll on (or the newest, newest_first); the polls recorded
+    (holdings_polls) that the page covers, holdings or not, so a poll where
+    nothing was held shows as one; and whether more were left out. Only whole polls: one the
+    limit cut is left for the next page, so the last poll sent is never
+    taken for a smaller holding (and a poll bigger than the limit on its
+    own isn't sent at all)."""
     clauses = ["ts_ms BETWEEN ? AND ?"]
     params: list[object] = [start_ms, end_ms]
     if source_id:
@@ -524,14 +615,31 @@ def holdings_history(db_path: str, start_ms: int, end_ms: int,
     if symbol:
         clauses.append("symbol = ?")
         params.append(symbol)
-    params.append(MAX_HOLDINGS_HISTORY_ROWS)
+    params.append(MAX_HOLDINGS_HISTORY_ROWS + 1)
+    order = "DESC" if newest_first else "ASC"
     with connect(db_path) as db:
+        db.execute("BEGIN")  # the rows and the polls from one state
         rows = db.execute(
             f"SELECT * FROM holdings_history WHERE {' AND '.join(clauses)} "
-            "ORDER BY ts_ms, source_id, symbol LIMIT ?",
+            f"ORDER BY ts_ms {order}, source_id, symbol LIMIT ?",
             params,
         ).fetchall()
-    return [_holding_row(row) for row in rows]
+        polls = [row[0] for row in db.execute(
+            f"SELECT ts_ms FROM holdings_polls WHERE ts_ms BETWEEN ? AND ? ORDER BY ts_ms {order} LIMIT ?",
+            (start_ms, end_ms, MAX_HOLDINGS_HISTORY_ROWS + 1),
+        )]
+    # Where the page ends (the first poll not sent whole), if it does.
+    edges = []
+    if len(rows) > MAX_HOLDINGS_HISTORY_ROWS:
+        edges.append(rows[MAX_HOLDINGS_HISTORY_ROWS - 1]["ts_ms"])
+    if len(polls) > MAX_HOLDINGS_HISTORY_ROWS:
+        edges.append(polls[MAX_HOLDINGS_HISTORY_ROWS])
+    if not edges:
+        return [_holding_row(row) for row in rows], polls, False
+    edge = max(edges) if newest_first else min(edges)
+    inside = (lambda ts: ts > edge) if newest_first else (lambda ts: ts < edge)
+    return ([_holding_row(row) for row in rows if inside(row["ts_ms"])],
+            [ts for ts in polls if inside(ts)], True)
 
 
 def db_stats(db_path: str) -> dict:
@@ -579,18 +687,12 @@ def _thin(db: sqlite3.Connection, start_ms: int, end_ms: int, bucket_ms: int) ->
 
     The kept timestamps are the ones history() selects for that resolution
     (the newest portfolio_samples row per bucket), so scope filters still
-    find the holdings behind every point Finance draws."""
-    cursor = db.execute(
-        """
-        DELETE FROM holdings_history
-        WHERE ts_ms >= ? AND ts_ms < ?
-          AND ts_ms NOT IN (
-            SELECT MAX(ts_ms) FROM portfolio_samples
-            WHERE ts_ms >= ? AND ts_ms < ? GROUP BY ts_ms / ?
-          )
-        """,
-        (start_ms, end_ms, start_ms, end_ms, bucket_ms),
-    )
+    find the holdings behind every point Finance draws. The polls recorded
+    (holdings_polls) are thinned the same way."""
+    kept = "SELECT MAX(ts_ms) FROM portfolio_samples WHERE ts_ms >= ? AND ts_ms < ? GROUP BY ts_ms / ?"
+    params = (start_ms, end_ms, start_ms, end_ms, bucket_ms)
+    cursor = db.execute(f"DELETE FROM holdings_history WHERE ts_ms >= ? AND ts_ms < ? AND ts_ms NOT IN ({kept})", params)
+    db.execute(f"DELETE FROM holdings_polls WHERE ts_ms >= ? AND ts_ms < ? AND ts_ms NOT IN ({kept})", params)
     return cursor.rowcount
 
 
@@ -606,7 +708,8 @@ def prune(db_path: str, now_ms: int | None = None, settings: dict | None = None,
     raw_cutoff = ((now_ms - settings["rawDays"] * DAY_MS) // DAY_MS) * DAY_MS
     hourly_cutoff = ((now_ms - settings["hourlyDays"] * DAY_MS) // DAY_MS) * DAY_MS
     with connect(db_path) as db:
-        oldest = db.execute("SELECT MIN(ts_ms) FROM holdings_history").fetchone()[0]
+        oldest = db.execute("SELECT MIN(ts) FROM (SELECT MIN(ts_ms) AS ts FROM holdings_history "
+                            "UNION ALL SELECT MIN(ts_ms) FROM holdings_polls)").fetchone()[0]
     if oldest is None or oldest >= raw_cutoff:
         return result
     day = (oldest // DAY_MS) * DAY_MS
@@ -885,10 +988,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             end_ms = _millis(query, "to", now_ms)
             source_id = (query.get("source", [None])[0]) or None
             symbol = (query.get("symbol", [None])[0]) or None
-            points = holdings_history(self.server.db_path, start_ms, end_ms, source_id, symbol)
+            # order=desc: the newest polls first (a snapshot before a time).
+            newest_first = query.get("order", ["asc"])[0] == "desc"
+            points, polls, truncated = holdings_history_page(self.server.db_path, start_ms, end_ms, source_id, symbol, newest_first)
             self.send_json(HTTPStatus.OK, {
                 "points": points,
-                "truncated": len(points) >= MAX_HOLDINGS_HISTORY_ROWS,
+                # Every poll the page covers: one with no points held nothing.
+                "polls": polls,
+                # Only whole polls; more were left out: ask again past the last
+                # poll listed (polls; points can end before it, in empty polls).
+                "truncated": truncated,
+                "order": "desc" if newest_first else "asc",
             })
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})

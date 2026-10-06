@@ -12,7 +12,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { fetchHoldingsHistory } from './registry.js';
+import { fetchHoldingsHistory, fetchHoldingsPage, getServerConnection } from './registry.js';
 
 let _cache = null;   // { from, to, sortedTs: number[], byTs: Map<number, Array<row>> }
 let _pending = null; // { from, to, promise }
@@ -79,6 +79,7 @@ const MINUTE_MS = 60_000;
 const SNAPSHOT_WINDOWS_MS = [5 * MINUTE_MS, 60 * MINUTE_MS, 6 * 60 * MINUTE_MS, 48 * 60 * MINUTE_MS];
 const SNAPSHOT_CACHE_MAX = 120;
 const _snapshots = new Map(); // key -> Promise<{ ts, holdings } | null>
+let _snapshotsConnection = null; // the pairing (main.cjs's id) they came from
 
 /** The windows to try for up to `span`, narrowest first (the last one `span` itself). */
 export function snapshotWindows(span) {
@@ -87,25 +88,70 @@ export function snapshotWindows(span) {
   return [...windows, span];
 }
 
+/** A fetch's answer as { points, polls, truncated, order } (a plain array: all of it, oldest first). */
+function asPage(answer) {
+  return Array.isArray(answer) ? { points: answer, polls: null, truncated: false, order: 'asc' } : answer;
+}
+
+/**
+ * A page's rows by poll. A poll the server names (`polls`) with no rows held
+ * nothing: an empty snapshot, not a gap to look past. A server from 0.9.1 or
+ * before names none.
+ */
+function bucketPage(page) {
+  const { byTs, sortedTs } = bucketByTimestamp(page.points);
+  if (!Array.isArray(page.polls)) return { byTs, sortedTs };
+  for (const value of page.polls) {
+    const ts = Number(value);
+    if (Number.isFinite(ts) && !byTs.has(ts)) byTs.set(ts, []);
+  }
+  return { byTs, sortedTs: [...byTs.keys()].sort((a, b) => a - b) };
+}
+
 /**
  * The holdings at the poll nearest `at`: the last one at or before it, no
  * more than `before` earlier; failing that, the first one after it, no more
  * than `after` later. null when there's none that close. Answers are kept
- * (a past poll doesn't change), so asking again costs nothing.
+ * (a past poll doesn't change), so asking again costs nothing: for the
+ * server paired now only. Another pairing drops them, and an answer for a
+ * server no longer paired (or from one this frame hasn't heard of yet) is
+ * neither kept nor given: null.
+ *
+ * Looking back, the newest polls are asked for first (order=desc): a window
+ * holding more rows than the server sends would otherwise come back as its
+ * oldest polls. A server that ignores that (0.9.1 or before) and cuts the
+ * answer gives no snapshot, rather than an older or cut one.
  *
  * @param {number} at
  * @param {{before?: number, after?: number, fetch?: Function}} options
  */
-export function loadSnapshotNear(at, { before = 48 * 60 * MINUTE_MS, after = 0, fetch = fetchHoldingsHistory } = {}) {
+export function loadSnapshotNear(at, { before = 48 * 60 * MINUTE_MS, after = 0, fetch = fetchHoldingsPage } = {}) {
+  const connection = getServerConnection()?.id ?? null;
+  if (connection !== _snapshotsConnection) {
+    _snapshots.clear();
+    _snapshotsConnection = connection;
+  }
   const key = `${at}|${before}|${after}`;
   if (_snapshots.has(key)) return _snapshots.get(key);
+  // Each answer: still for the server this lookup is for?
+  const ask = async range => {
+    const page = asPage(await fetch(range));
+    const answered = page.connection ?? connection;
+    if (answered === connection && (getServerConnection()?.id ?? null) === connection) return page;
+    if (_snapshots.get(key) === promise) _snapshots.delete(key);
+    return null;
+  };
   const promise = (async () => {
     for (const window of snapshotWindows(before)) {
-      const { byTs, sortedTs } = bucketByTimestamp(await fetch({ from: at - window, to: at }));
+      const page = await ask({ from: at - window, to: at, order: 'desc' });
+      if (!page || (page.truncated && page.order !== 'desc')) return null;
+      const { byTs, sortedTs } = bucketPage(page);
       if (sortedTs.length) { const ts = sortedTs.at(-1); return { ts, holdings: byTs.get(ts) }; }
     }
     for (const window of snapshotWindows(after)) {
-      const { byTs, sortedTs } = bucketByTimestamp(await fetch({ from: at, to: at + window }));
+      const page = await ask({ from: at, to: at + window });
+      if (!page) return null;
+      const { byTs, sortedTs } = bucketPage(page);
       if (sortedTs.length) { const ts = sortedTs[0]; return { ts, holdings: byTs.get(ts) }; }
     }
     return null;

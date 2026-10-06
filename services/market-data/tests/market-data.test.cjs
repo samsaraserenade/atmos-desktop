@@ -85,6 +85,12 @@ test('candle engine computes OHLC, side volume and delta', () => {
   const next = candles.ingest({ symbol: 'BTCUSDT', price: 95, quantity: 1, side: 'buy', exchange: 'binance', timestamp: 61_000 });
   assert.equal(next.closed.length, 1);
   assert.equal(next.closed[0].close, 90);
+  // R49: the first candle since watching began is seen only in part; the
+  // next from its start; a dropped feed makes what's forming partial.
+  assert.equal(next.closed[0].partial, true);
+  assert.equal(candles.get('BTCUSDT', 60_000, 'binance').partial, undefined);
+  candles.markPartial('binance');
+  assert.equal(candles.get('BTCUSDT', 60_000, 'binance').partial, true);
 });
 
 test('market state produces scope-aware, versioned snapshots with freshness', () => {
@@ -365,4 +371,185 @@ test('a frame\'s subscription: unsubscribing drops its destroyed listener, a clo
     shutdown();
     globalThis.WebSocket = savedWebSocket;
   }
+});
+
+test('R17: a frame that goes ends its own subscriptions, not other frames\' (their calls all come through the Atmos page)', async () => {
+  const { EventEmitter } = require('node:events');
+  const handlers = new Map();
+  let shutdown;
+  const savedWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = undefined;
+  await activate({
+    root,
+    app: { once: (_name, fn) => { shutdown = fn; } },
+    handle: (name, handler) => handlers.set(name, handler),
+    provide() {},
+    send() {},
+  });
+  try {
+    const page = Object.assign(new EventEmitter(), { id: 3, isDestroyed: () => false });
+    const frame = id => Object.assign(new EventEmitter(), { id, isDestroyed: () => false });
+    const one = frame('f1');
+    const two = frame('f2');
+    const call = (name, callerFrame, ...args) => handlers.get(name)({ sender: page, callerFrame }, ...args);
+    await call('subscribe', one, { symbol: 'BTCUSDT', subscriptionId: 'chart-1' });
+    await call('subscribe', two, { symbol: 'BTCUSDT', subscriptionId: 'chart-2' });
+    assert.equal(page.listenerCount('destroyed'), 0, 'watched through the frame, not the page');
+    one.emit('destroyed');
+    assert.equal(await call('unsubscribe', one, 'chart-1'), false, 'the closed frame\'s is gone');
+    assert.equal(await call('unsubscribe', two, 'chart-2'), true, 'the other frame\'s stays');
+  } finally {
+    shutdown();
+    globalThis.WebSocket = savedWebSocket;
+  }
+});
+
+test('R18: a history provider whose answer stalls gives way to the next, and closing stops it', { timeout: 5_000 }, async t => {
+  const { MarketDataService } = activate;
+  const asked = [];
+  const stall = () => new Promise(() => {});
+  const fetchImpl = async url => {
+    const host = new URL(String(url)).hostname;
+    asked.push(host);
+    // Binance answers, then never sends its body; Bybit answers in full.
+    if (host.includes('binance')) return { ok: true, status: 200, json: stall };
+    return { ok: true, status: 200, json: async () => ({ retCode: 0, result: { list: [[String(Date.now() - 3_600_000), '1', '2', '0.5', '1.5', '10']] } }) };
+  };
+  const warned = [];
+  const service = new MarketDataService({ WebSocketImpl: undefined, fetchImpl, logger: { warn: (...args) => warned.push(args.join(' ')), error() {}, log() {} }, historyTimeoutMs: 50 });
+  const awake = setInterval(() => {}, 1_000); // the service's timers don't keep a process up
+  t.after(() => { clearInterval(awake); service.close(); }); // even if the test times out
+  try {
+    const started = Date.now();
+    const history = await service.getHistory('BTCUSDT', { interval: '1h', limit: 2 });
+    assert.equal(history.exchange, 'bybit');
+    assert.ok(Date.now() - started < 2_000, 'within the deadline, not waiting on Binance');
+    assert.deepEqual(asked, ['fapi.binance.com', 'api.bybit.com']);
+    // Shutting down ends a request that's still waiting.
+    const waiting = service.getHistory('ETHUSDT', { exchange: 'binance', interval: '1h', limit: 2 });
+    const settled = waiting.then(() => 'answered', error => error.message);
+    // And one going through the exchanges in turn: none tried after closing.
+    const falling = service.getHistory('SOLUSDT', { interval: '1h', limit: 2 }).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const askedBefore = asked.length;
+    warned.length = 0;
+    service.close();
+    assert.match(await Promise.race([settled, new Promise(resolve => setTimeout(() => resolve('still waiting'), 30))]), /stopped/);
+    await falling;
+    assert.equal(asked.length, askedBefore, 'no exchange asked after closing');
+    assert.equal(warned.filter(line => /trying the next/.test(line)).length, 0);
+  } finally {
+    clearInterval(awake);
+    service.close();
+  }
+});
+
+test('R48: history holds only the candles before the current one (exchanges send the forming one too)', () => {
+  const now = 150_000;
+  const state = new MarketState({ now: () => now });
+  const bar = (start, close) => ({ symbol: 'BTCUSDT', exchange: 'kraken', interval: '1m', intervalMs: 60_000, start, end: start + 60_000, open: 1, high: 2, low: 0.5, close, volume: 10, tradeCount: 0, buyVolume: 0, sellVolume: 0, delta: 0, closed: true });
+  // Kraken's answer ends with the candle still forming (120_000 to 180_000).
+  state.seedCandleHistory('BTCUSDT', 'kraken', 60_000, [bar(0, 1), bar(60_000, 2), bar(120_000, 3)]);
+  let candle = state.getSnapshot('BTCUSDT', { exchanges: ['kraken'] }).candlesByExchange.kraken['1m'];
+  assert.equal(candle.start, 60_000, 'the last finished candle, not the forming one taken for finished');
+  const forming = { ...bar(120_000, 4), firstTradeAt: 130_000, lastTradeAt: 130_000, tradeCount: 1, volume: 1, closed: false };
+  state.commitTrade({ symbol: 'BTCUSDT', exchange: 'kraken', price: 4, quantity: 1, side: 'buy', timestamp: 130_000 }, [forming], []);
+  candle = state.getSnapshot('BTCUSDT', { exchanges: ['kraken'] }).candlesByExchange.kraken['1m'];
+  assert.deepEqual([...candle.history, candle].map(item => item.start), [0, 60_000, 120_000], 'each time once');
+});
+
+test('R49: a candle seen from partway through its period becomes the exchange\'s once it closes', { timeout: 5_000 }, async () => {
+  const minute = 60_000;
+  const base = Math.floor(Date.now() / minute) * minute - 5 * minute;
+  const asked = [];
+  const fetchImpl = async url => {
+    asked.push(String(url));
+    // The exchange's candle for `base`, all of it; and the next, as seen here.
+    return { ok: true, status: 200, json: async () => [[base, '90', '200', '50', '100', '100'], [base + minute, '101', '103', '99', '102', '3']] };
+  };
+  const service = new MarketDataService({ WebSocketImpl: undefined, fetchImpl, logger: { warn() {}, error() {}, log() {} }, candleIntervals: [minute], reconcileDelayMs: 1 });
+  const awake = setInterval(() => {}, 1_000);
+  try {
+    let id = 0;
+    const trade = (at, price, quantity = 1) => service.ingest({ type: 'trade', data: { symbol: 'BTCUSDT', exchange: 'binance', price: String(price), quantity: String(quantity), side: 'buy', timestamp: String(at), tradeId: ++id } });
+    trade(base + 50_000, 100);           // watching began 50 s into the candle
+    trade(base + minute + 1_000, 101);   // closes it; this one is seen from its start
+    trade(base + minute + 30_000, 103, 2);
+    trade(base + 2 * minute + 1_000, 102); // closes that one too
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const candle = service.getSnapshot('BTCUSDT', { exchanges: ['binance'] }).candlesByExchange.binance['1m'];
+    const at = start => candle.history.find(item => item.start === start);
+    assert.deepEqual([at(base).volume, at(base).high, at(base).low], [100, 200, 50], "the exchange's candle, not the 50 s of it seen here");
+    assert.equal(at(base + minute).volume, 3, 'one seen whole is kept as built');
+    assert.equal(asked.length, 1, 'asked once, for the one seen in part');
+  } finally {
+    clearInterval(awake);
+    service.close();
+  }
+});
+
+test("R17: one page's frames can't share a subscription id (events are told apart by it)", async () => {
+  const { EventEmitter } = require('node:events');
+  const handlers = new Map();
+  let shutdown;
+  const savedWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = undefined;
+  await activate({ root, app: { once: (_name, fn) => { shutdown = fn; } }, handle: (name, handler) => handlers.set(name, handler), provide() {}, send() {} });
+  try {
+    const page = Object.assign(new EventEmitter(), { id: 4, isDestroyed: () => false });
+    const frame = id => Object.assign(new EventEmitter(), { id, isDestroyed: () => false });
+    const one = frame('f1');
+    const two = frame('f2');
+    const call = (name, callerFrame, ...args) => handlers.get(name)({ sender: page, callerFrame }, ...args);
+    await call('subscribe', one, { symbol: 'BTCUSDT', subscriptionId: 'chart' });
+    await assert.rejects(async () => call('subscribe', two, { symbol: 'ETHUSDT', subscriptionId: 'chart' }), /already subscribed/);
+    one.emit('destroyed');
+    await call('subscribe', two, { symbol: 'ETHUSDT', subscriptionId: 'chart' }); // free again
+    assert.equal(await call('unsubscribe', two, 'chart'), true);
+  } finally {
+    shutdown();
+    globalThis.WebSocket = savedWebSocket;
+  }
+});
+
+test('R48: a candle closing after newer ones were filled in takes its own place; a clock a little ahead still sees the forming one', () => {
+  let now = 400_000;
+  const state = new MarketState({ now: () => now });
+  const bar = (start, close, extra = {}) => ({ symbol: 'BTCUSDT', exchange: 'binance', interval: '1m', intervalMs: 60_000, start, end: start + 60_000, open: 1, high: 2, low: 0.5, close, volume: 10, tradeCount: 0, buyVolume: 0, sellVolume: 0, delta: 0, closed: true, ...extra });
+  // A quiet pair: history filled in up to 300_000 while 120_000 was still forming here.
+  state.seedCandleHistory('BTCUSDT', 'binance', 60_000, [bar(60_000, 1), bar(180_000, 3), bar(240_000, 4)]);
+  state.commitTrade({ symbol: 'BTCUSDT', exchange: 'binance', price: 2, quantity: 1, side: 'buy', timestamp: 345_000 }, [bar(300_000, 5, { closed: false })], [bar(120_000, 2, { volume: 7 })]);
+  const candle = state.getSnapshot('BTCUSDT', { exchanges: ['binance'] }).candlesByExchange.binance['1m'];
+  assert.deepEqual([...candle.history, candle].map(item => item.start), [60_000, 120_000, 180_000, 240_000, 300_000], 'each time once, in order');
+  // Exchange candle 360_000-420_000 is still forming; this clock is 3 s ahead.
+  now = 423_000;
+  state.seedCandleHistory('BTCUSDT', 'binance', 60_000, [bar(360_000, 6)]);
+  assert.equal(state.getSnapshot('BTCUSDT', { exchanges: ['binance'] }).candlesByExchange.binance['1m'].history.some(item => item.start === 360_000), false);
+});
+
+test('R49: a candle closed long after it began is still asked for, a restarted feed is a gap, and a failed ask is tried again', { timeout: 5_000 }, async t => {
+  const minute = 60_000;
+  const base = Math.floor(Date.now() / minute) * minute - 10 * minute;
+  const asked = [];
+  let fail = 1;
+  const fetchImpl = async url => {
+    asked.push(new URL(String(url)));
+    if (fail-- > 0) return { ok: false, status: 503, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => [[base, '90', '200', '50', '100', '100']] };
+  };
+  const service = new MarketDataService({ WebSocketImpl: undefined, fetchImpl, logger: { warn() {}, error() {}, log() {} }, candleIntervals: [minute], reconcileDelayMs: 1 });
+  const awake = setInterval(() => {}, 1_000);
+  t.after(() => { clearInterval(awake); service.close(); });
+  let id = 0;
+  const trade = (at, price) => service.ingest({ type: 'trade', data: { symbol: 'BTCUSDT', exchange: 'binance', price: String(price), quantity: '1', side: 'buy', timestamp: String(at), tradeId: ++id } });
+  trade(base + 50_000, 100);
+  trade(base + 8 * minute, 101); // the laptop slept: it closes 8 minutes on
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.ok(asked.length >= 2, 'asked again after a failure');
+  assert.ok(Number(asked.at(-1).searchParams.get('limit')) >= 10, 'far enough back to reach it');
+  const history = service.getSnapshot('BTCUSDT', { exchanges: ['binance'] }).candlesByExchange.binance['1m'].history;
+  assert.equal(history.find(item => item.start === base).volume, 100);
+  // The socket restarting (a subscription changed): what's forming missed trades.
+  service.websockets.emit('status', { exchange: 'binance', status: 'connecting' });
+  assert.equal(service.candleEngine.get('BTCUSDT', minute, 'binance').partial, true);
 });

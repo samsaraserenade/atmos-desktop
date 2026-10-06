@@ -79,12 +79,42 @@ function _pathKey(value) {
 function _loadElectronFolders() {
   if (!Array.isArray(audioState.electronFolders)) return [];
   const seen = new Set();
-  return audioState.electronFolders.filter(folder => {
+  const folders = audioState.electronFolders.filter(folder => {
     const key = _pathKey(folder?.path);
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
+  }).map(folder => ({ ...folder }));
+  // Saved before names were kept apart: a later folder with a name taken
+  // gets its own, one no other folder has (its songs come back with its
+  // next scan). reconnectFolders saves it.
+  const names = new Set(folders.map(folder => folder.name));
+  const used = new Set();
+  for (const folder of folders) {
+    if (used.has(folder.name)) {
+      folder.name = _freeName(folder.name, names);
+      names.add(folder.name);
+    }
+    used.add(folder.name);
+  }
+  return folders;
+}
+
+/**
+ * A folder's name in the library is the start of its songs' ids
+ * ("<name>/<file>"), so no two folders may share one: two music folders
+ * each with an "Album" folder are "Album" and "Album (2)".
+ */
+function _freeName(base, taken) {
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base} (${n})`)) n += 1;
+  return `${base} (${n})`;
+}
+
+/** Whether `key` is a song of the folder `name`: directly inside it, not a folder within. */
+function _inFolder(key, name) {
+  return key.startsWith(name + '/') && !key.slice(name.length + 1).includes('/');
 }
 
 // The folders you picked (each entry's rootPath; older entries without one
@@ -204,13 +234,36 @@ async function discoverLeafFolders(rootPath) {
  * layout, so recursively walking each one would import every child file twice.
  */
 async function _scanElectronFolder(folderPath, folderName) {
+  const entries = await _listFolder(folderPath, folderName);
+  _useFiles(entries);
+  return entries;
+}
+
+/** A folder's songs as { key, filePath }, read from disk; nothing kept yet. */
+async function _listFolder(folderPath, folderName) {
   const filePaths = await audioFs.listFiles(folderPath, AUDIO_EXTENSIONS);
   return filePaths.map(fp => {
     const rel = fp.slice(folderPath.length).replace(/^[/\\]/, '').replace(/\\/g, '/');
-    const key = folderName + '/' + rel;
-    _electronFiles.set(key, fp);
-    return { key, filePath: fp };
+    return { key: folderName + '/' + rel, filePath: fp };
   });
+}
+
+/** Keep these songs' paths for playback. */
+function _useFiles(entries) {
+  for (const { key, filePath } of entries) _electronFiles.set(key, filePath);
+}
+
+/** Drop the folders' songs from the albums (an album left empty goes) and from the paths kept. */
+function _dropFolders(names) {
+  Object.keys(library.albums).forEach(k => {
+    const alb = library.albums[k];
+    alb.tracks = alb.tracks.filter(t => !names.some(name => _inFolder(t.key, name)));
+    if (!alb.tracks.length) delete library.albums[k];
+  });
+  invalidateAlbumsCache();
+  for (const key of _electronFiles.keys()) {
+    if (names.some(name => _inFolder(key, name))) _electronFiles.delete(key);
+  }
 }
 
 // ── Metadata extraction ───────────────────────────────────────────────────────
@@ -272,7 +325,12 @@ async function batchProcess(items, fn, onProgress) {
   }
 }
 
-async function buildFromFiles(fileEntries) {
+/**
+ * Read the files' tags and add their albums to the library. `replace`, if
+ * given, runs just before they're added: a rescan drops what it replaces
+ * only once the new set is read.
+ */
+async function buildFromFiles(fileEntries, { replace } = {}) {
   // A physical file must produce exactly one metadata record, even if stale
   // folder registrations or differently-cased Windows paths overlap.
   const uniqueByPath = new Map();
@@ -340,6 +398,7 @@ async function buildFromFiles(fileEntries) {
   Object.values(albumMap).forEach(a => a.tracks.sort(compareTracks));
 
   mergeCompilations(albumMap);
+  replace?.();
   Object.assign(library.albums, albumMap);
   invalidateAlbumsCache();
   setLibStatus(`✓ ${total} track${total !== 1 ? 's' : ''} imported`);
@@ -371,12 +430,13 @@ function _registerFolderMeta(folderPath, folderName, root, rootPath) {
       existing.root     = root;
       existing.rootPath = rootPath;
     }
-    return false;
+    return null;
   }
-  _electronFolders.push({ name: folderName, path: folderPath, root, rootPath });
-  if (!library.folders.find(f => f.name === folderName))
-    library.folders.push({ name: folderName });
-  return true;
+  const name = _freeName(folderName, new Set(_electronFolders.map(f => f.name)));
+  _electronFolders.push({ name, path: folderPath, root, rootPath });
+  if (!library.folders.find(f => f.name === name))
+    library.folders.push({ name });
+  return { path: folderPath, name };
 }
 
 /**
@@ -395,7 +455,8 @@ function _registerFolderMeta(folderPath, folderName, root, rootPath) {
 async function _discoverNewLeaves(rootPath, rootLabel) {
   const newTargets = [];
   for (const t of await discoverLeafFolders(rootPath)) {
-    if (_registerFolderMeta(t.path, t.name, rootLabel, rootPath)) newTargets.push(t);
+    const registered = _registerFolderMeta(t.path, t.name, rootLabel, rootPath);
+    if (registered) newTargets.push(registered);
   }
   return newTargets;
 }
@@ -428,7 +489,8 @@ export async function addFolder() {
   const newTargets = [];
   let alreadyPresent = 0;
   for (const t of targets) {
-    if (_registerFolderMeta(t.path, t.name, rootLabel, folderPath)) newTargets.push(t);
+    const registered = _registerFolderMeta(t.path, t.name, rootLabel, folderPath);
+    if (registered) newTargets.push(registered);
     else alreadyPresent++;
   }
 
@@ -468,11 +530,14 @@ export async function removeFolder(name) {
 export async function removeFolderByPath(name, folderPath) {
   const targetPathKey = _pathKey(folderPath);
   if (!targetPathKey) return;
+  // The folder's name as the library has it, not as the caller had it
+  // (a name from before it changed is another folder's now).
+  name = _electronFolders.find(f => _pathKey(f.path) === targetPathKey)?.name ?? name;
 
   // Remove tracks belonging to this folder from the album map
   Object.keys(library.albums).forEach(k => {
     const alb = library.albums[k];
-    alb.tracks = alb.tracks.filter(t => !t.key.startsWith(name + '/'));
+    alb.tracks = alb.tracks.filter(t => !_inFolder(t.key, name));
     if (!alb.tracks.length) delete library.albums[k];
   });
   invalidateAlbumsCache();
@@ -481,11 +546,30 @@ export async function removeFolderByPath(name, folderPath) {
   _electronFolders = _electronFolders.filter(f => _pathKey(f.path) !== targetPathKey);
   _saveElectronFolders();
   for (const key of _electronFiles.keys()) {
-    if (key.startsWith(name + '/')) _electronFiles.delete(key);
+    if (_inFolder(key, name)) _electronFiles.delete(key);
   }
 
   if (!_electronFolders.some(f => f.name === name))
     library.folders = library.folders.filter(f => f.name !== name);
+  persistLibrary();
+  announce();
+}
+
+/**
+ * Remove a folder you picked, with every folder from it (the Library
+ * widget's header for it): one deleted whole, which the library keeps as
+ * it would an unplugged drive's (R46).
+ */
+export async function removePickedFolder(rootPath) {
+  const key = _pathKey(rootPath);
+  if (!key) return;
+  const gone = _electronFolders.filter(f => _pathKey(f.rootPath || f.path) === key);
+  if (!gone.length) return;
+  const names = gone.map(f => f.name);
+  _dropFolders(names);
+  _electronFolders = _electronFolders.filter(f => !gone.includes(f));
+  _saveElectronFolders();
+  library.folders = library.folders.filter(f => !names.includes(f.name) || _electronFolders.some(other => other.name === f.name));
   persistLibrary();
   announce();
 }
@@ -517,8 +601,10 @@ export async function reconnectFolders() {
   try { await audioFs.adoptFolders(_libraryRoots()); }
   catch (error) { console.warn('[audio-player] could not hand over library folders:', error); }
   // Persist the normalized list so any legacy duplicate registrations are
-  // repaired once rather than being loaded again on every launch.
-  if (_electronFolders.length !== (audioState.electronFolders?.length || 0)) _saveElectronFolders();
+  // repaired once rather than being loaded again on every launch (names
+  // made distinct too: the Library widget acts by the saved list).
+  const saved = Array.isArray(audioState.electronFolders) ? audioState.electronFolders : [];
+  if (_electronFolders.length !== saved.length || _electronFolders.some((folder, i) => folder.name !== saved[i]?.name)) _saveElectronFolders();
 
   if (!_electronFolders.length) return;
 
@@ -528,17 +614,19 @@ export async function reconnectFolders() {
       library.folders.push({ name });
   }
 
-  // Missing folders are stale registrations, not a launch-breaking error.
+  // A folder deleted is a stale registration; one whose drive isn't there
+  // is kept, and read once it is (R46).
   const available = [];
   for (const folder of _electronFolders) {
-    try {
-      if (await audioFs.directoryExists(folder.path)) available.push(folder);
-    } catch (_e) { /* leave temporarily inaccessible folders untouched */ available.push(folder); }
+    if (await _isThere(folder)) available.push(folder);
   }
   if (available.length !== _electronFolders.length) {
     const availablePaths = new Set(available.map(f => _pathKey(f.path)));
     const vanished = _electronFolders.filter(f => !availablePaths.has(_pathKey(f.path)));
-    for (const folder of vanished) await removeFolderByPath(folder.name, folder.path);
+    const deleted = [];
+    const seen = new Map();
+    for (const folder of vanished) if (await _wasDeleted(folder, seen)) deleted.push(folder);
+    for (const folder of deleted) await removeFolderByPath(folder.name, folder.path);
   }
 
   await Promise.all(available.map(({ name, path: folderPath }) =>
@@ -599,12 +687,42 @@ function setLibProgress(pct) {
   _sendStatus();
 }
 
+/** Whether the folder is there to read (an I/O error: try, and see). */
+async function _isThere(folder) {
+  try { return await audioFs.directoryExists(folder.path); }
+  catch (_e) { return true; }
+}
+
+/**
+ * Whether a folder that isn't there was deleted: the folder you picked (its
+ * drive) is there, and so is another folder from it, but this one isn't.
+ * One whose drive isn't there (unplugged, a share that's down) is kept,
+ * songs and all, and comes back with it (R46); so is one whose picked
+ * folder is there with nothing of it (a mount point stays, empty, while
+ * its drive is away), and a folder you picked itself, which can't be told
+ * apart. `seen` keeps, for one pass, whether each picked folder has one.
+ */
+async function _wasDeleted(folder, seen = new Map()) {
+  const root = folder.rootPath;
+  if (!root || _pathKey(root) === _pathKey(folder.path)) return false;
+  try {
+    if (await audioFs.directoryExists(folder.path) || !await audioFs.directoryExists(root)) return false;
+    const key = _pathKey(root);
+    if (!seen.has(key)) seen.set(key, _anyThere(_electronFolders.filter(other => _pathKey(other.rootPath) === key)));
+    return await seen.get(key);
+  } catch (_e) { return false; } // an I/O error is not proof that the folder was deleted
+}
+
+async function _anyThere(folders) {
+  for (const folder of folders) if (await audioFs.directoryExists(folder.path)) return true;
+  return false;
+}
+
 async function _pruneMissingFolders() {
   const missing = [];
+  const seen = new Map();
   for (const folder of _electronFolders) {
-    try {
-      if (!await audioFs.directoryExists(folder.path)) missing.push(folder);
-    } catch (_e) { /* an I/O error is not proof that the folder was deleted */ }
+    if (await _wasDeleted(folder, seen)) missing.push(folder);
   }
   for (const folder of missing) await removeFolderByPath(folder.name, folder.path);
   return missing;
@@ -652,41 +770,39 @@ export async function rescanFolders(names, rootPath) {
 
   if (!allNames.length) return;
 
-  allNames.forEach(name => {
-    Object.keys(library.albums).forEach(k => {
-      const alb = library.albums[k];
-      alb.tracks = alb.tracks.filter(t => !t.key.startsWith(name + '/'));
-      if (!alb.tracks.length) delete library.albums[k];
-    });
-  });
-  invalidateAlbumsCache();
-
-  for (const key of _electronFiles.keys()) {
-    if (allNames.some(name => key.startsWith(name + '/'))) _electronFiles.delete(key);
-  }
-
   setLibStatus(`Rescanning ${allNames.length} folder${allNames.length !== 1 ? 's' : ''}…`);
 
+  // Read every folder first: one that can't be read leaves them all as
+  // they were (R26). One that isn't there (its drive) is left as it is.
+  const present = [];
+  for (const name of allNames) {
+    const folder = _electronFolders.find(f => f.name === name);
+    if (folder && await _isThere(folder)) present.push(name);
+  }
+  allNames = present;
+  if (!allNames.length) { setLibStatus('Those folders aren\'t there now.'); return; }
   const allEntries = [];
   for (const name of allNames) {
     const folder = _electronFolders.find(f => f.name === name);
     if (!folder) continue;
     try {
-      allEntries.push(...await _scanElectronFolder(folder.path, name));
+      allEntries.push(...await _listFolder(folder.path, name));
     } catch (err) {
       setLibStatus('Scan failed: ' + (err?.message || 'unknown error'), true);
       return;
     }
   }
+  const replace = () => { _dropFolders(allNames); _useFiles(allEntries); };
 
   if (!allEntries.length) {
+    replace();
     setLibStatus('No audio files found.');
     persistLibrary();
     announce();
     return;
   }
 
-  await buildFromFiles(allEntries);
+  await buildFromFiles(allEntries, { replace });
 }
 
 /**
@@ -701,40 +817,33 @@ export async function rescanFolder(name, folderPath) {
     setLibStatus(`"${name}" is not in your library.`, true);
     return;
   }
-
-  // Drop this folder's tracks from every album (mirrors removeFolder()'s
-  // scoping); albums left with zero tracks are dropped entirely so a
-  // renamed/moved file doesn't leave a stale empty album card behind.
-  Object.keys(library.albums).forEach(k => {
-    const alb = library.albums[k];
-    alb.tracks = alb.tracks.filter(t => !t.key.startsWith(name + '/'));
-    if (!alb.tracks.length) delete library.albums[k];
-  });
-  invalidateAlbumsCache();
-
-  // Drop stale path entries for this folder before re-walking it, so a
-  // file removed from disk since the last scan doesn't linger in
-  // _electronFiles with a dead path.
-  for (const key of _electronFiles.keys()) {
-    if (key.startsWith(name + '/')) _electronFiles.delete(key);
-  }
+  name = folder.name; // as the library has it (removeFolderByPath)
 
   setLibStatus(`Rescanning "${name}"…`);
 
   try {
     if (!await audioFs.directoryExists(folder.path)) {
+      if (!await _wasDeleted(folder)) {
+        setLibStatus(`"${name}" isn't there now (is its drive connected?).`, true);
+        return;
+      }
       await removeFolderByPath(folder.name, folder.path);
       setLibStatus(`Removed missing folder "${name}" from the library.`);
       return;
     }
-    const fileEntries = await _scanElectronFolder(folder.path, name);
+    // Read first; the folder's songs (and the paths kept for them, so a
+    // file gone since doesn't linger) are replaced only once the new set
+    // is read. A folder that can't be read is left as it was (R26).
+    const fileEntries = await _listFolder(folder.path, name);
+    const replace = () => { _dropFolders([name]); _useFiles(fileEntries); };
     if (!fileEntries.length) {
+      replace();
       setLibStatus(`No audio files found in "${name}".`);
       persistLibrary();
       announce();
       return;
     }
-    await buildFromFiles(fileEntries);
+    await buildFromFiles(fileEntries, { replace });
   } catch (err) {
     setLibStatus('Scan failed: ' + (err?.message || 'unknown error'), true);
   }
@@ -833,28 +942,38 @@ export async function rescanLibrary() {
   }
   if (discoveredAny) _saveElectronFolders();
 
-  // Clear stale data so the merge logic starts from a clean slate
-  library.albums = {};
-  invalidateAlbumsCache();
-  persistLibrary();
-
-  setLibStatus('Clearing cache…');
-
-  // Collect every file across all folders
+  // Collect every file across all folders first: one that can't be read
+  // leaves the library as it was (R26). One that isn't there (its drive)
+  // keeps its songs as they are (R46).
+  const present = [];
+  for (const folder of _electronFolders) if (await _isThere(folder)) present.push(folder);
+  const allThere = present.length === _electronFolders.length;
   const allEntries = [];
-  for (const { name, path: folderPath } of _electronFolders) {
+  for (const { name, path: folderPath } of present) {
     try {
-      const entries = await _scanElectronFolder(folderPath, name);
-      allEntries.push(...entries);
+      allEntries.push(...await _listFolder(folderPath, name));
     } catch (err) {
       setLibStatus('Scan error: ' + (err?.message || 'unknown'), true);
       return;
     }
   }
 
+  // Then start from a clean slate, once the new set is read (keeping the
+  // songs of folders that aren't there).
+  const replace = () => {
+    if (allThere) library.albums = {};
+    else _dropFolders(present.map(folder => folder.name));
+    invalidateAlbumsCache();
+    _useFiles(allEntries);
+  };
+
   if (!allEntries.length) {
+    // Read, and nothing there: that's the library now.
+    replace();
+    persistLibrary();
+    announce();
     setLibStatus('No audio files found.'); return;
   }
 
-  await buildFromFiles(allEntries);
+  await buildFromFiles(allEntries, { replace });
 }

@@ -44,8 +44,15 @@ export function createBookmarks(table, { now = () => Date.now() } = {}) {
     if (existing) return copy(existing);
     const at = now();
     const row = { id: makeId(at), url, title: String(title || url).slice(0, 500), position: (rows.at(-1)?.position ?? 0) + 1, added: at };
+    // In the list at once (a second add of it finds it), out again if it
+    // can't be saved: trying again then saves it (R36).
     rows.push(row);
-    await table.put(row);
+    try { await table.put(row); }
+    catch (error) {
+      const at = rows.indexOf(row);
+      if (at >= 0) rows.splice(at, 1);
+      throw error;
+    }
     changed();
     return copy(row);
   }
@@ -54,8 +61,13 @@ export function createBookmarks(table, { now = () => Date.now() } = {}) {
     await load();
     const index = rows.findIndex(item => item.id === id);
     if (index < 0) return false;
-    rows.splice(index, 1);
-    await table.delete(id);
+    const [row] = rows.splice(index, 1);
+    try { await table.delete(id); }
+    catch (error) {
+      // Not deleted: still there, and a second try deletes it.
+      if (!rows.some(item => item.url === row.url)) rows.splice(Math.min(index, rows.length), 0, row);
+      throw error;
+    }
     changed();
     return true;
   }
@@ -65,8 +77,10 @@ export function createBookmarks(table, { now = () => Date.now() } = {}) {
     const row = rows.find(item => item.id === id);
     const clean = String(title ?? '').trim().slice(0, 500);
     if (!row || !clean) return false;
+    const before = row.title;
     row.title = clean;
-    await table.put(row);
+    try { await table.put(row); }
+    catch (error) { if (row.title === clean) row.title = before; throw error; }
     changed();
     return true;
   }
@@ -75,10 +89,17 @@ export function createBookmarks(table, { now = () => Date.now() } = {}) {
     await load();
     const from = rows.findIndex(item => item.id === id);
     if (from < 0) return false;
+    const before = rows.map(item => [item, item.position]);
     const [row] = rows.splice(from, 1);
     rows.splice(Math.max(0, Math.min(rows.length, Math.round(toIndex))), 0, row);
     rows.forEach((item, index) => { item.position = index + 1; });
-    await table.putMany(rows);
+    try { await table.putMany(rows); }
+    catch (error) {
+      // As it was: the order saved is the one before.
+      rows.splice(0, rows.length, ...before.map(([item]) => item));
+      for (const [item, position] of before) item.position = position;
+      throw error;
+    }
     changed();
     return true;
   }

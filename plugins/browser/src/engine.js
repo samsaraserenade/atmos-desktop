@@ -67,6 +67,8 @@ function freshRuntime() {
     heard: false,       // it has sounded since its page loaded (Now Playing)
     media: null,        // what plays in it, as Core reported it (atmos.web 'media')
     userActed: false,   // and whether you'd just acted in the page then
+    sleeping: false,    // being put to sleep: Core is asking the page to let go
+    keepAwake: false,   // its page wouldn't let go (unsaved changes): not asked again until it loads another
   };
 }
 
@@ -218,10 +220,18 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     if (!force && (!panels || tab.page || !isPageUrl(tab.url))) return Promise.resolve(false);
     state.loading = true;
     state.progress = 0.1;
-    state.opening = web.open(id, { url: isPageUrl(tab.url) ? tab.url : 'about:blank', private: tab.private })
+    // Kept while it slept (R41): the new page is told, or its own (not
+    // muted) would take its place.
+    const muted = state.muted;
+    // What it opens at: an address typed meanwhile goes on from there (go()).
+    state.openedUrl = isPageUrl(tab.url) ? tab.url : 'about:blank';
+    state.opening = web.open(id, { url: state.openedUrl, private: tab.private })
       .then(page => {
         state.live = true;
         applyState(tab, page);
+        if (muted && !state.muted) {
+          void web.mute(id, true).then(result => { state.muted = result; emit({ type: 'tab', id }); }, () => {});
+        }
         return true;
       })
       .catch(error => {
@@ -242,7 +252,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
   }
 
   /** Close a tab's page but keep the tab (its address, title and icon). */
-  function putAway(id) {
+  function dropPage(id) {
     const state = runtime.get(id);
     if (!state?.live) return;
     const kept = { favicon: state.favicon, muted: state.muted };
@@ -251,8 +261,36 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     emit({ type: 'tab', id });
   }
 
+  /**
+   * Put a tab's page to sleep (left alone, too many loaded, too much
+   * memory): closed as dropPage closes it, but only if the page lets go.
+   * One that objects to being left (unsaved changes) stays awake, and isn't
+   * asked again until it loads another page or you go back to it; Core asks
+   * it without a dialog. Resolves true (asleep), false (its page wouldn't
+   * let go) or null (nothing to do, or the tab went meanwhile).
+   */
+  async function putAway(id) {
+    const state = runtime.get(id);
+    if (!state?.live || state.sleeping) return null;
+    state.sleeping = true;
+    const slept = await web.close(id, { sleep: true }).catch(() => false);
+    if (runtime.get(id) !== state) return null;
+    state.sleeping = false;
+    if (!slept) {
+      state.keepAwake = true;
+      return false;
+    }
+    runtime.set(id, Object.assign(freshRuntime(), { favicon: state.favicon, muted: state.muted }));
+    // Chosen while its page was going: it loads again.
+    if (id === list.selected) void ensureLive(id);
+    syncShown();
+    emit({ type: 'tab', id });
+    return true;
+  }
+
   function checkPutAway() {
-    const live = new Set([...runtime].filter(([, state]) => state.live).map(([id]) => id));
+    // (A page on its way to sleep doesn't count: one over the limit puts one away.)
+    const live = new Set([...runtime].filter(([, state]) => state.live && !state.sleeping).map(([id]) => id));
     const ids = pagesToPutAway(list.tabs, {
       live, now: now(),
       idleMs: settings.putAwayAfterMinutes * 60 * 1000,
@@ -261,10 +299,11 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         const state = rt(tab.id);
         // (A page paused in Now Playing too: it stays there to resume.)
         return tab.id === list.selected || tab.private || state.audible || state.fullscreen || !!state.opening
-          || state.permissions.length > 0 || !!state.external || (state.heard && !!state.media);
+          || state.permissions.length > 0 || !!state.external || (state.heard && !!state.media)
+          || state.sleeping || state.keepAwake;
       },
     });
-    for (const id of ids) putAway(id);
+    for (const id of ids) void putAway(id);
   }
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
@@ -290,6 +329,8 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
 
   function selectTab(id) {
     if (!list.select(id)) return false;
+    // Back to a page that wouldn't let go: it may have saved since.
+    if (runtime.get(id)) runtime.get(id).keepAwake = false;
     void ensureLive(id);
     tabsChanged();
     return true;
@@ -369,11 +410,17 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     }
     emit({ type: 'tab', id });
     scheduleSave();
+    // Of the addresses typed while the page opens, the last one decides (R28).
+    const turn = state.goes = (state.goes || 0) + 1;
     try {
       if (!state.live) {
         const opened = await ensureLive(id, { force: true });
         if (!opened) return { ok: false, reason: state.notice?.text || 'The page could not open' };
-        if (isPageUrl(url)) { syncShown(); return { ok: true }; }
+        if (!list.get(id)) return { ok: false, reason: 'That tab is closed' };
+        if (turn !== state.goes) return { ok: true };
+        // Opened at this address: there. Opened at another (this one typed
+        // while it opened, R28): on to this one.
+        if (isPageUrl(url) && state.openedUrl === url) { syncShown(); return { ok: true }; }
       }
       const result = await web.navigate(id, url);
       syncShown();
@@ -398,7 +445,7 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
     if (!state.live) { void ensureLive(id, { force: isPageUrl(tab.url) }); return; }
     if (state.error?.kind === 'crashed') {
       // A page whose renderer went: a fresh page for it.
-      putAway(id);
+      dropPage(id);
       void ensureLive(id, { force: true });
       return;
     }
@@ -460,6 +507,8 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
           // A new page: what the last one played is over.
           state.heard = state.audible;
           state.media = null;
+          // …and what it wouldn't let go of, so it may sleep again.
+          state.keepAwake = false;
         }
         emit({ type: 'tab', id });
         scheduleSave();
@@ -545,11 +594,14 @@ export function createEngine({ atmos, store, engines, now = () => Date.now(), ti
         const asleep = id !== list.selected && !tab.private && !state.audible && !state.fullscreen
           && !state.opening && state.permissions.length === 0 && !state.external;
         if (asleep) {
-          putAway(id);
-          rt(id).notice = {
-            id: ++noticeSerial, keepThroughLoad: true,
-            text: `Put to sleep in the background: it was using ${size} of memory.`,
-          };
+          // A page with unsaved changes stays awake: told instead, for when you come back.
+          void putAway(id).then(slept => {
+            if (slept === null || !list.get(id)) return;
+            rt(id).notice = slept
+              ? { id: ++noticeSerial, keepThroughLoad: true, text: `Put to sleep in the background: it was using ${size} of memory.` }
+              : { id: ++noticeSerial, text: `This page is using ${size} of memory.`, actions: [{ label: 'Reload', kind: 'reload' }] };
+            emit({ type: 'tab', id });
+          });
         } else {
           state.notice = {
             id: ++noticeSerial,

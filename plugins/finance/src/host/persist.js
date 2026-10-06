@@ -17,8 +17,8 @@
  * Before any frame reads settings, the engine prepares them once: from the
  * earlier layout (all namespaces in one `namespaces` key, Finance 1.0.2 and
  * older), or, the first time Finance runs in frames, from what the in-page
- * Finance left in the Atmos page (legacyStorage in extension.json). Views
- * wait for it.
+ * Finance left in the Atmos page (legacyStorage in extension.json; again
+ * at the next start if part of that copy failed). Views wait for it.
  */
 
 import { atmos, isEngine, role, SELF } from './frame.js';
@@ -56,11 +56,24 @@ function openDB() {
   return _dbPromise;
 }
 
+async function _putAsset(key, value) {
+  const transaction = (await openDB()).transaction('assets', 'readwrite');
+  transaction.objectStore('assets').put(value, key);
+  await new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onerror = transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+/** The asset, or undefined if there's none. Throws if it can't be read. */
+async function _getAsset(key) {
+  const request = (await openDB()).transaction('assets', 'readonly').objectStore('assets').get(key);
+  return new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+}
+
 export async function saveAsset(key, value) {
   try {
-    const transaction = (await openDB()).transaction('assets', 'readwrite');
-    transaction.objectStore('assets').put(value, key);
-    await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error); });
+    await _putAsset(key, value);
   } catch (error) {
     console.error(`[finance] could not save ${key}:`, error);
   }
@@ -68,8 +81,7 @@ export async function saveAsset(key, value) {
 
 export async function loadAsset(key, fallback = null) {
   try {
-    const request = (await openDB()).transaction('assets', 'readonly').objectStore('assets').get(key);
-    const value = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const value = await _getAsset(key);
     return value === undefined ? fallback : value;
   } catch (error) {
     console.error(`[finance] could not load ${key}:`, error);
@@ -79,41 +91,51 @@ export async function loadAsset(key, fallback = null) {
 
 // ── Preparing settings (engine, once) ────────────────────────────────────────
 
-/** One-time copy from the Atmos page: { id: { data } } for each namespace it had. */
+/**
+ * One-time copy from the Atmos page: { namespaces: { id: { data } } for each
+ * namespace it had, complete }. `complete` is false if anything couldn't be
+ * read or written (nothing there is complete); the next start copies again,
+ * so nothing here is written over what this origin has saved since.
+ */
 async function copyFromPage() {
   const namespaces = {};
+  let complete = true;
+  const failed = what => error => {
+    complete = false;
+    console.warn(`[finance] could not copy ${what} from the Atmos page; trying again next start:`, error?.message);
+    return null;
+  };
   for (const id of LEGACY_NAMESPACES) {
-    const data = await atmos.legacy.readState(id).catch(() => null);
+    const data = await atmos.legacy.readState(id).catch(failed(`settings (${id})`));
     if (data && typeof data === 'object') namespaces[id] = { data };
   }
   // The display currency, if the in-page Finance never took it over from the
   // Currency service's old namespace.
   const portfolio = namespaces['portfolio-tracker']?.data;
   if (portfolio && !portfolio.outputCurrency) {
-    const currency = await atmos.legacy.readState('currency').catch(() => null);
+    const currency = await atmos.legacy.readState('currency').catch(failed('the display currency'));
     if (['GBP', 'USD', 'EUR', 'CHF'].includes(currency?.outputCurrency)) portfolio.outputCurrency = currency.outputCurrency;
   }
   // The imported balance font is too big for Atmos state.
   const fonts = namespaces['portfolio-tracker']?.data?.customBalanceFonts;
   if (Array.isArray(fonts)) {
-    try { localStorage.setItem(`${LARGE_PREFIX}portfolio-tracker:customBalanceFonts`, JSON.stringify(fonts)); } catch {}
+    const key = `${LARGE_PREFIX}portfolio-tracker:customBalanceFonts`;
+    try { if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify(fonts)); } catch (error) { failed('the balance font')(error); }
     delete namespaces['portfolio-tracker'].data.customBalanceFonts;
   }
   // Chart history and per-source history, from the page's shared asset database.
-  const assets = await atmos.legacy.readIndexedDB('samsara_db').catch(error => {
-    console.warn('[finance] could not read the Atmos page\'s saved history:', error.message);
-    return null;
-  });
-  const ABSENT = Symbol('absent');
+  const assets = await atmos.legacy.readIndexedDB('samsara_db').catch(failed('saved history'));
+  // An empty list here is nothing kept: the panel writes its own as it goes.
+  const empty = value => value === undefined || (Array.isArray(value) && !value.length);
   for (const [key, value] of assets?.stores?.assets || []) {
-    if (await loadAsset(key, ABSENT) === ABSENT) await saveAsset(key, value);
+    try { if (empty(await _getAsset(key))) await _putAsset(key, value); } catch (error) { failed(`saved history (${key})`)(error); }
   }
   // Charting's saved settings and chart views (src/chart-storage.js).
-  const chartKeys = await atmos.legacy.readLocalStorage(['atmos:charting-*']).catch(() => ({}));
+  const chartKeys = await atmos.legacy.readLocalStorage(['atmos:charting-*']).catch(failed('chart settings'));
   for (const [key, value] of Object.entries(chartKeys || {})) {
-    try { if (value !== null && localStorage.getItem(key) === null) localStorage.setItem(key, value); } catch {}
+    try { if (value !== null && localStorage.getItem(key) === null) localStorage.setItem(key, value); } catch (error) { failed(`chart settings (${key})`)(error); }
   }
-  return namespaces;
+  return { namespaces, complete };
 }
 
 /** { id: { version?, data } } as one state patch, a key per field. */
@@ -142,8 +164,12 @@ async function prepareSettings(saved) {
     // earlier Finance finds its settings rather than copying the page again.
     Object.assign(patch, fieldsOf(saved.namespaces));
   } else {
-    Object.assign(patch, fieldsOf(await copyFromPage()));
-    patch.copiedFromPage = new Date().toISOString();
+    const { namespaces, complete } = await copyFromPage();
+    // After a copy that didn't finish, what was saved since wins.
+    for (const [key, value] of Object.entries(fieldsOf(namespaces))) if (!(key in saved)) patch[key] = value;
+    // Done once every part was copied; until then each start tries again.
+    if (complete) patch.copiedFromPage = new Date().toISOString();
+    else delete patch.settingsLayout;
   }
   // If Atmos refuses it, carry on with it here: views read the old layout
   // the same way (below), and each save writes the fields it changes.
@@ -250,6 +276,12 @@ function _write(patch) {
 }
 
 let _saveQueued = false;
+/** A namespace's defaults as they're saved, or null if they can't be serialized. */
+function _savedDefaults(def) {
+  try { return _clone(typeof def.serialize === 'function' ? def.serialize(_clone(def.defaults)) : def.defaults); }
+  catch { return null; }
+}
+
 function _flush() {
   _saveQueued = false;
   const patch = {};
@@ -257,15 +289,23 @@ function _flush() {
     let data;
     try { data = _clone(typeof def.serialize === 'function' ? def.serialize(def.state) : def.state); }
     catch (error) { console.error(`[finance] state namespace '${id}' failed to serialize:`, error); continue; }
+    // A field never saved that is still its default isn't written: it reads
+    // the same, and until the copy from the Atmos page has finished, a field
+    // saved here counts as changed since and is kept over the page's.
+    const defaults = _savedDefaults(def) || {};
     for (const field of def.large) {
       const key = `${LARGE_PREFIX}${id}:${field}`;
       const json = _json(data[field] ?? null);
-      try { if (localStorage.getItem(key) !== json) localStorage.setItem(key, json); } catch (error) { console.error(`[finance] could not save ${field}:`, error); }
+      try {
+        const stored = localStorage.getItem(key);
+        if (stored !== json && !(stored === null && json === _json(defaults[field] ?? null))) localStorage.setItem(key, json);
+      } catch (error) { console.error(`[finance] could not save ${field}:`, error); }
       delete data[field];
     }
     if (_saved[versionKey(id)] !== def.version) patch[versionKey(id)] = def.version;
     for (const [field, value] of Object.entries(data)) {
       const key = fieldKey(id, field);
+      if (!(key in _saved) && field in defaults && _json(value) === _json(defaults[field])) continue;
       if (_json(value) !== _json(_saved[key])) patch[key] = value;
     }
   }

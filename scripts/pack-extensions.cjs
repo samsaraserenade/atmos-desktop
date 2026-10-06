@@ -355,7 +355,7 @@ function coreOf(root) {
     const git = args => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
     const top = git(['rev-parse', '--show-toplevel']);
     const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
-    const ownCheckout = top.status === 0 && same(fs.realpathSync(top.stdout.trim()), fs.realpathSync(root));
+    const ownCheckout = top.status === 0 && same(fs.realpathSync.native(top.stdout.trim()), fs.realpathSync.native(root));
     const head = ownCheckout ? git(['rev-parse', 'HEAD']) : null;
     const commit = head?.status === 0 ? head.stdout.trim() : '';
     return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commit) ? { version, commit } : { version };

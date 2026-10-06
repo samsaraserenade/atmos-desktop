@@ -250,10 +250,17 @@ function createExtensionTrust({
     return [`Adds ${names.length === 1 ? 'a command' : 'commands'} to Atmos's command bar: ${names.join(', ')}`];
   }
 
-  function assessAll(catalog) {
+  /**
+   * Assess every extension the catalog lists. `refuse(entry)` may give a
+   * reason a loadable copy mustn't run (an update that failed to start, the
+   * manager's failedUpdate): it falls back as one that can't load does.
+   */
+  function assessAll(catalog, { refuse = () => null } = {}) {
     for (const kind of ['plugins', 'services']) {
       for (let entry of [...catalog.list(kind)]) {
         let result = assess(kind, entry);
+        const refused = result.loadable && entry.fallback ? refuse(entry) : null;
+        if (refused) result = { ...result, loadable: false, status: 'failed', reason: refused };
         // A newer official copy that can't load falls back to the next one
         // (usually the copy bundled with Atmos), and says so.
         while (!result.loadable && entry.fallback) {

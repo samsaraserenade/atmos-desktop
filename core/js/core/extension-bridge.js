@@ -118,6 +118,9 @@ const MAX_FETCH_BODY = 5 * 1024 * 1024;
 // is copied any further.
 const MAX_FETCHES_PER_FRAME = 32;
 let _bridgeSerial = 0;
+// With the serial, names a frame to the main process (R17): unique across
+// reloads of the page.
+const _pageSession = Math.random().toString(36).slice(2, 8);
 
 // Web pages (atmos.web): what a frame may ask Core to do to one of its tabs.
 const WEB_COMMANDS = new Set(['navigate', 'back', 'forward', 'reload', 'stop', 'zoom', 'find', 'stopFind', 'print', 'mute', 'edit', 'download', 'copyImage', 'focus', 'state', 'shield', 'blocked', 'media']);
@@ -165,8 +168,11 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
   let nextCommand = 1;
   const fetches = new Set();       // this frame's atmos.fetch() requests in flight
   const serial = ++_bridgeSerial;  // request ids are per frame; this makes them per page
+  const frameId = `${_pageSession}-${serial}`;
+  let calledMain = false;          // told the main process of this frame (invoke)
   let nextCall = 1;
   let disposed = false;
+  const waitingCalls = new Set(); // calls waiting for their service to start: cancelled if the frame goes
   let wallpaperWatch = null;
   let locationWatch = null;
   let webWatch = null;
@@ -320,31 +326,32 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
 
     // The background layer's Audio service: this extension's own channel
     // ("invokes": ["service:audio"]). Every frame of the extension hears it.
-    // deps.audio.channel() waits for the Audio service if it hasn't started yet.
+    // audioChannel() waits for the Audio service if it hasn't started yet,
+    // and refuses if this frame went meanwhile.
     'audio.load': async (source, options) => {
       requireTarget(AUDIO, 'play audio through');
       const { id = null, position = 0, play = false, loop = false } = options && typeof options === 'object' ? options : {};
-      return (await deps.audio.channel()).load(audioSource(source), {
+      return (await audioChannel()).load(audioSource(source), {
         id: id == null ? null : String(id).slice(0, 500),
         position: Math.max(0, Number(position) || 0),
         play: play === true,
         loop: loop === true,
       });
     },
-    'audio.play': async () => { requireTarget(AUDIO, 'play audio through'); return (await deps.audio.channel()).play(); },
-    'audio.pause': async () => { requireTarget(AUDIO, 'play audio through'); (await deps.audio.channel()).pause(); },
+    'audio.play': async () => { requireTarget(AUDIO, 'play audio through'); return (await audioChannel()).play(); },
+    'audio.pause': async () => { requireTarget(AUDIO, 'play audio through'); (await audioChannel()).pause(); },
     'audio.seek': async seconds => {
       requireTarget(AUDIO, 'play audio through');
       if (!Number.isFinite(seconds)) throw new BridgeError('audio.seek(seconds)', 'TypeError');
-      (await deps.audio.channel()).seek(seconds);
+      (await audioChannel()).seek(seconds);
     },
     'audio.volume': async value => {
       requireTarget(AUDIO, 'play audio through');
       if (!Number.isFinite(value)) throw new BridgeError('audio.setVolume(0–1)', 'TypeError');
-      (await deps.audio.channel()).setVolume(value);
+      (await audioChannel()).setVolume(value);
     },
-    'audio.stop': async () => { requireTarget(AUDIO, 'play audio through'); (await deps.audio.channel()).stop(); },
-    'audio.state': async () => { requireTarget(AUDIO, 'play audio through'); return (await deps.audio.channel()).state(); },
+    'audio.stop': async () => { requireTarget(AUDIO, 'play audio through'); (await audioChannel()).stop(); },
+    'audio.state': async () => { requireTarget(AUDIO, 'play audio through'); return (await audioChannel()).state(); },
     'audio.subscribe': async () => {
       requireTarget(AUDIO, 'play audio through');
       await deps.audio.watch();
@@ -487,16 +494,28 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       const { kind, id } = requireTarget(target, 'invoke');
       if (typeof channel !== 'string') throw new BridgeError('invoke(target, channel, ...args)', 'TypeError');
       requireShared(target, 'ipc', channel);
-      // Stamped with this extension, so the main process can check it too.
-      return deps.invokeMain(self, kind, id, channel, ...args);
+      // Stamped with this extension, so the main process can check it too,
+      // and this frame, which it hears about again when the frame goes:
+      // every call comes through the page, so the page is all it sees.
+      calledMain = true;
+      return deps.invokeMain({ caller: self, frame: frameId }, kind, id, channel, ...args);
     },
 
     'call': async (target, method, ...args) => {
       requireTarget(target, 'call');
       if (typeof method !== 'string') throw new BridgeError('call(target, method, ...args)', 'TypeError');
       requireShared(target, 'methods', method);
-      // A background frame may still be starting; wait for it rather than fail.
-      const service = deps.services.get(target) || await deps.awaitService?.(target);
+      // A background frame may still be starting; wait for it rather than
+      // fail, unless this frame goes meanwhile: then the call is never made.
+      let service = deps.services.get(target);
+      if (!service && deps.awaitService) {
+        service = await new Promise((resolve, reject) => {
+          const cancel = () => reject(new BridgeError(`${self}'s frame went away`, 'Error'));
+          waitingCalls.add(cancel);
+          deps.awaitService(target).then(resolve, reject).finally(() => waitingCalls.delete(cancel));
+        });
+      }
+      if (disposed) throw new BridgeError(`${self}'s frame went away`, 'Error');
       if (!service) throw new BridgeError(`${target} is not running or exposes nothing`, 'Error');
       if (!service.methods.includes(method)) throw new BridgeError(`${target} does not expose '${method}'`, 'Error');
       return service.call(method, args);
@@ -574,6 +593,10 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       return deps.drawer ? deps.drawer.command(name, value) : null;
     },
 
+    'frame.loadFailed': message => {
+      deps.frameLoadFailed?.(extension, surface.type, typeof message === 'string' ? message.slice(0, 200) : '');
+    },
+
     'panel.show': () => {
       if (!deps.showPanel?.(extension)) throw new BridgeError(`${self} has no panel`, 'Error');
     },
@@ -586,7 +609,7 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
       if (url !== undefined && (typeof url !== 'string' || url.length > MAX_WEB_URL)) throw new BridgeError('web.open(tabId, { url }): url must be text', 'TypeError');
       return requireWeb().open(tabIdOf(tabId), { url: url || 'about:blank', private: isPrivate === true });
     },
-    'web.close': tabId => requireWeb().close(tabIdOf(tabId)),
+    'web.close': (tabId, options) => requireWeb().close(tabIdOf(tabId), { sleep: options?.sleep === true }),
     'web.show': tabId => requireWeb().show(tabId === null ? null : tabIdOf(tabId)),
     'web.do': (tabId, name, ...args) => {
       const web = requireWeb();
@@ -757,6 +780,13 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     });
   }
 
+  /** This extension's audio channel, once Audio has started; refused if this frame went meanwhile. */
+  async function audioChannel() {
+    const channel = await deps.audio.channel();
+    if (disposed) throw new BridgeError(`${self}'s frame went away`, 'Error');
+    return channel;
+  }
+
   function callFrame(method, args) {
     return new Promise((resolve, reject) => {
       if (disposed) { reject(new BridgeError('service stopped', 'Error')); return; }
@@ -819,12 +849,15 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     fetches.clear();
     for (const pending of outgoingCalls.values()) pending.reject(new BridgeError('service stopped', 'Error'));
     outgoingCalls.clear();
+    for (const cancel of waitingCalls) cancel();
+    waitingCalls.clear();
     for (const pending of commandRequests.values()) {
       clearTimeout(pending.timer);
       pending.reject(new BridgeError(`${self}'s frame went away`, 'Error'));
     }
     commandRequests.clear();
     if (deps.services.get(self)?.owner === bridge) deps.services.delete(self);
+    if (calledMain) deps.frameClosed?.(frameId);
   }
 
   const bridge = { extension, surface, receive, post, dispose, requestCommand };

@@ -130,3 +130,37 @@ test('bookmarks: add once per address, rename, move, remove, toggle, kept in ord
   assert.equal(await again.remove(c.id), false);
   assert.equal((await again.find('https://b.example/')).title, 'Bee');
 });
+
+test('bookmarks: a change that fails to save is undone, so trying again saves it (R36)', async () => {
+  const table = memoryTable('id');
+  const time = clock();
+  const failing = new Set();
+  for (const method of ['put', 'putMany', 'delete']) {
+    const real = table[method].bind(table);
+    table[method] = async (...args) => { if (failing.has(method)) throw new Error('disk full'); return real(...args); };
+  }
+  const bookmarks = createBookmarks(table, { now: time.now });
+  failing.add('put');
+  await assert.rejects(bookmarks.add({ url: 'https://a.example/', title: 'A' }), /disk full/);
+  assert.equal(bookmarks.has('https://a.example/'), false, 'not bookmarked');
+  failing.delete('put');
+  await bookmarks.add({ url: 'https://a.example/', title: 'A' });
+  const b = await bookmarks.add({ url: 'https://b.example/', title: 'B' });
+  failing.add('delete');
+  await assert.rejects(bookmarks.remove(b.id), /disk full/);
+  assert.equal(bookmarks.has('https://b.example/'), true, 'still bookmarked');
+  failing.delete('delete');
+  assert.equal(await bookmarks.remove(b.id), true);
+  failing.add('put');
+  const [a] = await bookmarks.list();
+  await assert.rejects(bookmarks.rename(a.id, 'Changed'), /disk full/);
+  assert.equal((await bookmarks.find('https://a.example/')).title, 'A');
+  failing.delete('put');
+  const c = await bookmarks.add({ url: 'https://c.example/', title: 'C' });
+  failing.add('putMany');
+  await assert.rejects(bookmarks.move(c.id, 0), /disk full/);
+  assert.deepEqual((await bookmarks.list()).map(item => item.title), ['A', 'C']);
+  // What the next start reads matches.
+  const again = createBookmarks(table, { now: time.now });
+  assert.deepEqual((await again.list()).map(item => item.title), ['A', 'C']);
+});

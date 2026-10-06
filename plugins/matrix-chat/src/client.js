@@ -1,6 +1,6 @@
 import { createRoomService } from './room-service.js';
 import { createSpaceService } from './space-service.js';
-import { SessionCoordinator } from './session-runtime.js';
+import { SessionCoordinator, sessionEndedError } from './session-runtime.js';
 import { createMessagingService } from './messaging-service.js';
 import { createMediaService } from './media-service.js';
 import { createCryptoService, initCryptoForSession, createSecretStorageCallbacks, deleteCryptoStore } from './crypto-service.js';
@@ -789,6 +789,24 @@ function upsertSession(session) {
   saveSessionsList(list);
 }
 
+/**
+ * A new sign-in, saved and written before it's used (its tokens must
+ * survive a quit; a failed write is tried again). If it was given up
+ * meanwhile (`stillWanted()` false: a logout came while it was written),
+ * it's taken back out, `replaced` (the account's session before) put back,
+ * and false returned.
+ */
+async function saveSignIn(session, replaced, stillWanted) {
+  upsertSession(session);
+  await flush().catch(() => save());
+  if (stillWanted()) return true;
+  const list = ensureSessionsList().filter(saved => saved !== session);
+  if (replaced) list.push(replaced);
+  matrixState.matrixSessions = list;
+  await flush().catch(() => save());
+  return false;
+}
+
 /** Retire a saved session only when `error` proves its bearer token is no
  * longer accepted. Returns true when it handled the error so callers can
  * distinguish this from network failures, which deliberately leave the
@@ -801,12 +819,13 @@ export function handleInvalidAccessToken(error, session = matrixState.matrixSess
   const active = matrixState.matrixSession;
   if (!active || active.accessToken !== session.accessToken) return false;
 
-  saveSessionsList(ensureSessionsList().filter(saved => saved.accessToken !== session.accessToken));
+  matrixState.matrixSessions = ensureSessionsList().filter(saved => saved.accessToken !== session.accessToken);
+  signOuts++; // as logging out: the account is over
   sessions.clear();
   clearSessionCaches();
   client = null;
   matrixState.matrixSession = null;
-  save();
+  void flush(); // written now: a quit in the next moment must not bring it back
   lastSessionIssue = {
     code: 'M_UNKNOWN_TOKEN',
     userId: session.userId,
@@ -839,7 +858,7 @@ export function getSavedAccounts() {
 // refresh, so the new one is saved at once: if Atmos quit holding only the
 // old one, the account would be signed out on next launch.
 
-function storeRefreshedTokens(session, tokens) {
+async function storeRefreshedTokens(session, tokens) {
   const next = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt };
   const apply = target => {
     if (target && target.userId === session.userId && target.deviceId === session.deviceId) Object.assign(target, next);
@@ -847,7 +866,9 @@ function storeRefreshedTokens(session, tokens) {
   apply(session);
   apply(matrixState.matrixSession);
   ensureSessionsList().forEach(apply);
-  flush();
+  // Written before the SDK uses it (the old one no longer works). A failed
+  // write doesn't fail the refresh, which already happened: it's tried again.
+  await flush().catch(() => save());
 }
 
 function refreshOptionsFor(session) {
@@ -867,7 +888,7 @@ function refreshOptionsFor(session) {
         }
         throw error;
       }
-      storeRefreshedTokens(session, tokens);
+      await storeRefreshedTokens(session, tokens);
       return {
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -912,6 +933,9 @@ export function openLink(url) {
 /** Shared construction path; crypto is ready before synchronization starts. */
 async function activateSession(session, ticket, start = true) {
   ticket.assertCurrent();
+  // After any earlier start of this account and device that's still under
+  // way (its encryption database); another account's never waits (R35).
+  await ticket.claim(`${session.userId}|${session.deviceId ?? ''}`);
   clearSessionCaches();
   const secretStorage = createSecretStorageCallbacks();
   const nextClient = sdk.createClient({
@@ -1005,6 +1029,7 @@ function findDeviceIdForLogin(homeserverUrl, typedUserId) {
  * token expired) gets its stored session refreshed in place.
  */
 export function login(homeserverUrl, userId, password) {
+  const signOutsAtStart = signOuts;
   return transitionSession(async ticket => {
   // A short-lived, credential-less client just to perform the login call —
   // matrix-js-sdk's documented pattern is to create the "real" client with
@@ -1042,7 +1067,11 @@ export function login(homeserverUrl, userId, password) {
   };
 
   ticket.assertCurrent();
-  upsertSession(session);
+  const replaced = ensureSessionsList().find(saved => saved.userId === session.userId);
+  if (!(await saveSignIn(session, replaced, () => signOuts === signOutsAtStart))) {
+    endServerSession(session);
+    throw sessionEndedError();
+  }
 
   try {
     const activeClient = await activateSession(session, ticket);
@@ -1121,6 +1150,9 @@ async function ensureOAuthClient(metadata) {
 }
 
 let pendingSignIn = null;
+// Logouts so far: a browser sign-in under way when one happens is dropped
+// (it waits outside the session queue, which a logout clears).
+let signOuts = 0;
 
 /** Abandon a browser sign-in that's still waiting (login.js's Cancel). */
 export function cancelSignIn() {
@@ -1133,6 +1165,7 @@ export function cancelSignIn() {
  * another account" works for OAuth homeservers, same as login().
  */
 export async function loginWithOAuth(homeserverInput, { createAccount = false } = {}) {
+  const signOutsAtStart = signOuts;
   const homeserver = normalizeHomeserverUrl(homeserverInput);
   const metadata = await fetchAuthMetadata(homeserver);
   if (!metadata) throw new oauth.OAuthSignInError('unsupported_server', 'This homeserver doesn\'t support signing in through the browser. Use your password instead.');
@@ -1154,7 +1187,21 @@ export async function loginWithOAuth(homeserverInput, { createAccount = false } 
     if (pendingSignIn === flow) pendingSignIn = null;
   }
 
-  const who = await sdk.createClient({ baseUrl: homeserver, fetchFn: matrixFetch, accessToken: tokens.accessToken }).whoami();
+  const auth = oauth.sessionAuthFields(metadata, clientId);
+  // Logged out meanwhile: the sign-in is dropped, and the device it made
+  // ended on the server, rather than saved and made active again.
+  let who = null;
+  const dropIfSignedOut = () => {
+    if (signOuts === signOutsAtStart) return;
+    endServerSession({
+      homeserver, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, auth,
+      ...(who ? { userId: who.user_id, deviceId: who.device_id || tokens.deviceId } : {}),
+    });
+    throw sessionEndedError();
+  };
+  dropIfSignedOut();
+  who = await sdk.createClient({ baseUrl: homeserver, fetchFn: matrixFetch, accessToken: tokens.accessToken }).whoami();
+  dropIfSignedOut();
   const session = {
     homeserver,
     userId: who.user_id,
@@ -1162,16 +1209,19 @@ export async function loginWithOAuth(homeserverInput, { createAccount = false } 
     deviceId: who.device_id || tokens.deviceId,
     refreshToken: tokens.refreshToken,
     expiresAt: tokens.expiresAt,
-    auth: oauth.sessionAuthFields(metadata, clientId),
+    auth,
   };
 
   return transitionSession(async ticket => {
     ticket.assertCurrent();
+    dropIfSignedOut();
     // Signing in again to an account that's already saved here replaces
     // its old device; end that one on the server so it isn't left behind.
     const replaced = ensureSessionsList().find(saved => saved.userId === session.userId);
-    upsertSession(session);
-    flush(); // the refresh token must survive a quit from here on
+    // The refresh token must survive a quit from here on: written before
+    // the account is used. A logout while it's written takes it back out.
+    if (!(await saveSignIn(session, replaced, () => signOuts === signOutsAtStart))) dropIfSignedOut();
+    ticket.assertCurrent();
     try {
       const activeClient = await activateSession(session, ticket);
       lastSessionIssue = null;
@@ -1230,10 +1280,10 @@ export async function switchAccount(userId) {
 export function removeAccount(userId) {
   const list = ensureSessionsList();
   const idx = list.findIndex(s => s.userId === userId);
-  if (idx === -1) return;
+  if (idx === -1) return Promise.resolve();
 
   const [removed] = list.splice(idx, 1);
-  saveSessionsList(list);
+  matrixState.matrixSessions = [...list];
   pendingRecoveryKeys.delete(userId);
 
   // Best-effort: tell the homeserver this device is done, so it frees the
@@ -1245,17 +1295,20 @@ export function removeAccount(userId) {
 
   if (userId !== getUserId()) {
     forgetDeviceStore(removed);
-    return;
+    // Written now: a quit in the next moment must not bring it back.
+    return flush();
   }
 
+  signOuts++; // the active account: as logging out
   sessions.clear();
   clearSessionCaches();
   client = null;
   matrixState.matrixSession = null;
-  save();
+  const written = flush();
   lastSessionIssue = null;
   forgetDeviceStore(removed);
   emit('account', { userId: null, homeserver: null });
+  return written;
 }
 
 /**
@@ -1421,6 +1474,7 @@ export function saveTextFile(name, text) {
  *  first and synchronously either way, so this never blocks the UI from
  *  returning to the login screen. */
 export function logout() {
+  signOuts++;
   const userId = getUserId();
   if (userId) pendingRecoveryKeys.delete(userId);
   const endingClient = client; // captured before we clear it below, so the network call further down still has credentials
@@ -1430,14 +1484,15 @@ export function logout() {
     const idx = list.findIndex(s => s.userId === userId);
     if (idx !== -1) {
       list.splice(idx, 1);
-      saveSessionsList(list);
+      matrixState.matrixSessions = [...list];
     }
   }
   sessions.clear();
   clearSessionCaches();
   client = null;
   matrixState.matrixSession = null;
-  save();
+  // Written now, not 100 ms later: a quit in between kept the account.
+  const written = flush();
   lastSessionIssue = null;
   emit('account', { userId: null, homeserver: null });
 
@@ -1445,6 +1500,7 @@ export function logout() {
     endServerSession(endingSession, endingSession.auth ? null : endingClient);
     forgetDeviceStore(endingSession);
   }
+  return written;
 }
 
 // ─── Who sent what (trust-service.js) ───────────────────────────────────

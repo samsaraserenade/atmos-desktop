@@ -37,6 +37,9 @@ class CandleEngine extends EventEmitter {
       const start = bucketStart(trade.timestamp, intervalMs);
       const key = this._key(trade.symbol, trade.exchange, intervalMs);
       let candle = this.candles.get(key);
+      // With a candle before it, one is seen from its start; the first
+      // since watching began is seen only from partway (`partial`).
+      const watched = !!candle;
       if (candle && start > candle.start) {
         const completed = Object.freeze({ ...candle, closed: true });
         closed.push(completed);
@@ -53,6 +56,7 @@ class CandleEngine extends EventEmitter {
           firstTradeAt: trade.timestamp, lastTradeAt: trade.timestamp,
           open: trade.price, high: trade.price, low: trade.price, close: trade.price,
           volume: 0, tradeCount: 0, buyVolume: 0, sellVolume: 0, delta: 0,
+          ...(watched ? {} : { partial: true }),
         };
         this.candles.set(key, candle);
       }
@@ -76,6 +80,11 @@ class CandleEngine extends EventEmitter {
       this.emit('candle', update);
     }
     return { updates, closed };
+  }
+
+  /** The exchange's feed dropped: its forming candles miss trades now. */
+  markPartial(exchange) {
+    for (const candle of this.candles.values()) if (candle.exchange === exchange) candle.partial = true;
   }
 
   get(symbol, intervalMs = this.intervals[0], exchange) {

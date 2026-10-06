@@ -114,11 +114,21 @@ async function open(owner, tabId, { url = 'about:blank', private: isPrivate = fa
   return publicTab(tab);
 }
 
-function close(owner, tabId) {
+function close(owner, tabId, { sleep = false } = {}) {
   const tab = _tabs.get(tabKey(owner, tabId));
   if (!tab) return false;
-  _tabs.delete(tabKey(owner, tabId));
-  if (tab.guestId !== null) _byGuest.delete(tab.guestId);
+  // Put to sleep: the page goes only if it lets go (web-host.cjs
+  // sleepPage); one with unsaved changes stays as it is.
+  if (sleep) {
+    if (tab.guestId === null || !api) return false;
+    return api.command(tab.guestId, 'sleep').then(closed => {
+      if (!closed || _tabs.get(tabKey(owner, tabId)) !== tab) return false;
+      forget(owner, tabId, tab);
+      tab.element.remove();
+      return true;
+    }, () => false);
+  }
+  forget(owner, tabId, tab);
   // Gone from view at once; the page closes as Chrome closes a tab, its
   // beforeunload, pagehide and unload first (web-host.cjs closePage: sites
   // save what they keep there), and only then is the element removed.
@@ -131,12 +141,18 @@ function close(owner, tabId) {
   } else {
     remove();
   }
+  return true;
+}
+
+/** A tab's page is going: no longer listed, shown or fullscreen. */
+function forget(owner, tabId, tab) {
+  _tabs.delete(tabKey(owner, tabId));
+  if (tab.guestId !== null) _byGuest.delete(tab.guestId);
   const state = ownerState(owner);
   if (state.shown === tabId) state.shown = null;
   if (state.fullscreen === tabId) state.fullscreen = null;
   place(owner);
   emit(owner, { type: 'closed', tabId });
-  return true;
 }
 
 function show(owner, tabId) {
@@ -431,7 +447,7 @@ export function webFor(extension, iframe, surfaceType) {
   const owner = `${extension.kind}:${extension.id}`;
   return {
     open: (tabId, options) => open(owner, tabId, options),
-    close: tabId => close(owner, tabId),
+    close: (tabId, options) => close(owner, tabId, options),
     show: tabId => show(owner, tabId),
     do: (tabId, name, ...args) => command(owner, tabId, name, ...args),
     list: () => [..._tabs.values()].filter(tab => tab.owner === owner).map(publicTab),

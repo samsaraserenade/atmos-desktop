@@ -22,7 +22,7 @@ for (const route of ['//evil.example/v1/portfolio', '/health', '/v1/admin']) {
 
 assert.doesNotMatch(remote, /Authorization|Bearer|\.token\b/,
   'the renderer-side module must never receive or handle the bearer token');
-assert.match(main, /return server \? \{ configured: true, address: server\.baseUrl, protected: server\.protected \} : \{ configured: false \}/,
+assert.match(main, /return server \? \{ configured: true, address: server\.baseUrl, protected: server\.protected, id: connectionId \} : \{ configured: false \}/,
   'the renderer learns whether a server is set and its address, never the token');
 assert.match(registry, /if \(_remoteMode\) return;[\s\S]*?const liveIds/,
   'remote mode must not duplicate VPS history into local connector history');

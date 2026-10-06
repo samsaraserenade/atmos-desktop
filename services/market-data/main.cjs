@@ -19,12 +19,16 @@ const EVENT_NAMES = Object.freeze([
 const DEFAULT_CANDLE_INTERVALS = Object.freeze([60_000, 300_000, 900_000, 3_600_000, 14_400_000, 86_400_000]);
 const REGION_RETRY_MS = 3_600_000;
 const REGION_PROBE_SPACING_MS = 600_000;
+// A history provider (or region probe) that hasn't answered in full by then
+// gives way to the next: a stalled one would otherwise hold up every request
+// waiting on it.
+const HISTORY_TIMEOUT_MS = 15_000;
 
 class MarketDataService extends EventEmitter {
   constructor({
     WebSocketImpl = globalThis.WebSocket, fetchImpl = globalThis.fetch, logger = console,
     candleIntervals = DEFAULT_CANDLE_INTERVALS, staleAfterMs = 45_000, stateRetentionMs = 300_000,
-    candleThrottleMs = 250,
+    candleThrottleMs = 250, historyTimeoutMs = HISTORY_TIMEOUT_MS, reconcileDelayMs = 10_000,
   } = {}) {
     super();
     // Forming-candle updates to each subscriber are coalesced to at most one
@@ -34,6 +38,10 @@ class MarketDataService extends EventEmitter {
     this.regionProbedAt = new Map();
     this.logger = logger;
     this.fetchImpl = fetchImpl;
+    this.historyTimeoutMs = historyTimeoutMs;
+    this.reconcileDelayMs = reconcileDelayMs;
+    this.reconcileTimers = new Set();
+    this.requestsInFlight = new Set(); // AbortControllers, ended by close()
     this.historyCache = new Map();
     this.historyRequests = new Map();
     this.candleHistorySeeded = new Set();
@@ -65,6 +73,10 @@ class MarketDataService extends EventEmitter {
     });
     this.websockets.on('event', event => this._ingest(event));
     this.websockets.on('status', status => {
+      // Trades missed while it's down or (re)connecting (a subscription
+      // change restarts it): what's forming is seen in part. Not 'stale': a
+      // quiet market, on a feed still open.
+      if (['connecting', 'reconnecting', 'idle', 'unavailable'].includes(status.status)) this.candleEngine.markPartial(status.exchange);
       const commit = this.marketState.commitConnection(status);
       this._publish('market-data:connection-status', Object.freeze({ ...status, ...commit }));
     });
@@ -83,11 +95,30 @@ class MarketDataService extends EventEmitter {
     const last = this.regionProbedAt.get(exchange) || 0;
     if (Date.now() - last < REGION_PROBE_SPACING_MS) return false;
     this.regionProbedAt.set(exchange, Date.now());
+    const deadline = this._deadline();
     try {
-      const response = await this.fetchImpl(url, { headers: { accept: 'application/json' } });
+      const response = await this.fetchImpl(url, { headers: { accept: 'application/json' }, signal: deadline.signal });
       if (isRegionBlock(response?.status)) { this._block(exchange, response.status); return true; }
-    } catch { /* offline or DNS: an ordinary outage, keep reconnecting */ }
+    } catch { /* offline, DNS or no answer: an ordinary outage, keep reconnecting */ }
+    finally { deadline.done(); }
     return false;
+  }
+
+  /** A signal that aborts after historyTimeoutMs, or when the service closes; done() when finished. */
+  _deadline() {
+    const controller = new AbortController();
+    if (this.closed) controller.abort(new Error('Market Data stopped'));
+    const timer = setTimeout(() => controller.abort(new Error(`no answer in ${Math.round(this.historyTimeoutMs / 1000)} s`)), this.historyTimeoutMs);
+    timer.unref?.();
+    this.requestsInFlight.add(controller);
+    return { signal: controller.signal, done: () => { clearTimeout(timer); this.requestsInFlight.delete(controller); } };
+  }
+
+  /** getMarketHistory() from one exchange, within the deadline. */
+  async _historyFrom(symbol, options) {
+    const deadline = this._deadline();
+    try { return await getMarketHistory(symbol, options, this.fetchImpl, deadline.signal); }
+    finally { deadline.done(); }
   }
 
   _block(exchange, status) {
@@ -105,6 +136,7 @@ class MarketDataService extends EventEmitter {
       const commit = this.marketState.commitTrade(trade, candleResult.updates, candleResult.closed);
       this._publish('market-data:trade', Object.freeze({ ...trade, ...commit }));
       for (const candle of [...candleResult.closed, ...candleResult.updates]) this._publish('market-data:candle', Object.freeze({ ...candle, ...commit }));
+      for (const candle of candleResult.closed) if (candle.partial) this._reconcile(candle);
     } catch (error) {
       this.logger.warn(`[market-data] dropped invalid ${event.type || 'unknown'} event:`, error.message);
     }
@@ -149,17 +181,7 @@ class MarketDataService extends EventEmitter {
         if (this.candleHistorySeeded.has(key)) continue;
         this.candleHistorySeeded.add(key);
         this.getHistory(symbol, { exchange, intervalMs, exact: true, limit: this.candleHistoryBackfillLimit })
-          .then(result => {
-            const candles = result.candles.map(candle => ({
-              symbol, exchange, interval: result.interval, intervalMs: result.intervalMs,
-              start: candle.start, end: candle.end,
-              open: candle.open, high: candle.high, low: candle.low, close: candle.close,
-              volume: candle.volume, tradeCount: 0, buyVolume: 0, sellVolume: 0, delta: 0,
-              closed: true,
-            }));
-            const commit = this.marketState.seedCandleHistory(symbol, exchange, intervalMs, candles);
-            if (commit) this._publish('market-data:candle-history', Object.freeze({ symbol, exchange, interval: result.interval, intervalMs: result.intervalMs, ...commit }));
-          })
+          .then(result => this._seedHistory(symbol, exchange, intervalMs, result))
           .catch(error => {
             // An exchange history.js simply can't serve (e.g. Kraken today)
             // fails the same way every time -- retrying would just spam the
@@ -171,6 +193,40 @@ class MarketDataService extends EventEmitter {
           });
       }
     }
+  }
+
+  _seedHistory(symbol, exchange, intervalMs, result) {
+    const candles = result.candles.map(candle => ({
+      symbol, exchange, interval: result.interval, intervalMs: result.intervalMs,
+      start: candle.start, end: candle.end,
+      open: candle.open, high: candle.high, low: candle.low, close: candle.close,
+      volume: candle.volume, tradeCount: 0, buyVolume: 0, sellVolume: 0, delta: 0,
+      closed: true,
+    }));
+    const commit = this.marketState.seedCandleHistory(symbol, exchange, intervalMs, candles);
+    if (commit) this._publish('market-data:candle-history', Object.freeze({ symbol, exchange, interval: result.interval, intervalMs: result.intervalMs, ...commit }));
+  }
+
+  // A candle that closed seen only in part (watching began partway through
+  // it, or the feed dropped): the exchange's own is whole, and replaces it
+  // in history (seedCandleHistory). Asked a moment after it closes, far
+  // enough back to reach it however long ago it began (a quiet pair, a
+  // computer that slept), and again twice if that fails.
+  _reconcile(candle, attempt = 0) {
+    if (this.closed) return;
+    const timer = setTimeout(() => {
+      this.reconcileTimers.delete(timer);
+      const limit = Math.max(5, Math.min(1_000, Math.ceil((Date.now() - candle.start) / candle.intervalMs) + 2));
+      this.getHistory(candle.symbol, { exchange: candle.exchange, intervalMs: candle.intervalMs, exact: true, limit })
+        .then(result => this._seedHistory(candle.symbol, candle.exchange, candle.intervalMs, result))
+        .catch(error => {
+          if (this.closed || /unavailable for/.test(error.message)) return;
+          if (attempt < 2) { this._reconcile(candle, attempt + 1); return; }
+          this.logger.warn(`[market-data] couldn't read ${candle.exchange}'s ${candle.interval} candle for ${candle.symbol}:`, error.message);
+        });
+    }, this.reconcileDelayMs * 3 ** attempt);
+    timer.unref?.();
+    this.reconcileTimers.add(timer);
   }
 
   subscribe(consumerId, symbol, options = {}, listener) {
@@ -264,7 +320,7 @@ class MarketDataService extends EventEmitter {
   // the interval, trying the next when one fails (a region block, or a pair
   // it doesn't list).
   async _fetchHistory(symbol, options) {
-    if (options.exchange) return getMarketHistory(symbol, options, this.fetchImpl);
+    if (options.exchange) return this._historyFrom(symbol, options);
     const interval = resolveInterval(options);
     const requested = Array.isArray(options.exchanges) ? options.exchanges.map(value => String(value).toLowerCase()) : HISTORY_EXCHANGES;
     // Exchanges that serve the interval, or a shorter one that fits into it evenly.
@@ -275,8 +331,9 @@ class MarketDataService extends EventEmitter {
     let lastError;
     for (const exchange of order) {
       try {
-        return await getMarketHistory(symbol, { ...options, exchange }, this.fetchImpl);
+        return await this._historyFrom(symbol, { ...options, exchange });
       } catch (error) {
+        if (this.closed) throw error; // stopped: not the next exchange either
         lastError = error;
         if (isRegionBlock(error.status)) this._block(exchange, error.status);
         this.logger.warn(`[market-data] history from ${exchange} failed, trying the next exchange:`, error.message);
@@ -289,6 +346,10 @@ class MarketDataService extends EventEmitter {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.pruneTimer);
+    for (const controller of this.requestsInFlight) controller.abort(new Error('Market Data stopped'));
+    this.requestsInFlight.clear();
+    for (const timer of this.reconcileTimers) clearTimeout(timer);
+    this.reconcileTimers.clear();
     this.subscriptions.close();
     this.websockets.close();
     this.seenTradeIds.clear();
@@ -312,22 +373,33 @@ async function activate(context) {
     return entry.handle.unsubscribe() || false;
   }
 
+  // A frame's subscription is its own: calls all come through the Atmos
+  // page (event.sender), and Core names the frame (event.callerFrame; an
+  // older Atmos names none, and the page stands in, as it did).
+  const consumerIdOf = (event, subscriptionId) => `renderer-${event.sender.id}:${event.callerFrame?.id ?? ''}:${subscriptionId}`;
+
   context.handle('subscribe', (event, request = {}) => {
     const requestedId = typeof request.subscriptionId === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(request.subscriptionId) ? request.subscriptionId : randomUUID();
-    const consumerId = `renderer-${event.sender.id}:${requestedId}`;
+    const consumerId = consumerIdOf(event, requestedId);
+    // Events are told apart by the id alone (they reach every frame of the
+    // page): one another frame of this page holds is refused, as before.
+    const taken = `renderer-${event.sender.id}:`;
+    for (const other of rendererSubscriptions.keys()) {
+      if (other !== consumerId && other.startsWith(taken) && other.endsWith(`:${requestedId}`)) throw new Error(`already subscribed: ${requestedId}`);
+    }
     const handle = service.subscribe(consumerId, request.symbol, request.options, envelope => {
       if (!event.sender.isDestroyed?.()) context.send(event.sender, 'event', { subscriptionId: requestedId, ...envelope });
     });
     // A frame that goes without unsubscribing: its subscription goes too.
     // The listener is removed when it unsubscribes, so a frame that
     // subscribes and unsubscribes again and again doesn't pile them up.
-    const sender = event.sender;
+    const sender = event.callerFrame || event.sender;
     const onDestroyed = () => endRendererSubscription(consumerId);
     sender.once?.('destroyed', onDestroyed);
     rendererSubscriptions.set(consumerId, { handle, sender, onDestroyed });
     return { symbol: handle.symbol, feeds: handle.feeds, exchanges: handle.exchanges, snapshot: handle.snapshot };
   });
-  context.handle('unsubscribe', (event, subscriptionId) => endRendererSubscription(`renderer-${event.sender.id}:${subscriptionId}`));
+  context.handle('unsubscribe', (event, subscriptionId) => endRendererSubscription(consumerIdOf(event, subscriptionId)));
   context.handle('status', () => service.getStatus());
   context.handle('snapshot', (_event, request = {}) => service.getSnapshot(request.symbol, request.options));
   context.handle('history', (_event, request = {}) => service.getHistory(request.symbol, request.options));

@@ -1088,7 +1088,14 @@ _managerHandler('remove', (kind, id, options) => _broadcastManager(_manager.remo
 _managerHandler('cancel', (kind, id) => _broadcastManager(_manager.cancel(kind, id)));
 _managerHandler('add-source', async location => { _manager.addSource(location); return _checkForUpdates(); });
 _managerHandler('remove-source', async location => { _manager.removeSource(location); return _checkForUpdates(); });
-_managerHandler('take-data-cleanup', () => _dataCleanup.splice(0));
+// A frame of an extension didn't load: if that's an update in its first
+// session, the version it replaced runs from the next start (R4).
+_managerHandler('frame-failed', (kind, id, reason) => {
+  const failed = _manager.startFailed(String(kind), String(id), String(reason || '').slice(0, 300));
+  if (failed) console.warn(`[extensions] the update of ${kind}:${id} didn't start (${reason}); the version before it runs from the next start`);
+  return failed;
+});
+_managerHandler('take-data-cleanup', () => _dataCleanup.splice(0).map(({ kind, id }) => ({ kind, id })));
 // Atmos updating itself: download when asked (automatic updates off), install
 // now, and the setting.
 _managerHandler('atmos-update-download', async () => {
@@ -1167,16 +1174,20 @@ _page.on('extension-state:save-sync', (event, kind, id, data) => {
   }
 }, { refused: false });
 
-// Extensions removed with their data at this start: the page forgets their
-// state namespaces (it asks once, at boot), and origins of their own lose
-// their storage (_clearRemovedStorage, once the schemes are registered).
-const _dataCleanup = [];
+// Extensions removed with their data: the page forgets their state
+// namespaces (it asks once, at boot), and origins of their own lose their
+// storage (_clearRemovedStorage, once the schemes are registered). The
+// manager lists them until every delete has worked, so a failed one is
+// tried again at the next start.
+const _dataCleanup = []; // { kind, id, failed, browsing }
 function _cleanUpRemovedData() {
-  for (const { kind, id } of _manager.takeDataCleanup()) {
-    _dataCleanup.push({ kind, id });
-    try { _stateStore.remove(kind, id); } catch (error) { console.warn(`[extensions] could not delete ${kind}:${id}'s state:`, error.message); }
+  for (const { kind, id } of _manager.dataCleanup()) {
+    const job = { kind, id, failed: false };
+    _dataCleanup.push(job);
+    try { _stateStore.remove(kind, id); } catch (error) { job.failed = true; console.warn(`[extensions] could not delete ${kind}:${id}'s state:`, error.message); }
     // Atmos Browser's: its session (cookies, storage, cache) and site settings.
-    _web.forgetExtensionData(`${kind}:${id}`).catch(error => console.warn(`[extensions] could not delete ${kind}:${id}'s browsing data:`, error.message));
+    job.browsing = _web.forgetExtensionData(`${kind}:${id}`)
+      .catch(error => { job.failed = true; console.warn(`[extensions] could not delete ${kind}:${id}'s browsing data:`, error.message); });
   }
 }
 
@@ -1189,7 +1200,8 @@ function _cleanUpRemovedData() {
  * Before the window, so no frame of the same id holds it open.
  */
 async function _clearRemovedStorage() {
-  for (const { kind, id } of _dataCleanup) {
+  for (const job of _dataCleanup) {
+    const { kind, id } = job;
     for (const host of [`${kind}-${id}`, `first-party-${kind}-${id}`]) {
       const origin = `${frames.SCHEME}://${host}`;
       try {
@@ -1197,8 +1209,21 @@ async function _clearRemovedStorage() {
         const deleted = await _withStoragePage(null, frames.storageHostScript({ from: origin, remove: { indexedDB: ['*'], localStorage: ['*'] } }), 60_000, { removeHost: host });
         if (deleted?.length) console.log(`[extensions] deleted ${kind}:${id}'s storage in ${origin}:`, deleted.join(', '));
       } catch (error) {
+        job.failed = true;
         console.warn(`[extensions] could not delete ${kind}:${id}'s storage in ${origin}:`, error.message);
       }
+    }
+    await job.browsing;
+    // Installed again: what it keeps from now on is new (even one waiting
+    // for approval can be approved and run this session), which a later
+    // retry would delete, so this was the last try.
+    const entry = _catalog.find(`${kind}s`, id);
+    try {
+      if (!job.failed || entry) _manager.finishDataCleanup(kind, id);
+      else if (_manager.dataCleanupFailed(kind, id)) console.warn(`[extensions] gave up deleting ${kind}:${id}'s data after three tries`);
+      else console.warn(`[extensions] ${kind}:${id}'s data will be deleted again at the next start`);
+    } catch (error) {
+      console.warn(`[extensions] could not record ${kind}:${id}'s data deletion:`, error.message);
     }
   }
 }
@@ -1884,6 +1909,8 @@ function _installBrowserPermissions(activeEntries) {
 // later start, once it has run from its own. If the copy fails, it runs
 // from the shared origin this session, where its data still is, and the
 // move is tried again at the next start. Records: extension-origin-moves.json.
+// A copy counts only once its record is saved: one made but not recorded is
+// made again at the next start, over whatever the extension saved since.
 const _MOVES_FILE = path.join(app.getPath('userData'), 'extension-origin-moves.json');
 const _SESSION = new Date().toISOString();
 // Unpackaged, --origin-move-timeout=<ms> changes it (the end-to-end check
@@ -1896,17 +1923,63 @@ const _MOVE_TIMEOUT_MS = (() => {
 let _moveInProgress = null; // { host, removeHost }: the move (or removal) whose pages are served
 const _moveProblems = new Map(); // ref → reason, for Settings
 
-function _readMoves() {
+const _MOVES_BACKUP = `${_MOVES_FILE}.bak`;
+
+/** A record file's moves; null if there's no such file. Throws if it can't be read. */
+function _readMoveRecord(file) {
+  let text;
   try {
-    const saved = JSON.parse(fs.readFileSync(_MOVES_FILE, 'utf8'));
-    return saved?.format === 1 && saved.moves && typeof saved.moves === 'object' ? saved.moves : {};
-  } catch { return {}; }
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const saved = JSON.parse(text);
+  if (saved?.format !== 1 || !saved.moves || typeof saved.moves !== 'object') throw new Error('not a record of moves');
+  return saved.moves;
+}
+
+/**
+ * The moves made so far: from the record (asked twice: a scanner may hold
+ * it a moment), else from its backup (a write cut short), else none. With
+ * none, a move is made again: it copies only what the shared origin still
+ * holds, which is nothing once a move's shared copies are cleaned, and the
+ * record is written anew. (Moving nothing while it can't be read left it
+ * unreadable for good, and data stranded with it.)
+ */
+function _readMoves() {
+  for (const file of [_MOVES_FILE, _MOVES_BACKUP]) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const moves = _readMoveRecord(file);
+        if (moves) return moves;
+        break; // no such file: its backup
+      } catch (error) {
+        console.warn(`[extensions] couldn't read ${path.basename(file)}:`, error.message);
+        if (attempt === 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+      }
+    }
+  }
+  return {};
+}
+
+/** Written whole and flushed to disk, then renamed into place. */
+function _writeRecordFile(file, text) {
+  const temporary = `${file}.tmp`;
+  const handle = fs.openSync(temporary, 'w');
+  try {
+    fs.writeFileSync(handle, text);
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+  fs.renameSync(temporary, file);
 }
 
 function _writeMoves(moves) {
-  const temporary = `${_MOVES_FILE}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify({ format: 1, moves }, null, 2));
-  fs.renameSync(temporary, _MOVES_FILE);
+  const text = JSON.stringify({ format: 1, moves }, null, 2);
+  _writeRecordFile(_MOVES_FILE, text);
+  try { _writeRecordFile(_MOVES_BACKUP, text); } catch (error) { console.warn('[extensions] could not back up the record of storage moves:', error.message); }
 }
 
 /**
@@ -1938,27 +2011,32 @@ function _moveOne(entry, spec) {
 
 async function _moveToOwnOrigins() {
   const moves = _readMoves();
-  let changed = false;
   for (const entry of _framedEntries()) {
     const spec = frames.sharedOriginMove(entry);
     const ref = `${entry.kind}:${entry.id}`;
     if (!spec || moves[ref]?.status === 'copied') continue;
     const started = Date.now();
+    let reason;
     try {
       const copied = await _moveOne(entry, spec);
-      moves[ref] = { status: 'copied', session: _SESSION, at: new Date().toISOString(), spec, copied };
+      const record = { status: 'copied', session: _SESSION, at: new Date().toISOString(), spec, copied };
+      try {
+        // Recorded before anything uses the new origin.
+        _writeMoves({ ...moves, [ref]: record });
+      } catch (error) {
+        throw new Error(`its record couldn't be saved: ${error.message}`);
+      }
+      moves[ref] = record;
       console.log(`[extensions] moved ${ref}'s storage into ${frames.frameOrigin(entry)} in ${Date.now() - started}ms:`, JSON.stringify(copied));
+      continue;
     } catch (error) {
-      // Run from the shared origin this session, where its data still is.
-      entry.originFallback = true;
-      const reason = error?.message || String(error);
-      moves[ref] = { status: 'failed', at: new Date().toISOString(), error: reason, attempts: (moves[ref]?.attempts || 0) + 1 };
-      _moveProblems.set(ref, `Its data couldn't be moved to storage of its own (${reason}); it uses the shared storage this session, and Atmos tries again at the next start`);
-      console.error(`[extensions] could not move ${ref}'s storage; using the shared origin this session:`, reason);
+      reason = error?.message || String(error);
     }
-    changed = true;
-  }
-  if (changed) {
+    // Run from the shared origin this session, where its data still is.
+    entry.originFallback = true;
+    moves[ref] = { status: 'failed', at: new Date().toISOString(), error: reason, attempts: (moves[ref]?.attempts || 0) + 1 };
+    _moveProblems.set(ref, `Its data couldn't be moved to storage of its own (${reason}); it uses the shared storage this session, and Atmos tries again at the next start`);
+    console.error(`[extensions] could not move ${ref}'s storage; using the shared origin this session:`, reason);
     try { _writeMoves(moves); } catch (error) { console.error('[extensions] could not record storage moves:', error.message); }
   }
 }
@@ -2088,19 +2166,14 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     compatibility: manifest => checkCompatibility(manifest, { appVersion: app.getVersion() }),
   });
   const trustStart = Date.now();
-  _trust.assessAll(_catalog);
+  // An update that failed to start last time falls back to the version it replaced.
+  _trust.assessAll(_catalog, { refuse: entry => _manager.failedUpdate(entry) });
   _resolveDependencyState();
-  _manager.confirmApplied((kind, id) => {
-    const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
-    const trust = entry ? _trust.get(entry) : null;
-    return entry ? {
-      entry, loadable: trust?.loadable !== false,
-      awaitingApproval: entry.tier === 'third-party' && ['pending', 'changed'].includes(trust?.status),
-    } : null;
-  });
   _cleanUpRemovedData();
   console.log(`[main] checked extension integrity in ${Date.now() - trustStart}ms`);
   const extensions = createExtensionHost({ app, BrowserWindow, ipcMain, dialog, shell, protocol, authorizeInvoke: _authorizeInvoke, appVersion: app.getVersion() });
+  // An extension frame that called a main.cjs went (its handlers' event.callerFrame).
+  _page.on('extensions:frame-closed', (event, frame) => extensions.frameClosed(event.sender, String(frame)));
   const activePlugins = _catalog.list('plugins').filter(_isActive);
   // Only official plugins may stand in for a service ("supersedesServices"):
   // a community one could otherwise switch an official service off.
@@ -2125,8 +2198,27 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   // main.cjs runs only for official and system extensions. Trust already
   // blocks a community one that has a main.cjs; this doesn't rely on it.
   const mayRunMain = entry => entry.tier !== 'third-party';
+  // Updates whose main.cjs starts now for the first time: if Atmos never
+  // gets past this (a crash, a main.cjs that hangs it), the next start runs
+  // the version before (R4).
+  _manager.markStarting([...activeServices, ...activePlugins.filter(_isActive)]
+    .filter(entry => mayRunMain(entry) && fs.existsSync(path.join(entry.path, 'main.cjs'))));
   await extensions.activateEntries('service', activeServices.filter(mayRunMain), activation);
   await extensions.activateEntries('plugin', activePlugins.filter(entry => _isActive(entry) && mayRunMain(entry)), activation);
+  // Updates applied this start: confirmed once they've started (trust, then
+  // their main.cjs); a frame that fails to load later says so (frame-failed).
+  _manager.confirmApplied((kind, id) => {
+    const entry = _catalog.find(kind === 'plugin' ? 'plugins' : 'services', id);
+    const trust = entry ? _trust.get(entry) : null;
+    const problem = entry ? (_activationFailures.get(refOf(entry)) || '').replace(/^Didn't start: /, '') || null : null;
+    const loadable = trust?.loadable !== false && !problem;
+    return entry ? {
+      entry, loadable, problem,
+      // Switched off, or waiting for what it needs: it hasn't run yet.
+      inactive: loadable && !_isActive(entry),
+      awaitingApproval: entry.tier === 'third-party' && ['pending', 'changed'].includes(trust?.status),
+    } : null;
+  });
   extensions.registerResourceProtocol(protocol, { allowOrigin: _originMayUseResource });
   _registerAtmosAppProtocol();
   _registerAtmosExtProtocol();

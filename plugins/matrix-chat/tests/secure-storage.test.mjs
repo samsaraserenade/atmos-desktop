@@ -59,6 +59,22 @@ test('vault key: a plainly stored key is protected once secure storage exists; a
   assert.ok(fs.readdirSync(path.dirname(file)).some(name => name.startsWith('vault-key.bin.unreadable-')));
 });
 
+test('vault key: a failed write keeps the key (R20)', async () => {
+  const file = tempFile();
+  const plain = await createVault({ safeStorage: fakeSafeStorage(false), fs, path, crypto, file }).get();
+  // Protecting it now fails to write: the key it has is still the key.
+  const failingFs = { ...fs, promises: { ...fs.promises, writeFile: async () => { throw Object.assign(new Error('disk busy'), { code: 'EBUSY' }); } } };
+  const kept = await createVault({ safeStorage: fakeSafeStorage(true), fs: failingFs, path, crypto, file }).get();
+  assert.deepEqual(kept.key, plain.key);
+  assert.equal(kept.protected, false);
+  assert.equal(kept.replaced, undefined);
+  assert.equal(fs.readdirSync(path.dirname(file)).some(name => name.includes('unreadable')), false);
+  // And it's protected at the next start that can write.
+  const later = await createVault({ safeStorage: fakeSafeStorage(true), fs, path, crypto, file }).get();
+  assert.deepEqual(later.key, plain.key);
+  assert.equal(later.protected, true);
+});
+
 test('sealing: round-trips, and refuses altered data, another purpose or another key', async () => {
   const key = crypto.randomBytes(32);
   vault.useVaultKeys(await vault.deriveKeys(new Uint8Array(key)));
@@ -132,4 +148,18 @@ test('encryption databases: one per account and device, encrypted, deletable', a
   const idb = { deleteDatabase(name) { deleted.push(name); const request = {}; setImmediate(() => request.onsuccess()); return request; } };
   assert.equal(await deleteCryptoStore('@a:x', 'DEV', idb), true);
   assert.deepEqual(deleted, ['atmos-matrix::@a:x::DEV::matrix-sdk-crypto', 'atmos-matrix::@a:x::DEV::matrix-sdk-crypto-meta']);
+});
+
+test('saving: a failed write is passed on, and the next still runs (R21)', async () => {
+  vault.useVaultKeys(await vault.deriveKeys(new Uint8Array(crypto.randomBytes(32))));
+  const atmos = (await import('./fake-oauth-atmos.mjs')).default;
+  const writes = [];
+  let failNext = true;
+  atmos.state.set = async value => {
+    if (failNext) { failNext = false; throw new Error('state is too big'); }
+    writes.push(value);
+  };
+  await assert.rejects(state.flush(), /too big/);
+  await state.flush();
+  assert.equal(writes.length, 1, 'the next save ran');
 });

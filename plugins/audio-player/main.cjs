@@ -74,7 +74,8 @@ function imageContentType(filePath) {
   })[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
 }
 
-function readCoverSidecar(filePath) {
+/** The cover image beside a song; `allowed` says which candidates may be read (inside the library). */
+function readCoverSidecar(filePath, allowed = () => true) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('A valid absolute media path is required.');
   const resolved = path.resolve(filePath);
   if (!AUDIO_EXTENSIONS.has(path.extname(resolved).slice(1).toLowerCase())) throw new Error('A supported media file is required.');
@@ -86,6 +87,7 @@ function readCoverSidecar(filePath) {
   for (const name of candidates) {
     const candidate = path.join(directory, name);
     try {
+      if (!allowed(candidate)) continue; // a link leading out of the library
       const stat = fs.statSync(candidate);
       if (!stat.isFile() || stat.size > 20 * 1024 * 1024) continue;
       return {
@@ -321,7 +323,7 @@ module.exports = context => {
     return true;
   });
 
-  context.handle('read-cover-sidecar', (_event, filePath) => readCoverSidecar(roots.check(filePath)));
+  context.handle('read-cover-sidecar', (_event, filePath) => readCoverSidecar(roots.check(filePath), candidate => roots.contains(candidate)));
   context.handle('read-tag-fallback', (_event, filePath) => readTagFallback(roots.check(filePath)));
 
   context.registerResourceProvider('audio-player-media', ({ request, pathname }) => (
@@ -332,4 +334,4 @@ module.exports = context => {
 };
 
 // Pure helpers exposed for regression tests; Atmos still consumes the function above.
-module.exports._test = { directoryExists, imageContentType, parseVorbisComments, synchsafeSize };
+module.exports._test = { directoryExists, imageContentType, parseVorbisComments, readCoverSidecar, synchsafeSize };
