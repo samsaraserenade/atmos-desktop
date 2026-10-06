@@ -256,7 +256,7 @@ const r = {};
   r.advancedTo = (await channelState(s.page)).source;
 
   // Space in Atmos (focus outside any frame and field): play/pause through
-  // the boot frame's key. (A panel that uses Space itself keeps it while
+  // Now Playing's boot frame key, which toggles Music through its controls. (A panel that uses Space itself keeps it while
   // it has focus.)
   await s.page.evaluate(() => { document.activeElement?.blur?.(); document.body.focus(); });
   await s.page.keyboard.press('Space');
@@ -267,7 +267,8 @@ const r = {};
   r.afterSecondSpace = (await channelState(s.page)).playing;
 
   // rev/ commands in Atmos's command bar (Alt+\), from another panel:
-  // Audio Player's boot frame answers them.
+  // rev/play and rev/next are Now Playing's (for whatever plays: Music here),
+  // rev/song Audio Player's boot frame's.
   const bar = () => s.page.evaluate(() => ({
     rows: [...document.querySelectorAll('#command-bar-list .command-bar-item')].map(item => `${item.querySelector('.command-bar-item-title')?.firstChild?.textContent.trim()}${item.querySelector('.command-bar-item-source')?.textContent.trim() ? ` (${item.querySelector('.command-bar-item-source').textContent.trim()})` : ''}`),
     flash: document.querySelector('.command-bar-flash')?.textContent.trim() || null,

@@ -63,7 +63,7 @@
           ]
         },
         "commands": {
-          "description": "SDK 1.3: rev/ commands it adds to Atmos's command bar (Alt+\\), run by its frames through atmos.commands.handle(). At most 30; Atmos's own names (sidebar, sidebar-side, settings, extensions, switch, wallpaper, reload) can't be used.",
+          "description": "SDK 1.3: rev/ commands it adds to Atmos's command bar (Alt+\\), run by its frames through atmos.commands.handle(). At most 30; Atmos's own names (sidebar, sidebar-side, settings, extensions, switch, widget, wallpaper, reload) can't be used.",
           "type": "array",
           "maxItems": 30,
           "items": {
@@ -74,7 +74,8 @@
               "args": { "description": "A hint for what it takes (\"room or person\"), at most 40 characters.", "type": "string", "maxLength": 40 },
               "about": { "description": "What it does, in a line (at most 120 characters).", "type": "string", "maxLength": 120 },
               "takesArgs": { "description": "Enter on the command waits for something typed after it.", "type": "boolean" },
-              "suggests": { "description": "Its frame lists choices as you type (atmos.commands.handle's suggest).", "type": "boolean" }
+              "aliases": { "description": "SDK 1.6: other names it's found and run by (\"pause\" for \"play\"), at most 3; not Atmos's names nor another of its own commands'.", "type": "array", "maxItems": 3, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,29}$" } },
+          "suggests": { "description": "Its frame lists choices as you type (atmos.commands.handle's suggest).", "type": "boolean" }
             },
             "additionalProperties": false
           }

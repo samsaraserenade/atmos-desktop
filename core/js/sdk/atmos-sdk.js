@@ -32,7 +32,7 @@
  * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = '1.5.0';
+export const SDK_VERSION = '1.6.0';
 
 let port = null;
 let nextId = 1;

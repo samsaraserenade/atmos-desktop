@@ -40,7 +40,7 @@ test('isCommand: only text starting with rev/ (a message bar\'s commands)', asyn
 test('nothing typed lists Atmos\'s commands in order', async () => {
   const { suggest } = await load();
   for (const text of ['', 'rev/', '/']) {
-    assert.deepEqual(titles(suggest(text, { panels: PANELS })), ['rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload'], text);
+    assert.deepEqual(titles(suggest(text, { panels: PANELS })), ['rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/widget', 'rev/wallpaper', 'rev/reload'], text);
   }
   const rows = suggest('', { panels: PANELS }).rows;
   // Enter runs a command that needs nothing more; one that needs a panel gets a space.
@@ -122,11 +122,11 @@ const SOURCES = [AWAY, AUDIO, MATRIX];
 test('every command is listed, by what\'s showing: the panel\'s, widgets\', Atmos\'s own, then the rest, each under a heading', async () => {
   const { suggest, commandList } = await load();
   assert.deepEqual(commandList(SOURCES).map(command => `${command.name}:${command.rank}`),
-    ['go:0', 'leave:0', 'mute:0', 'play:2', 'sidebar:3', 'sidebar-side:3', 'settings:3', 'extensions:3', 'switch:3', 'wallpaper:3', 'reload:3', 'roll:4']);
+    ['go:0', 'leave:0', 'mute:0', 'play:2', 'sidebar:3', 'sidebar-side:3', 'settings:3', 'extensions:3', 'switch:3', 'widget:3', 'wallpaper:3', 'reload:3', 'roll:4']);
   const all = suggest('', { sources: SOURCES });
   assert.deepEqual(all.rows.map(row => row.heading ?? row.title), [
     'Matrix Chat', 'rev/go', 'rev/leave', 'rev/mute', 'Audio Player', 'rev/play',
-    'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload', 'Dice', 'rev/roll',
+    'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/widget', 'rev/wallpaper', 'rev/reload', 'Dice', 'rev/roll',
   ], 'Dice, with nothing showing, last');
   assert.ok(all.rows.filter(row => row.title).every(row => row.source === ''), 'under its heading, a row doesn\'t repeat whose it is');
   const away = { extension: 'plugin:abacus', label: 'Abacus', rank: 4, commands: [{ name: 'count', about: 'Count' }] };
@@ -283,4 +283,44 @@ test('Atmos\'s own commands without a key: the sidebar\'s side, the wallpaper, r
   assert.deepEqual(titles(suggest('rev/wallpaper ch')), ['rev/wallpaper choose']);
   assert.deepEqual(titles(suggest('rev/wallpaper x')), ['note: rev/wallpaper takes paste or choose.']);
   assert.deepEqual(suggest('rev/wall').rows[0].enter, { run: { command: 'wallpaper', target: null } }, 'Enter on the name pastes');
+});
+
+const WIDGETS = [
+  { id: 'portfolio-balance', label: 'Performance', enabled: true, open: false, docked: null, away: false },
+  { id: 'spot', label: 'Spot', enabled: true, open: true, docked: 'top', away: false },
+  { id: 'now-playing', label: 'Now Playing', enabled: false, open: false, docked: null, away: false },
+];
+
+test('rev/widget: a widget by name, then what to do with it, offered by its state', async () => {
+  const { suggest } = await load();
+  const at = text => suggest(text, { widgets: WIDGETS });
+  assert.deepEqual(titles(at('rev/widget ')), ['Performance', 'Spot', 'Now Playing', 'All widgets']);
+  assert.deepEqual(at('rev/widget per').rows[0].enter, { run: { command: 'widget', target: 'portfolio-balance:show' } }, 'Enter shows it');
+  assert.deepEqual(at('rev/widget per').rows[0].tab, { complete: 'rev/widget Performance ' });
+  assert.deepEqual(titles(at('rev/widget performance ')),
+    ['Show: Performance', 'Unfold: Performance', 'Fold: Performance', 'Dock to top: Performance', 'Dock to bottom: Performance', 'Hide: Performance'], 'folded: unfold first');
+  assert.deepEqual(titles(at('rev/widget spot ')),
+    ['Show: Spot', 'Fold: Spot', 'Unfold: Spot', 'Undock: Spot', 'Dock to bottom: Spot', 'Hide: Spot'], 'open and docked to the top');
+  assert.deepEqual(titles(at('rev/widget now playing ')), ['Show: Now Playing'], 'hidden: only bringing it back');
+  assert.deepEqual(at('rev/widget perf fold').rows[0].enter, { run: { command: 'widget', target: 'portfolio-balance:fold' } }, 'the start of a name only one has');
+  assert.deepEqual(at('rev/widget spot d').rows.map(row => row.enter.run.target), ['spot:bottom']);
+  assert.deepEqual(titles(at('rev/widget all ')), ['Fold all', 'Unfold all']);
+  assert.deepEqual(at('rev/widget all unf').rows[0].enter, { run: { command: 'widget', target: 'all:unfold' } });
+  assert.deepEqual(titles(at('rev/widget spot zz')), ['note: Spot can’t “zz”. Clear it to see what it can do.']);
+  assert.deepEqual(titles(at('rev/widget zz')), ['note: No widget is called “zz”.']);
+  assert.deepEqual(titles(at('rev/perf')), ['Sidebar → Performance'], 'a widget by name, as a panel or a page');
+  assert.deepEqual(at('rev/perf').rows[0].enter, { run: { command: 'widget', target: 'portfolio-balance:show' } });
+});
+
+test('a command\'s aliases find and run it, listed once (rev/pause is rev/play)', async () => {
+  const { suggest } = await load();
+  const AUDIO_PLAY = { extension: 'plugin:audio-player', label: 'Audio Player', rank: 2, commands: [{ name: 'play', aliases: ['pause'], about: 'Play or pause' }] };
+  const at = text => suggest(text, { sources: [AUDIO_PLAY] });
+  assert.deepEqual(titles(at('rev/pau')), ['rev/pause']);
+  assert.equal(at('rev/pau').rows[0].sub, 'Play or pause · rev/play');
+  assert.deepEqual(at('rev/pause').rows[0].enter, { run: { command: 'play', source: 'plugin:audio-player', args: '', value: null } }, 'runs as its own name');
+  assert.deepEqual(titles(at('rev/pla')), ['rev/play']);
+  assert.equal(at('rev/pla').rows[0].sub, 'Play or pause · rev/pause');
+  assert.equal(at('').rows.filter(row => row.title === 'rev/play' || row.title === 'rev/pause').length, 1, 'listed once');
+  assert.equal(at('rev/pause x').parsed.command.name, 'play');
 });

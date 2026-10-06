@@ -4,6 +4,7 @@ import { appearanceState, setSidebarPosition } from './appearance.js';
 import { openMenu } from './context-menu.js';
 import { onShortcut } from './shortcuts.js';
 import { getActivePanelPluginId, listPanelPlugins } from './panel-registry.js';
+import { getRegisteredSections, setSectionEnabled } from './sidebar-registry.js';
 
 const LEGACY_ORDER_KEY = 'atmos_section_order';
 const MIDDLE_CLICK_MAX_MS = 250;
@@ -604,3 +605,72 @@ window.addEventListener('atmos:active-panel-changed', applySidebarPanelScopes);
 window.addEventListener('resize', applySidebarSectionHeights);
 
 panel()?.addEventListener('wheel', event => event.stopPropagation(), { passive: true });
+
+// ── Widgets by command (rev/widget, command-list.js) ─────────────────────────
+
+const widgetSection = id => document.getElementById(`fin-section-${id}`);
+
+/** The sidebar's widgets, in sidebar order: { id, label, enabled, open, docked, away }. */
+export function listSidebarWidgets() {
+  const position = new Map(sections().map((section, index) => [section.id, index]));
+  return getRegisteredSections()
+    .map(widget => {
+      const section = widgetSection(widget.id);
+      return {
+        id: widget.id, label: widget.label, enabled: widget.enabled && !!section,
+        open: !!section?.classList.contains('open'), docked: section ? isDocked(section) : null,
+        away: !!section?.hidden,
+      };
+    })
+    .sort((a, b) => (position.get(`fin-section-${a.id}`) ?? 1e9) - (position.get(`fin-section-${b.id}`) ?? 1e9));
+}
+
+/** Draw the eye to a widget a command just changed. */
+function ping(section) {
+  section.classList.remove('is-pinged');
+  void section.offsetWidth;
+  section.classList.add('is-pinged');
+  setTimeout(() => section.classList.remove('is-pinged'), 1200);
+}
+
+/**
+ * `rev/widget <id>:<action>`: show (the sidebar opened on it, put back if
+ * hidden), fold, unfold, top, bottom, release, hide; for "all", fold and
+ * unfold every widget. The sidebar opens to show what changed. Returns
+ * what happened, said for a moment where the bar was.
+ */
+export function runWidgetCommand(id, action) {
+  if (id === 'all') {
+    const open = action === 'unfold';
+    sections().filter(section => !section.hidden).forEach(section => section.classList.toggle('open', open));
+    saveOpenSections();
+    openSidebar();
+    return open ? 'Every widget unfolded' : 'Every widget folded';
+  }
+  const widget = getRegisteredSections().find(item => item.id === id);
+  if (!widget) return 'That widget is gone';
+  if (action === 'hide') {
+    setSectionEnabled(id, false);
+    return `${widget.label} hidden: rev/widget ${widget.label} brings it back`;
+  }
+  if (!widgetSection(id)) setSectionEnabled(id, true);
+  const section = widgetSection(id);
+  if (!section) return `${widget.label} couldn't be shown`;
+  openSidebar();
+  let said = null;
+  if (action === 'show' || action === 'unfold') section.classList.add('open');
+  else if (action === 'fold') { section.classList.remove('open'); said = `${widget.label} folded`; }
+  else if (action === 'top' || action === 'bottom') { setSectionDocked(section, action); said = `${widget.label} docked to the ${action}`; }
+  else if (action === 'release') { setSectionDocked(section, null); said = `${widget.label} undocked`; }
+  saveOpenSections();
+  if (section.hidden) {
+    const scope = sectionPanelScope(section);
+    const names = listPanelPlugins().filter(plugin => scope.includes(plugin.id)).map(plugin => plugin.label);
+    return `${widget.label} shows beside ${names.join(' and ') || 'another panel'}`;
+  }
+  requestAnimationFrame(() => {
+    section.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    ping(section);
+  });
+  return said;
+}

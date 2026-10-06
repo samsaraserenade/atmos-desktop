@@ -61,16 +61,14 @@ in Atmos's data folder): the engine saves playback keys, the views save
 display keys. The library lives in IndexedDB in Audio Player's own origin
 (`"isolation": "origin"`), written by the engine and read by the views.
 
-**Space** plays and pauses from anywhere in Atmos (the boot contribution
-declares `"keys": ["Space"]`), except in a text field or on a button, or in
-a panel whose own code takes Space; in any other panel it's Music's, and the
-panel doesn't also scroll (since Atmos 0.22).
+**Space**, `rev/play` (`rev/pause`), `rev/next` and `rev/previous` are the
+Now Playing service's since 1.2.3 (its README): they act on whatever plays
+in Atmos, Music included, through the controls Music gives Now Playing.
 
 **rev/ commands** in Atmos's command bar (Alt+\\, SDK 1.3), declared in
 `extension.json` and answered by the engine (`src/commands.js`), so they
-work whichever panel is showing: `rev/play` (play or pause; `rev/play
-<name>` plays that song or album), `rev/next`, `rev/previous`, `rev/song`
-and `rev/album` (your library, listed as you type). With the keyboard in
+work whichever panel is showing: `rev/song` and `rev/album` (your library,
+listed as you type). With the keyboard in
 Music the bar opens over Music's own (`atmos.commands.bar`), and `rev/`
 typed in the library search hands over to it. Needs Atmos 0.20.0
 (`engines`).

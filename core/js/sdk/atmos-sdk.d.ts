@@ -369,7 +369,7 @@ export interface CommandOption {
 }
 /**
  * SDK 1.3: rev/ commands in Atmos's command bar (Ctrl+\). Declare each in
- * extension.json "contributes.commands": [{ name, args?, about?, takesArgs?, suggests? }].
+ * extension.json "contributes.commands": [{ name, args?, about?, takesArgs?, suggests?, aliases? }].
  */
 export interface CommandsApi {
   /** Run `name` when it's chosen; with `suggest`, list choices as it's typed. Returns a function that stops handling it. */

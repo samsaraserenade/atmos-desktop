@@ -52,7 +52,7 @@ const APPEARANCE_VARS = [
 ];
 const BOOT_TIMEOUT_MS = 10000;
 // The SDK frames get (core/js/sdk/atmos-sdk.js SDK_VERSION; a test keeps them equal).
-export const SDK_VERSION = '1.5.0';
+export const SDK_VERSION = '1.6.0';
 
 const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>

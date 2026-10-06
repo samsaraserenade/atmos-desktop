@@ -206,8 +206,8 @@ const check = (name, ok, detail) => {
     check('the list rises from it, as wide', now.list && Math.abs(now.list.bottom - now.field.top) <= 1 && now.list.width === now.field.width, { list: now.list, field: now.field });
     const headings = await page.evaluate(() => [...document.querySelectorAll('#command-bar-list .command-bar-heading')].map(item => item.textContent.trim()));
     check('every command, under its extension\'s name: the browser\'s first (the panel it\'s for), then Atmos\'s, then the rest by name',
-      JSON.stringify(now.rows.slice(0, 12)) === JSON.stringify(['Atmos Browser', 'rev/new-tab', 'rev/tab', 'rev/close-tab', 'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload'])
-      && JSON.stringify(headings) === JSON.stringify(['Atmos Browser', 'Atmos', 'Audio Player', 'Command Probe · community', 'Finance', 'Matrix Chat'])
+      JSON.stringify(now.rows.slice(0, 13)) === JSON.stringify(['Atmos Browser', 'rev/new-tab', 'rev/tab', 'rev/close-tab', 'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/widget', 'rev/wallpaper', 'rev/reload'])
+      && JSON.stringify(headings) === JSON.stringify(['Atmos Browser', 'Atmos', 'Audio Player', 'Command Probe · community', 'Finance', 'Matrix Chat', 'Now Playing'])
       && now.rows.includes('rev/roll') && now.rows.includes('rev/chart') && now.rows.includes('rev/go') && now.sources.every(source => source === ''), { rows: now.rows, headings, sources: now.sources });
     await page.screenshot({ path: path.join(out, '01-own-bar.png') });
 
@@ -334,7 +334,7 @@ const check = (name, ok, detail) => {
     now = await state();
     check('over a panel that has a bar, Atmos\'s bar lies on it', now.where === 'panel bar' && probeBox && Math.abs(now.field.bottom - probeBox.bottom) <= 1 && now.field.height === 54, { now, probeBox });
     check('its commands come first while it shows, under its name, then Atmos\'s; never Atmos\'s names from it',
-      JSON.stringify(now.rows.slice(0, 15)) === JSON.stringify(['Command Probe · community', 'rev/roll', 'rev/pick', 'rev/wipe', 'rev/step', 'rev/boom', 'rev/look', 'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload'])
+      JSON.stringify(now.rows.slice(0, 16)) === JSON.stringify(['Command Probe · community', 'rev/roll', 'rev/pick', 'rev/wipe', 'rev/step', 'rev/boom', 'rev/look', 'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/widget', 'rev/wallpaper', 'rev/reload'])
       && now.rows.filter(row => row === 'rev/switch').length === 1, now);
     await page.screenshot({ path: path.join(out, '03-panel-bar.png') });
     await type('rev/roll 3');
@@ -461,8 +461,43 @@ const check = (name, ok, detail) => {
       other.now.value === 'rev/nex' && other.now.rows.includes('rev/next') && other.now.active === null
       && afterEnter.open && afterEnter.value === 'rev/nex' && !afterEnter.flash && !afterEnter.status
       && retyped.open && retyped.value === 'rev/nex' && retyped.active === null && !retyped.flash
-      && pickedNext === 'rev/next' && /Nothing to play yet/.test(now.status || ''), { other: other.now, afterEnter, retyped, pickedNext, now });
+      && pickedNext === 'rev/next' && /Nothing to play yet|Nothing is playing/.test(now.status || ''), { other: other.now, afterEnter, retyped, pickedNext, now });
     await press('Escape'); await press('Escape');
+
+    // ── Widgets (rev/widget) and aliases (rev/pause is rev/play) ──────────
+    {
+      await page.evaluate(async () => (await import('atmos-core/core/sidebar-shell.js')).closeSidebar());
+      const widgets = () => page.evaluate(async () => (await import('atmos-core/core/sidebar-shell.js')).listSidebarWidgets());
+      const before = await widgets();
+      const target = before.find(widget => widget.enabled && !widget.away && !widget.docked) || before[0];
+      report.details.widgetTarget = target;
+      const run = async text => { await press('Alt+Backslash'); await type(text); await press('Enter'); await wait(500); };
+      await run(`rev/widget ${target.label} fold`);
+      const folded = (await widgets()).find(widget => widget.id === target.id);
+      const sidebarOpen = await page.evaluate(() => document.body.classList.contains('drawer-open'));
+      const flashText = await page.evaluate(() => document.querySelector('.command-bar-flash')?.textContent || '');
+      check('rev/widget <name> fold folds it, opens the sidebar to show it, and says so', !folded.open && sidebarOpen && /folded/.test(flashText), { folded, sidebarOpen, flashText });
+      await run(`rev/widget ${target.label.slice(0, 4)} top`);
+      const docked = (await widgets()).find(widget => widget.id === target.id);
+      const inTopDock = await page.evaluate(id => document.getElementById(`fin-section-${id}`)?.parentElement?.id, target.id);
+      check('…the start of its name and an action: docked to the top', docked.docked === 'top' && inTopDock === 'sidebar-top-dock', { docked, inTopDock });
+      await run(`rev/widget ${target.label} release`);
+      await run(`rev/widget ${target.label} hide`);
+      const hidden = (await widgets()).find(widget => widget.id === target.id);
+      await run(`rev/widget ${target.label.slice(0, 4).toLowerCase()}`);
+      const back = (await widgets()).find(widget => widget.id === target.id);
+      const pinged = await page.evaluate(id => document.getElementById(`fin-section-${id}`)?.classList.contains('is-pinged'), target.id);
+      check('hide takes it out; rev/widget and the start of its name puts it back, open and lit', !hidden.enabled && back.enabled && back.open && !back.docked && pinged, { hidden, back, pinged });
+      await run('rev/widget all fold');
+      const allFolded = (await widgets()).filter(widget => widget.enabled && !widget.away).every(widget => !widget.open);
+      check('rev/widget all fold folds every widget', allFolded, await widgets());
+      await press('Alt+Backslash');
+      await type('rev/pau');
+      now = await state();
+      check('rev/pause finds rev/play (one command, two names)', now.rows.includes('rev/pause') && !now.rows.includes('rev/play'), now.rows);
+      await press('Escape'); await press('Escape');
+      await page.evaluate(async () => (await import('atmos-core/core/sidebar-shell.js')).closeSidebar());
+    }
 
     // ── In the sidebar (Appearance → Command Bar) ──────────────────────────
     await page.evaluate(async () => (await import('atmos-core/core/appearance.js')).setCommandBarPlace('sidebar'));

@@ -47,6 +47,8 @@ body.task-view-open { overflow:hidden; }
   transition:transform .22s cubic-bezier(.22,1,.36,1);
 }
 #task-view.open .task-view-shell { transform:none; }
+/* Opened from the keyboard (Alt+`): no fade or rise, in or out. */
+#task-view.from-keys, #task-view.from-keys .task-view-shell { transition:none; }
 .task-view-grid {
   display:grid;
   grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));

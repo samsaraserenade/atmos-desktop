@@ -336,7 +336,7 @@ function describeContributions(entry, files) {
 // are away and show them before a community extension is approved. Core's
 // own names can't be taken.
 // command-list.js CORE_COMMANDS' names (command-list.test.cjs checks they agree).
-const CORE_COMMAND_NAMES = Object.freeze(['sidebar', 'sidebar-side', 'settings', 'extensions', 'switch', 'wallpaper', 'reload']);
+const CORE_COMMAND_NAMES = Object.freeze(['sidebar', 'sidebar-side', 'settings', 'extensions', 'switch', 'widget', 'wallpaper', 'reload']);
 const COMMAND_NAME = /^[a-z][a-z0-9-]{0,29}$/;
 const MAX_COMMANDS = 30;
 
@@ -353,6 +353,8 @@ function commandText(value, max) {
  *   about      a line saying what it does
  *   takesArgs  Enter on the command waits for something typed after it
  *   suggests   the extension lists choices as you type (atmos.commands.handle's suggest)
+ *   aliases    other names typed for it (SDK 1.6: rev/pause for rev/play), at most 3,
+ *              never Atmos's names nor another of its own commands' names
  */
 function describeCommands(entry) {
   if (isLibrary(entry)) return [];
@@ -361,6 +363,9 @@ function describeCommands(entry) {
   if (!Array.isArray(declared)) return [];
   const seen = new Set();
   const out = [];
+  const nameOf = def => (typeof def?.name === 'string' ? def.name.trim().toLowerCase() : '');
+  const ownNames = new Set(declared.map(nameOf));
+  const aliased = new Set();
   for (const def of declared) {
     if (out.length >= MAX_COMMANDS) break;
     const name = typeof def?.name === 'string' ? def.name.trim().toLowerCase() : '';
@@ -372,9 +377,21 @@ function describeCommands(entry) {
       about: commandText(def.about, 120),
       takesArgs: def.takesArgs === true,
       suggests: def.suggests === true,
+      ...aliasesOf(def),
     });
   }
   return out;
+
+  function aliasesOf(def) {
+    const aliases = [];
+    for (const raw of Array.isArray(def.aliases) ? def.aliases : []) {
+      const alias = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+      if (aliases.length >= 3 || !COMMAND_NAME.test(alias) || CORE_COMMAND_NAMES.includes(alias) || ownNames.has(alias) || aliased.has(alias)) continue;
+      aliased.add(alias);
+      aliases.push(alias);
+    }
+    return aliases.length ? { aliases } : {};
+  }
 }
 
 const IMPORT_MAP = JSON.stringify({ imports: { 'atmos-sdk': '/__atmos/sdk.js' } });

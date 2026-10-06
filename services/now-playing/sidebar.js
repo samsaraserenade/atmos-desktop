@@ -134,11 +134,14 @@ function paintDots() {
 function dotLabel(session) {
   return [session.from, sourceLabel(session)].filter(Boolean).join(' · ');
 }
+// The background frame (boot.js: Space, rev/play) acts on what shows here.
+const sharePick = () => atmos.events.emit('pick', pick).catch(() => {});
 dotsEl.addEventListener('click', event => {
   event.stopPropagation();
   const dot = event.target.closest('.np-dot');
   if (!dot) return;
   pick = { id: dot.dataset.id, at: Date.now() };
+  sharePick();
   render({ picked: true });
 });
 dotsEl.addEventListener('pointerdown', event => event.stopPropagation());
@@ -149,6 +152,7 @@ dotsEl.addEventListener('keydown', event => {
   const next = sessions[(index + (event.key === 'ArrowRight' ? 1 : sessions.length - 1)) % sessions.length];
   if (!next) return;
   pick = { id: next.id, at: Date.now() };
+  sharePick();
   render({ picked: true });
   dotsEl.querySelector(`.np-dot[data-id="${CSS.escape(next.id)}"]`)?.focus();
 });

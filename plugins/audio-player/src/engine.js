@@ -444,7 +444,6 @@ export async function start() {
   atmos.nowPlaying?.onControl(onNowPlayingControl);
 
   // Space anywhere in Atmos outside a text field (boot "keys" in extension.json).
-  atmos.surface.onKey(({ code }) => { if (code === 'Space') void togglePlay(); });
   // rev/play, rev/next and the rest, from Atmos's command bar.
   handleCommands({ togglePlay, playNext, playPrev, playTrack, playAlbum, status });
 

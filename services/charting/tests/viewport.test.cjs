@@ -86,3 +86,20 @@ test('ordered appends reuse normalization and preserve a replaced tail; unordere
   const expected = createChartViewport({ mode: 'line', width: 640, height: 320 }).calculate(data, 2);
   assert.equal(JSON.stringify(fallback.visible), JSON.stringify(expected.visible));
 });
+
+test('a restored candle view survives the frame measuring nothing before it is laid out', async () => {
+  const { createChartViewport } = await loadViewport();
+  // A panel coming back: its saved view (20 candles, 5 back from the newest)
+  // and a first measurement of 0 wide, then its real width.
+  const viewport = createChartViewport({ mode: 'candlestick', timelineMode: 'gapless', bucketMs: 60_000, width: 660, height: 320,
+    padding: { left: 4, right: 56, top: 8, bottom: 24 }, candleSpanMs: 20 * 60_000, candleOffsetMs: 75 * 60_000 });
+  viewport.resize(0, 0);
+  viewport.resize(1, 1);
+  viewport.resize(660, 320);
+  const layout = viewport.calculate(candles);
+  assert.equal(layout.count, 20, 'not stretched to the whole history');
+  assert.deepEqual({ ...layout.domain }, { from: 75 * 60_000, to: 95 * 60_000 });
+  // A real resize afterwards still keeps the candles' size.
+  viewport.resize(1260, 320);
+  assert.equal(viewport.getState().candleSpanMs, 40 * 60_000);
+});

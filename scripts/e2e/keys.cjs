@@ -1,8 +1,8 @@
 // Atmos's keyboard shortcuts end to end (keymap.mjs, shortcuts.js, the SDK,
 // task-view.js), with a developer-folder extension that tries to keep every
 // key for itself:
-//   - Alt+` the switcher, as Windows' Alt+Tab: a quick tap flips between
-//     the last two panels without showing anything; held, it shows the
+//   - Alt+` the switcher, as Windows' Alt+Tab: it shows at once; a quick
+//     tap flips between the last two panels; held, it shows the
 //     panels, ` moves on, letting go of Alt switches, Esc lets go without;
 //   - from inside the extension's text field (which calls preventDefault on
 //     every key): Alt+`, Ctrl+` (Settings), Ctrl+Shift+` (the sidebar) and
@@ -137,7 +137,7 @@ const check = (name, ok, detail) => {
     report.details.panels = panels;
 
     // ── The switcher ──
-    // Seen open at any moment of a quick tap?
+    // Seen open during a quick tap? (It should be: it shows at once.)
     await page.evaluate(() => {
       window.__shownDuringTap = false;
       new MutationObserver(() => { if (document.getElementById('task-view').classList.contains('open')) window.__shownDuringTap = true; })
@@ -150,7 +150,7 @@ const check = (name, ok, detail) => {
     await wait(400);
     const afterTap = await active();
     const shownDuringTap = await page.evaluate(() => window.__shownDuringTap);
-    check('a quick Alt+` goes back to the panel before (Finance → Key Probe), showing nothing', afterTap === 'key-probe' && !shownDuringTap, { afterTap, shownDuringTap });
+    check('a quick Alt+` goes back to the panel before (Finance → Key Probe), the switcher shown at once and gone', afterTap === 'key-probe' && shownDuringTap && !(await ui()).switcher, { afterTap, shownDuringTap });
     await x.down('alt');
     await x.key('grave');
     await x.up('alt');

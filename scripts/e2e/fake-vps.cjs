@@ -25,8 +25,10 @@ const worth = {
   'exchange-a|usdt-spot': () => 500,
   'wallet-b|eth-spot': i => 400 + i * 2,
 };
-const history = Array.from({ length: 48 }, (_, i) => ({
-  t: now - (47 - i) * 30 * 60_000, v: 1800 + i * 4, spot: 1800 + i * 4, perp: 0, currency: 'USD', i,
+// 48 half-hourly samples, or as many as a script sets first (globalThis.__fakeVpsPoints).
+const POINTS = Number(globalThis.__fakeVpsPoints) || 48;
+const history = Array.from({ length: POINTS }, (_, i) => ({
+  t: now - (POINTS - 1 - i) * 30 * 60_000, v: 1800 + i * 4, spot: 1800 + i * 4, perp: 0, currency: 'USD', i,
 }));
 
 function respond(body) {

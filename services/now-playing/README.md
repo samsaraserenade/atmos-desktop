@@ -58,6 +58,16 @@ nothing else plays. Its name is always on the line under the title, with
 passes for Music. A volume drag sends ten values a second at most, and
 always the one it ended on.
 
+## From anywhere: Space and commands
+
+The background frame (`boot.js`, 1.1.0) acts on the session the widget
+shows (the same rule, and the one picked with the dots: the widget tells
+it): **Space** outside fields and buttons (`"keys": ["Space"]`), and in
+Atmos's command bar `rev/play` (also `rev/pause`: one command, SDK 1.6's
+`aliases`), `rev/next` and `rev/previous`, each only when the session takes
+it. Music, a video in Atmos Browser and any extension's alike; Audio Player
+(1.2.3) no longer has its own. With nothing playing, they say so.
+
 ## Gestures
 
 Only the ones the session's extension takes: click the cover to play or

@@ -4,14 +4,15 @@
  * background frame where the queue lives, so they work whichever panel is
  * showing:
  *
- *   play [song or album]   play or pause, as Space does; with a name, play it
- *   next, previous         the next or previous song (previous restarts one past 3 s)
  *   song <title>           a song from your library, by title, artist or album
  *   album <name>           an album from your library, by name or artist
  *
- * `player` is the engine's (engine.js start()): togglePlay, playNext,
- * playPrev, playTrack, playAlbum and status() ({ playing, track, queued,
- * position }). Rows and results are plain text: Atmos draws them.
+ * Play/pause, next and previous (rev/play, rev/pause, rev/next,
+ * rev/previous and Space) are the Now Playing service's since Audio Player
+ * 1.2.3: they act on whatever plays, Music included, through its controls.
+ *
+ * `player` is the engine's (engine.js start()): playTrack, playAlbum and
+ * more. Rows and results are plain text: Atmos draws them.
  */
 import atmos from 'atmos-sdk';
 import { getAlbums } from './library.js';
@@ -65,8 +66,6 @@ const albumRow = album => ({
 });
 
 export function handleCommands(player) {
-  const nothingQueued = () => new Error('Nothing to play yet. Choose a song or an album: rev/song, rev/album.');
-  const couldNotPlay = track => new Error(`Couldn\u2019t play ${track || 'that song'}. Is its file still there?`);
 
   async function playSong(key) {
     const found = getAlbums().flatMap(album => album.tracks.map(track => ({ track, album }))).find(entry => entry.track.key === key);
@@ -81,36 +80,6 @@ export function handleCommands(player) {
     if (await player.playAlbum(key) === false) throw new Error(`Couldn’t find ${album.album || 'that album'}’s files. Is its folder still there?`);
     return { done: `Playing ${album.album || 'the album'}.` };
   }
-
-  atmos.commands.handle('play', async ({ args }) => {
-    if (args) {
-      // A name: the song it is, else the album, else a song it's in.
-      const song = findSongs(args)[0];
-      const album = findAlbums(args)[0];
-      if (song && lower(song.track.title).startsWith(lower(args))) return playSong(song.track.key);
-      if (album) return playAlbum(album.key);
-      if (song) return playSong(song.track.key);
-      throw new Error(`Nothing in your library is called “${args}”.`);
-    }
-    const before = player.status();
-    if (!before.queued) throw nothingQueued();
-    if (await player.togglePlay() === false) throw couldNotPlay(before.track);
-    return { done: before.playing ? 'Paused.' : `Playing ${player.status().track || 'your queue'}.` };
-  });
-
-  atmos.commands.handle('next', async () => {
-    if (!player.status().queued) throw nothingQueued();
-    if (await player.playNext() === false) throw couldNotPlay(player.status().track);
-    return { done: `Playing ${player.status().track || 'the next song'}.` };
-  });
-
-  atmos.commands.handle('previous', async () => {
-    const before = player.status();
-    if (!before.queued) throw nothingQueued();
-    if (await player.playPrev() === false) throw couldNotPlay(player.status().track);
-    const track = player.status().track || 'the song';
-    return { done: before.position > 3 ? `From the start of ${track}.` : `Playing ${track}.` };
-  });
 
   atmos.commands.handle('song', ({ args, value }) => {
     const key = value || findSongs(args)[0]?.track.key;

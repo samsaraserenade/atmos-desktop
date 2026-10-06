@@ -370,13 +370,16 @@ export function createChartViewport(options = {}) {
     const oldInnerWidth = lastInnerWidth;
     settings.width = Math.max(1, Number(width) || 1);
     settings.height = Math.max(1, Number(height) || 1);
-    const newInnerWidth = dimensions().plotWidth;
-    if (candleSpanMs != null && oldInnerWidth != null && oldInnerWidth > 0 && newInnerWidth !== oldInnerWidth) {
+    // Not laid out yet (a panel's frame mounting measures 0 first): no
+    // width to keep candles' size against, so nothing to scale; a restored
+    // view would otherwise be stretched to the whole history.
+    const newInnerWidth = Number(width) > 1 ? dimensions().plotWidth : null;
+    if (candleSpanMs != null && oldInnerWidth > 1 && newInnerWidth > 1 && newInnerWidth !== oldInnerWidth) {
       const ratio = newInnerWidth / oldInnerWidth;
       candleSpanMs = Math.round(candleSpanMs * ratio);
       if (candleOffsetMs != null) candleOffsetMs = Math.round(candleOffsetMs * ratio);
     }
-    lastInnerWidth = newInnerWidth;
+    if (newInnerWidth != null) lastInnerWidth = newInnerWidth;
     return api;
   }
 

@@ -24,7 +24,7 @@ const atmos = new Proxy({}, {
 });
 export default atmos;
 
-export const SDK_VERSION = '1.5.0';
+export const SDK_VERSION = '1.6.0';
 export const extension = namespace('extension');
 export const surface = namespace('surface');
 export const state = namespace('state');

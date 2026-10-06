@@ -491,10 +491,10 @@ refused call rejects with an `AtmosPermissionError` naming what to declare.
 Subscriptions (`events.on`, `listen`, the `onChange`s) don't reject: a
 refusal is logged in the frame's console.
 
-**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.5.0'` (Atmos 0.22),
+**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.6.0'` (Atmos 0.23),
 and a later 1.x only adds. What 1.1 added is marked **1.1**; 1.2 added
 only `atmos.web`, for official extensions; 1.3, `atmos.commands` (with
-`"commands"` in the manifest) and ui.css's bar; 1.4, `atmos.nowPlaying`; 1.5, `atmos.web.close(tabId, { sleep })` for official extensions, and Atmos's own keys taken before a frame's code sees them. Everything below is **stable** unless marked
+`"commands"` in the manifest) and ui.css's bar; 1.4, `atmos.nowPlaying`; 1.5, `atmos.web.close(tabId, { sleep })` for official extensions, and Atmos's own keys taken before a frame's code sees them; 1.6, a command's `aliases`. Everything below is **stable** unless marked
 **experimental** (it may still change in a minor version). The calls in
 "Official extensions only" at the end of this section may change in a
 minor version too, and Atmos refuses them to community extensions.
@@ -506,7 +506,7 @@ minor version too, and Atmos refuses them to community extensions.
 | `atmos.extension` | `{ id, kind, tier, version }`: which extension this frame belongs to |
 | `atmos.surface` | `{ type, id, presentation, glass, drawer }`: `type` is `'panel'`, `'sidebar'`, `'settings'` or `'boot'`; `presentation` is `'full'`, `'tile'` or `'window'` (panels) and never changes, since a layout change makes a new frame |
 | `atmos.ready` | A promise that resolves once the frame is connected. Entry files already run after it |
-| `atmos.SDK_VERSION` | `'1.5.0'` (Atmos 0.22); `'1.4.0'` in Atmos 0.21, `'1.3.0'` in Atmos 0.20, `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
+| `atmos.SDK_VERSION` | `'1.6.0'` (Atmos 0.23); `'1.5.0'` in Atmos 0.22, `'1.4.0'` in Atmos 0.21, `'1.3.0'` in Atmos 0.20, `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
 
 ### State and events
 
@@ -688,7 +688,9 @@ itself (`'plugin:<own id>'`) without declaring anything.
 Atmos's command bar (Alt+\\ from anywhere, or the sidebar's ATMOS
 wordmark when it lives there) takes `rev/` commands: Atmos's own
 (`rev/sidebar`, `rev/settings [page]`, `rev/extensions`, `rev/switch
-<panel>`) and those extensions declare. It opens over the bottom bar of
+<panel>`, `rev/widget <widget> [show|fold|unfold|top|bottom|release|hide]`,
+`rev/sidebar-side`, `rev/wallpaper paste|choose`, `rev/reload`) and those
+extensions declare. Your widget's label is what `rev/widget` knows it by. It opens over the bottom bar of
 the panel you're in (Settings → Appearance → Sidebar → Command Bar can put
 it in the sidebar's footer instead). Every command is listed, under its
 extension's name, by what's showing: the panel the bar is for, other
@@ -722,6 +724,7 @@ Declare each command in `extension.json`, at most 30, beside the surfaces:
 | `name` | What's typed after `rev/`: a-z, digits and `-`, 30 at most. Atmos's own names (`sidebar`, `settings`, `extensions`, `switch`) aren't allowed |
 | `args`, `about` | A hint of what follows the name, and a line saying what it does (plain text) |
 | `takesArgs` | It takes something after its name: Enter on the command gives it a space to type it, rather than running it at once |
+| `aliases` | **1.6.** Other names it's found and run by, at most 3: Audio Player's `play` has `["pause"]`, so `rev/pause` is the same command, listed once. Not Atmos's names, nor another of your commands'. The handler always hears its own `name` |
 | `suggests` | It lists choices as you type (below): Enter gives it a space too, then runs the row chosen |
 
 Settings shows a community extension's commands on its approval card

@@ -17,7 +17,7 @@ const sources = () => fs.readdirSync(root, { recursive: true })
   .filter(file => /\.(js|cjs)$/.test(file) && !file.startsWith('tests') && !file.includes('node_modules'))
   .map(file => [file, read(file)]);
 
-test('runs in frames: drawer panel, Queue and Library widgets, a boot frame with Space', () => {
+test('runs in frames: drawer panel, Queue and Library widgets, a boot frame (Space is Now Playing\'s)', () => {
   const m = manifest();
   assert.equal(m.apiVersion, 4);
   assert.equal(m.runtime, 'frame');
@@ -29,7 +29,7 @@ test('runs in frames: drawer panel, Queue and Library widgets, a boot frame with
   // saved sidebar layouts still apply. Now Playing (audio-player) is the
   // Now Playing service's since Audio Player 1.2.0, under the same id.
   assert.deepEqual(m.contributes.sidebar.map(item => item.legacyId ?? `audio-player-${item.id}`), ['audio-player-queue', 'audio-player-library']);
-  assert.deepEqual(m.contributes.boot, { entry: 'boot.js', keys: ['Space'] });
+  assert.deepEqual(m.contributes.boot, { entry: 'boot.js' });
   assert.deepEqual([...m.permissions.invokes].sort(), ['service:audio', 'service:media-metadata', 'service:now-playing', 'service:wallpaper']);
   assert.deepEqual(m.permissions.resources, ['audio-player-media']);
   assert.deepEqual(m.legacyStorage.indexedDB, [{ name: 'samsara_db', keys: ['audio-player:*', 'library-meta', 'waveform-cache', 'playlist'] }]);
@@ -52,7 +52,7 @@ test('sound comes from the Audio service; the engine owns the queue', () => {
   assert.match(engine, /const audio = atmos\.audio;/);
   assert.match(engine, /audio\.load\(track\.source, \{ id: track\.key \|\| track\.name, position, play \}\)/);
   assert.match(engine, /value\.type === 'ended'\) \{[^}]*getNextIndex\(\{ ended: true \}\)/);
-  assert.match(engine, /atmos\.surface\.onKey\(\(\{ code \}\) => \{ if \(code === 'Space'\) void togglePlay\(\); \}\)/);
+  assert.doesNotMatch(engine, /surface\.onKey/, 'Space is Now Playing\'s, which toggles Music through its controls');
   assert.match(engine, /await atmos\.expose\(\{/);
   assert.doesNotMatch(engine, /document\.createElement\('audio'\)|new Audio\(/);
   // Views never play anything themselves.
@@ -150,7 +150,7 @@ test('what plays goes to Now Playing, and its controls come back here', () => {
   const engine = read('src/engine.js');
   const manifest = JSON.parse(read('extension.json'));
   assert.ok(manifest.permissions.invokes.includes('service:now-playing'));
-  assert.deepEqual(manifest.dependencies['now-playing'], { version: '^1.0.0', optional: true, recommended: true }, 'installed with Music, removable');
+  assert.deepEqual(manifest.dependencies['now-playing'], { version: '^1.1.0', optional: true, recommended: true }, 'installed with Music, removable; 1.1 has Space and rev/play for it');
   assert.equal(manifest.engines.atmos, '>=0.21.0', 'atmos.nowPlaying is SDK 1.4 (Atmos 0.21.0)');
   // Its own Now Playing widget went to the service; the Queue keeps the id it had.
   assert.deepEqual(manifest.contributes.sidebar.map(widget => widget.label), ['Queue', 'Library']);

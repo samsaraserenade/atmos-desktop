@@ -16,12 +16,11 @@ let _captureInFlight = false;
 const _previews = new Map();
 // The switcher (Alt+`), as Windows' Alt+Tab: panels most recently shown
 // first; held, it opens on the one before this and switches when Alt comes
-// up. A quick tap flips between the last two without showing anything.
-const REVEAL_MS = 140;
+// up. It shows at once, as Windows' does; a quick tap flips between the
+// last two.
 let _recent = [];
 let _held = false;
-let _revealTimer = null;
-let _keys = null; // where the keyboard waits while the switcher is held but not shown yet
+let _keys = null; // where the keyboard goes at once, so Alt coming up is seen
 
 function _friendlyId(id) {
   return String(id)
@@ -306,8 +305,9 @@ function _onSwitcherKey() {
   // The keyboard comes here at once (from a frame or a web page), so that
   // Alt coming up is seen.
   _keys.focus({ preventScroll: true });
-  clearTimeout(_revealTimer);
-  _revealTimer = setTimeout(_reveal, REVEAL_MS);
+  // No fade in or out from the keyboard, as Windows' Alt+Tab.
+  _overlay.classList.add('from-keys');
+  _reveal();
 }
 
 /** Alt came up: switch to the chosen panel (a held switcher only). */
@@ -317,8 +317,6 @@ function _commitHeld() {
 }
 
 function _reveal() {
-  clearTimeout(_revealTimer);
-  _revealTimer = null;
   if (!_overlay || _isShown()) return;
   _overlay.classList.add('open');
   _overlay.setAttribute('aria-hidden', 'false');
@@ -339,9 +337,9 @@ function openTaskView() {
 function closeTaskView({ restoreFocus = true } = {}) {
   if (!_overlay || !_isOpen()) return;
   _held = false;
-  clearTimeout(_revealTimer);
-  _revealTimer = null;
   _overlay.classList.remove('open');
+  // Hidden at once too; the fade is back for the next opening by click.
+  if (_overlay.classList.contains('from-keys')) requestAnimationFrame(() => _overlay?.classList.remove('from-keys'));
   _overlay.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('task-view-open');
   if (restoreFocus && _returnFocus?.isConnected) _returnFocus.focus({ preventScroll: true });

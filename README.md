@@ -86,7 +86,7 @@ reach into your pages, they add to the workspace around them.
 - **Sidebar widgets** that show beside any panel, the browser included.
 - **Background work** that lasts the whole session: a player, a socket, a
   poller.
-- **Commands** in Atmos's command bar: `rev/play` from any panel, listed
+- **Commands** in Atmos's command bar: `rev/song` from any panel, listed
   by what's on screen.
 - **Services and libraries** for other extensions to build on: charts,
   currency, market data, media tags.
@@ -114,7 +114,8 @@ Atmos Core owns the shell, and extensions fill it.
   Atmos). Settings → Atmos lists every shortcut.
 - **A command bar.** Alt+\\ opens a bar over the bottom of the panel
   you're in (or in the sidebar's footer, if you prefer) for `rev/`
-  commands: switch panels, open Settings on a page, and the commands of
+  commands: switch panels, open Settings on a page, show, fold, hide or
+  dock a sidebar widget (`rev/widget perf fold`), and the commands of
   your extensions, listed by what's on screen (`rev/go` a Matrix room,
   `rev/play` the music, `rev/chart BTC 4h`, `rev/new-tab`) and answered as
   you type. Enter does what the command does; Shift+Enter also takes you
@@ -237,8 +238,9 @@ Features:
 - A waveform seek bar
 - Queue and Library sidebar widgets, and what plays in the Now Playing
   widget (with Now Playing, which comes with it)
-- Global play and pause controls: Space, and `rev/play`, `rev/next`,
-  `rev/previous`, `rev/song` and `rev/album` in the command bar
+- `rev/song` and `rev/album` in the command bar; Space, `rev/play`
+  (`rev/pause`), `rev/next` and `rev/previous` control it, or whatever else
+  plays, through Now Playing
 
 ### Matrix Chat
 

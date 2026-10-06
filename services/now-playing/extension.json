@@ -4,13 +4,13 @@
     "atmos": ">=0.21.0"
   },
   "tier": "first-party",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "atmos",
   "runtime": "frame",
   "isolation": "origin",
   "exports": {},
   "displayName": "Now Playing",
-  "description": "What's playing in Atmos, from Music, Atmos Browser or any extension that plays something, with its controls.",
+  "description": "What's playing in Atmos, from Music, Atmos Browser or any extension that plays something, with its controls: Space, rev/play (rev/pause), rev/next and rev/previous from anywhere.",
   "requires": {
     "extensions.manifest": 1,
     "extensions.frames": 3
@@ -24,6 +24,29 @@
         "order": 20,
         "resizable": false,
         "legacyId": "audio-player"
+      }
+    ],
+    "boot": {
+      "entry": "boot.js",
+      "keys": [
+        "Space"
+      ]
+    },
+    "commands": [
+      {
+        "name": "play",
+        "aliases": [
+          "pause"
+        ],
+        "about": "Play or pause what’s playing (Now Playing)"
+      },
+      {
+        "name": "next",
+        "about": "Skip to the next one (what’s playing)"
+      },
+      {
+        "name": "previous",
+        "about": "Back to the previous one, or the start (what’s playing)"
       }
     ]
   }

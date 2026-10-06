@@ -22,6 +22,7 @@ export const CORE_COMMANDS = Object.freeze([
   { name: 'settings', args: 'page', about: 'Open Settings, or one of its pages', optionalArgs: true },
   { name: 'extensions', about: 'Install, update and remove extensions' },
   { name: 'switch', args: 'panel', about: 'Show another panel', takesArgs: true },
+  { name: 'widget', args: 'widget [fold|hide|top|bottom…]', about: 'Show, fold, hide or dock a sidebar widget', takesArgs: true },
   { name: 'wallpaper', args: 'paste', about: 'Paste the copied image as the wallpaper, or choose one', optionalArgs: true },
   { name: 'reload', about: 'Reload Atmos' },
 ].map(Object.freeze));
@@ -31,6 +32,86 @@ export const WALLPAPER_ACTIONS = Object.freeze([
   { id: 'paste', label: 'Paste', about: 'Use the image you copied' },
   { id: 'choose', label: 'Choose', about: 'Pick an image file' },
 ].map(Object.freeze));
+
+/**
+ * What `rev/widget <widget> <what>` does, offered by the widget's state
+ * (widgetActions()): a widget is { id, label, enabled, open, docked
+ * ('top' | 'bottom' | null), away (shown beside other panels only) }.
+ */
+export function widgetActions(widget) {
+  if (widget.id === ALL_WIDGETS) {
+    return [
+      { id: 'fold', label: 'Fold all', about: 'Close every widget to its header' },
+      { id: 'unfold', label: 'Unfold all', about: 'Open every widget' },
+    ];
+  }
+  if (!widget.enabled) {
+    return [{ id: 'show', label: 'Show', about: 'Put it back in the sidebar, open' }];
+  }
+  // What changes something first (unfold a folded one, undock a docked one).
+  const fold = { id: 'fold', label: 'Fold', about: 'Close it to its header' };
+  const unfold = { id: 'unfold', label: 'Unfold', about: 'Open it in place' };
+  const top = { id: 'top', label: 'Dock to top', about: 'Pin it above the others' };
+  const bottom = { id: 'bottom', label: 'Dock to bottom', about: 'Pin it below the others' };
+  const release = { id: 'release', label: 'Undock', about: 'Back among the others' };
+  return [
+    { id: 'show', label: 'Show', about: 'Open the sidebar on it' },
+    ...(widget.open ? [fold, unfold] : [unfold, fold]),
+    ...(widget.docked ? [release] : []),
+    ...(widget.docked === 'top' ? [bottom] : widget.docked === 'bottom' ? [top] : [top, bottom]),
+    { id: 'hide', label: 'Hide', about: 'Take it out of the sidebar (rev/widget brings it back)' },
+  ];
+}
+
+/** The pseudo-widget every widget's fold and unfold apply to (`rev/widget all fold`). */
+export const ALL_WIDGETS = 'all';
+const allWidgets = Object.freeze({ id: ALL_WIDGETS, label: 'All widgets', enabled: true });
+
+/**
+ * `rev/widget` text after the name: { widget, rest } when it starts with a
+ * widget's name (the longest that fits; "all" is every widget), else
+ * { widget: null, rest: args }, a widget's name being typed.
+ */
+export function widgetArgs(args, widgets = []) {
+  const text = lower(args).replace(/\s+/g, ' ').trimStart();
+  let best = null;
+  for (const widget of [{ ...allWidgets, label: 'all' }, allWidgets, ...widgets]) {
+    for (const name of [lower(widget.label), lower(widget.id)]) {
+      if (!name || !(text === name || text.startsWith(`${name} `))) continue;
+      if (!best || name.length > best.name.length) best = { widget: widget.id === ALL_WIDGETS ? allWidgets : widget, name };
+    }
+  }
+  if (best) return { widget: best.widget, rest: text.slice(best.name.length).trim() };
+  // The start of a name only one widget has, then a space: rev/widget perf fold.
+  const words = text.split(' ');
+  for (let count = words.length - 1; count >= 1; count--) {
+    const start = words.slice(0, count).join(' ');
+    const { starts } = targetMatches(start, [...widgets, allWidgets]);
+    if (starts.length === 1) return { widget: starts[0], rest: words.slice(count).join(' ').trim() };
+  }
+  return { widget: null, rest: String(args || '').trim() };
+}
+
+function widgetState(widget) {
+  if (!widget.enabled) return 'Hidden: Enter puts it back';
+  const parts = [widget.open ? 'Open' : 'Folded'];
+  if (widget.docked) parts.push(`docked to the ${widget.docked}`);
+  if (widget.away) parts.push('shown beside other panels');
+  return parts.join(' · ');
+}
+
+function widgetRow(widget, { prefixed = false } = {}) {
+  if (widget.id === ALL_WIDGETS) {
+    return { title: prefixed ? 'Sidebar → All widgets' : 'All widgets', sub: 'Fold or unfold every widget', action: 'Choose', enter: completes(`${PREFIX}widget all `), tab: completes(`${PREFIX}widget all `) };
+  }
+  return {
+    title: prefixed ? `Sidebar → ${widget.label}` : widget.label,
+    sub: widgetState(widget),
+    action: 'Show',
+    enter: runs('widget', `${widget.id}:show`),
+    tab: completes(`${PREFIX}widget ${widget.label} `),
+  };
+}
 
 /** Settings' pages, as `rev/settings <page>` names them. */
 export const SETTINGS_PAGES = Object.freeze([
@@ -65,7 +146,8 @@ export function parseCommand(text, commands = CORE_COMMANDS) {
     name,
     args: (match[3] || '').trim(),
     typingName: match[2] === undefined,
-    command: commands.find(item => item.name === name) || null,
+    // A command's own name first, then one it's also called (rev/pause: rev/play).
+    command: commands.find(item => item.name === name) || commands.find(item => item.aliases?.includes(name)) || null,
   };
 }
 
@@ -74,7 +156,7 @@ const lower = value => String(value || '').toLowerCase();
 /** Commands whose names start with what's typed. */
 export function matchCommands(name, commands = CORE_COMMANDS) {
   const query = lower(name);
-  return commands.filter(item => item.name.startsWith(query));
+  return commands.filter(item => item.name.startsWith(query) || item.aliases?.some(alias => alias.startsWith(query)));
 }
 
 const words = value => lower(value).split(/[^a-z0-9]+/).filter(Boolean);
@@ -161,17 +243,25 @@ function grouped(commands) {
 }
 
 /** A command as a row while its name is being typed. */
-function commandRow(item) {
+/** The name a command is shown by: its own, or the alias being typed (rev/pause). */
+function shownName(item, typed = '') {
+  if (!typed || item.name.startsWith(typed)) return item.name;
+  return item.aliases?.find(alias => alias.startsWith(typed)) || item.name;
+}
+
+function commandRow(item, typed = '') {
+  const name = shownName(item, typed);
   // Something to type, or choices to pick from (rev/leave's "Leave X"):
   // Enter gives it a space. The rest run.
   const more = item.takesArgs || (item.source && item.suggests);
   return {
-    title: `${PREFIX}${item.name}`,
+    title: `${PREFIX}${name}`,
     hint: item.args || '',
-    sub: item.about || '',
+    // Its other names, so either finds it: "Play or pause · rev/pause".
+    sub: [item.about || '', ...[item.name, ...(item.aliases || [])].filter(other => other !== name).map(other => `${PREFIX}${other}`)].filter(Boolean).join(' · '),
     source: item.sourceLabel || '',
-    enter: more ? completes(`${PREFIX}${item.name} `, ownedBy(item)) : item.source ? runsExtension(item, item.source) : runs(item.name),
-    tab: completes(`${PREFIX}${item.name}${more || item.optionalArgs ? ' ' : ''}`, ownedBy(item)),
+    enter: more ? completes(`${PREFIX}${name} `, ownedBy(item)) : item.source ? runsExtension(item, item.source) : runs(item.name),
+    tab: completes(`${PREFIX}${name}${more || item.optionalArgs ? ' ' : ''}`, ownedBy(item)),
   };
 }
 
@@ -199,13 +289,14 @@ function preferring(commands, prefer) {
  *   panels        [{ id, label }] the panels there are (panel-registry.js)
  *   activePanel   the id of the one showing
  *   pages         Settings' pages (SETTINGS_PAGES)
+ *   widgets       the sidebar's widgets ([{ id, label, enabled, open, docked, away }])
  *   sources       extensions' commands (commandList())
  *   fetched       the extension's last answer for its command:
  *                 { source, name, args, rows, options } (cleanSuggestions())
  *   prefer        { name, source }: which command the text means when two
  *                 extensions declare its name (the row that completed it)
  */
-export function suggest(text, { panels = [], activePanel = null, pages = SETTINGS_PAGES, sources = [], fetched = null, prefer = null } = {}) {
+export function suggest(text, { panels = [], activePanel = null, pages = SETTINGS_PAGES, widgets = [], sources = [], fetched = null, prefer = null } = {}) {
   const commands = commandList(sources);
   const parsed = parseCommand(text, preferring(commands, prefer));
   const result = rows => ({ parsed, rows, ask: null, options: [] });
@@ -220,17 +311,24 @@ export function suggest(text, { panels = [], activePanel = null, pages = SETTING
     // extension can't push Atmos's own places down by naming a command
     // after one.
     const found = matchCommands(parsed.name, commands);
+    const isNamed = item => item.name === parsed.name || !!item.aliases?.includes(parsed.name);
     const named = parsed.name.length >= 2;
     const panelHits = named ? targetMatches(parsed.name, panels) : { starts: [], wordStarts: [] };
     const pageHits = named ? targetMatches(parsed.name, pages) : { starts: [], wordStarts: [] };
+    // Widgets by their label only, after everything else: a widget's name
+    // never takes Enter from a command, a panel or a page.
+    const widgetHits = named ? targetMatches(parsed.name, widgets.map(widget => ({ id: '', label: widget.label, widget }))) : { starts: [], wordStarts: [] };
+    const asWidget = hit => widgetRow(hit.widget, { prefixed: true });
     const rows = [
-      ...found.filter(item => !item.source).map(commandRow),
+      ...found.filter(item => !item.source).map(item => commandRow(item, parsed.name)),
       ...panelHits.starts.map(panel => panelRow(panel, activePanel)),
       ...pageHits.starts.map(pageRow),
-      ...found.filter(item => item.source && item.name === parsed.name).map(commandRow),
+      ...found.filter(item => item.source && isNamed(item)).map(item => commandRow(item, parsed.name)),
       ...panelHits.wordStarts.map(panel => panelRow(panel, activePanel)),
       ...pageHits.wordStarts.map(pageRow),
-      ...found.filter(item => item.source && item.name !== parsed.name).map(commandRow),
+      ...found.filter(item => item.source && !isNamed(item)).map(item => commandRow(item, parsed.name)),
+      ...widgetHits.starts.map(asWidget),
+      ...widgetHits.wordStarts.map(asWidget),
     ];
     return result(rows.length ? rows : [{ note: `There's no ${PREFIX}${parsed.name}.` }]);
   }
@@ -269,6 +367,21 @@ export function suggest(text, { panels = [], activePanel = null, pages = SETTING
     const found = matchTargets(args, pages).map(pageRow);
     if (!args) found.unshift({ title: 'Settings', sub: 'Where you left it', action: 'Open', enter: runs('settings'), tab: completes(`${PREFIX}settings `) });
     return result(found.length ? found : [{ note: `Settings has no page called “${args}”.` }]);
+  }
+  if (command.name === 'widget') {
+    const { widget, rest } = widgetArgs(args, widgets);
+    if (!widget) {
+      const found = matchTargets(args, [...widgets, allWidgets]).map(item => widgetRow(item));
+      return result(found.length ? found : [{ note: widgets.length ? `No widget is called “${args}”.` : 'The sidebar has no widgets.' }]);
+    }
+    const actions = matchTargets(rest, widgetActions(widget));
+    const name = widget.id === ALL_WIDGETS ? 'all' : widget.label;
+    return result(actions.length ? actions.map(action => ({
+      title: widget.id === ALL_WIDGETS ? action.label : `${action.label}: ${widget.label}`,
+      sub: action.about, action: action.label.split(' ')[0],
+      enter: runs('widget', `${widget.id}:${action.id}`),
+      tab: completes(`${PREFIX}widget ${name} ${action.id}`),
+    })) : [{ note: `${widget.label} can’t “${rest}”. Clear it to see what it can do.` }]);
   }
   if (command.name === 'wallpaper') {
     const found = matchTargets(args, WALLPAPER_ACTIONS).map(action => ({

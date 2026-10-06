@@ -838,52 +838,28 @@ export function mountPerformanceSection(bodyEl, context) {
     _lastAthRenderKey = _lastMoversRenderKey = _lastFlowRenderKey = null;
   });
   const wrap = document.createElement('div');
-  wrap.className = 'pt-bal-body';
-  wrap.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+  // Edge to edge, in rows the height of the other widgets' (28 px; see
+  // assets/sidebar.css, as Allocation's and Spot's).
+  wrap.className = 'pt-perf-body';
   bodyEl.appendChild(wrap);
 
-  // Bordered tiles, one per range — restores visual structure, but each
-  // tile still shows a single figure (% or $, whichever the toggle
-  // currently shows) rather than stacking both, since stacking %+$+range
-  // in one box previously read as three unrelated figures rather than
-  // one metric. Clicking anywhere in the row flips all tiles between %
-  // and $ together, same as the invested/cash bar below.
+  // One row of three cells, one per range, each with a single figure (% or
+  // $, whichever the toggle shows). Clicking anywhere in the row flips all
+  // of them between % and $ together, same as the invested/cash bar.
   _performanceEl = document.createElement('div');
   _performanceEl.id = 'tc-balance-performance';
-  _performanceEl.style.cssText = [
-    'display:grid', 'grid-template-columns:repeat(3,minmax(0,1fr))',
-    'column-gap:6px',
-    'width:100%', 'padding:2px 0',
-    'font-family:inherit',
-    'font-variant-numeric:tabular-nums', 'user-select:none',
-    'cursor:pointer',
-  ].join(';');
-
-  const PERF_CARD_STYLE = [
-    'display:flex', 'flex-direction:column', 'align-items:center', 'gap:2px',
-    'padding:6px 4px', 'border-radius:4px',
-    'border:1px solid transparent', 'background:rgba(var(--ink-rgb),.03)',
-    'transition:background .12s,border-color .12s',
-  ].join(';');
-  const PERF_HEADER_STYLE = 'color:rgba(var(--ink-rgb),.52);font-size:.62rem;font-weight:600;letter-spacing:.06em;text-align:center;white-space:nowrap';
-  // Matches the rest of the sidebar's body text (see markets/styles.css's
-  // .watchlist-row-symbol/-price), not the big standalone balance figure
-  // above.
-  const PERF_DATA_STYLE = 'font-size:.7rem;font-weight:600;letter-spacing:.01em;text-align:center;white-space:nowrap';
-
   _performanceCards.clear();
   for (const option of CHANGE_RANGES) {
     const card = document.createElement('div');
     card.className = 'pt-perf-card';
     card.dataset.period = option.id;
-    card.style.cssText = PERF_CARD_STYLE;
     card.setAttribute('role', 'button');
     card.tabIndex = 0;
     const headerEl = document.createElement('div');
-    headerEl.style.cssText = PERF_HEADER_STYLE;
+    headerEl.className = 'pt-perf-label';
     headerEl.textContent = option.label;
     const valueEl = document.createElement('div');
-    valueEl.style.cssText = PERF_DATA_STYLE;
+    valueEl.className = 'pt-perf-value';
     card.appendChild(headerEl);
     card.appendChild(valueEl);
     _performanceEl.appendChild(card);
@@ -1205,15 +1181,13 @@ function _renderPerformance() {
     const intensity = available ? Math.min(1, Math.abs(change.percent) / 20) : 0;
     const valueColor = _hexToRgba(baseColor, available ? 0.55 + intensity * 0.4 : 0.28);
     const bgColor = _hexToRgba(baseColor, available ? 0.035 + intensity * 0.17 : 0.02);
-    const borderColor = _hexToRgba(baseColor, available ? 0.05 + intensity * 0.13 : 0);
-    const renderKey = `${text}|${valueColor}|${bgColor}|${borderColor}`;
+    const renderKey = `${text}|${valueColor}|${bgColor}`;
     if (renderKey === refs.renderKey) continue;
     refs.renderKey = renderKey;
     refs.card.title = `${label} portfolio change: ${signedPercentText}${signedAmountText !== '—' ? ` (${signedAmountText})` : ''} — ${active ? `click to show ${showAmount ? 'percentage' : 'amount'}` : 'click to show this period below'}`;
     refs.valueEl.style.color = valueColor;
     refs.valueEl.textContent = text;
     refs.card.style.background = bgColor;
-    refs.card.style.borderColor = borderColor;
   }
 }
 

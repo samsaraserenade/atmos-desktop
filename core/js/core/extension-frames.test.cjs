@@ -329,7 +329,13 @@ test('commands come from the manifest as plain text, never Atmos\'s own names, a
   assert.deepEqual(frames.describeCommands(entry('third-party')), []);
   assert.deepEqual(frames.describeCommands(entry('first-party', { kind: 'service', manifest: { library: true, contributes: { commands: [{ name: 'go' }] } } })), [], 'a library has no frames to run them');
   assert.equal(declared([{ name: 'x', about: 'y'.repeat(200) }])[0].about.length, 120);
-  assert.deepEqual(frames.CORE_COMMAND_NAMES, ['sidebar', 'sidebar-side', 'settings', 'extensions', 'switch', 'wallpaper', 'reload']);
+  const aliased = declared([
+    { name: 'play', aliases: ['pause', 'PAUSE', 'play', 'next', 'sidebar', 'Bad Name', 'resume', 'toggle', 'stop'] },
+    { name: 'next', aliases: ['pause'] },
+  ]);
+  assert.deepEqual(aliased.map(command => command.aliases), [['pause', 'resume', 'toggle'], undefined],
+    'its own and other commands\' names, Atmos\'s, bad ones and repeats dropped; at most 3');
+  assert.deepEqual(frames.CORE_COMMAND_NAMES, ['sidebar', 'sidebar-side', 'settings', 'extensions', 'switch', 'widget', 'wallpaper', 'reload']);
 });
 
 test('bridge: a frame\'s calls to a main.cjs say which frame; Core hears when it goes (R17)', async () => {

@@ -352,6 +352,8 @@ export function createFakeAtmos(options = {}) {
     },
     /** Change the state as another frame would (onChange listeners hear it). */
     setState(next) { saved = clone(next); deliver('state', saved); },
+    /** A key a background frame declared ("keys": ["Space"]), pressed in Atmos: surface.onKey hears { code }. */
+    pressKey(code) { deliver('key', { code }); },
     /** Deliver an event, as another frame (or extension) emitting it would. */
     emit(name, payload) { deliver(`event:${name}`, payload); },
     /** Change the location as the user would in Settings. */
@@ -403,7 +405,7 @@ export function createFakeAtmos(options = {}) {
   }
 
   const atmos = {
-    SDK_VERSION: '1.5.0',
+    SDK_VERSION: '1.6.0',
     ready: Promise.resolve({ extension }),
     extension,
     surface: {

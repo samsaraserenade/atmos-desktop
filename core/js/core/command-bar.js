@@ -36,7 +36,7 @@ import {
 } from './command-list.js';
 import { activatePanelPlugin, getActivePanelPluginId, listPanelPlugins } from './panel-registry.js';
 import { sidebarState } from './sidebar-state.js';
-import { closeSidebar, flipSidebarSide, openSidebar } from './sidebar-shell.js';
+import { closeSidebar, flipSidebarSide, listSidebarWidgets, openSidebar, runWidgetCommand } from './sidebar-shell.js';
 import { appearanceState } from './appearance.js';
 import { onShortcut } from './shortcuts.js';
 import { escapeHtml } from './escape-html.js';
@@ -270,7 +270,7 @@ function optionsHtml() {
 function paint() {
   if (!open) return;
   const sources = extensionCommandSources(previousFocus);
-  const result = suggest(input.value, { panels: panels(), activePanel: getActivePanelPluginId(), pages: SETTINGS_PAGES, sources, fetched, prefer: preferred });
+  const result = suggest(input.value, { panels: panels(), activePanel: getActivePanelPluginId(), pages: SETTINGS_PAGES, widgets: listSidebarWidgets(), sources, fetched, prefer: preferred });
   // The command a row chose stands while its name does.
   if (preferred && result.parsed.name !== preferred.name) preferred = null;
   rows = result.rows;
@@ -494,6 +494,14 @@ function run({ command, target }) {
     const wanted = mode === 'sidebar' ? !sidebarWasOpen : !(sidebarState.open === true);
     closeBar({ restoreSidebar: false });
     if (wanted) openSidebar(); else closeSidebar();
+    return;
+  }
+  if (command === 'widget') {
+    const where = barRect();
+    const at = String(target || '').lastIndexOf(':');
+    closeBar({ restoreSidebar: false });
+    const said = runWidgetCommand(String(target).slice(0, at), String(target).slice(at + 1));
+    if (said) flash(said, where);
     return;
   }
   if (command === 'sidebar-side') {

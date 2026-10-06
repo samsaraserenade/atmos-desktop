@@ -72,38 +72,10 @@ const suggest = (name, input = {}) => atmos.fake.suggestCommand(name, input);
 
 test('the commands are declared for Atmos\'s bar, with the Atmos that has it, and all handled', () => {
   assert.equal(manifest.engines.atmos, '>=0.21.0', 'atmos.commands is SDK 1.3 (Atmos 0.20.0); atmos.nowPlaying 1.4 (0.21.0)');
-  assert.deepEqual(manifest.contributes.commands.map(command => command.name), ['play', 'next', 'previous', 'song', 'album']);
-  assert.deepEqual(atmos.fake.commandsHandled.sort(), ['album', 'next', 'play', 'previous', 'song']);
-  const play = manifest.contributes.commands[0];
-  assert.ok(!play.takesArgs && !play.suggests, 'rev/play plays or pauses at once');
-});
-
-test('rev/play plays or pauses what\'s queued, and says which', async () => {
-  player.reset();
-  await assert.rejects(run('play'), /Nothing to play yet/);
-  player.queue = ['One More Time', 'Digital Love'];
-  assert.deepEqual(await run('play'), { done: 'Playing One More Time.' });
-  assert.deepEqual(await run('play'), { done: 'Paused.' });
-  assert.deepEqual(player.calls, [['togglePlay'], ['togglePlay']]);
-});
-
-test('rev/play with a name: the song that starts so, else the album, else a song it\'s in', async () => {
-  player.reset();
-  assert.deepEqual(await run('play', { args: 'one more' }), { done: 'Playing One More Time.' });
-  assert.deepEqual(await run('play', { args: 'random' }), { done: 'Playing Random Access Memories.' });
-  assert.deepEqual(await run('play', { args: 'parcels' }), { done: 'Playing Day/Night.' }, 'an artist: their album');
-  assert.deepEqual(player.calls, [['playTrack', 't1'], ['playAlbum', 'a2'], ['playAlbum', 'a3']]);
-  await assert.rejects(run('play', { args: 'zzz' }), /Nothing in your library is called “zzz”/);
-});
-
-test('rev/next and rev/previous say what plays; previous past 3 s restarts the song', async () => {
-  player.reset();
-  await assert.rejects(run('next'), /Nothing to play yet/);
-  player.queue = ['One More Time', 'Digital Love'];
-  assert.deepEqual(await run('next'), { done: 'Playing Digital Love.' });
-  player.position = 42;
-  assert.deepEqual(await run('previous'), { done: 'From the start of Digital Love.' });
-  assert.deepEqual(await run('previous'), { done: 'Playing One More Time.' });
+  // Play/pause, next and previous are Now Playing's (services/now-playing), for whatever plays.
+  assert.deepEqual(manifest.contributes.commands.map(command => command.name), ['song', 'album']);
+  assert.deepEqual(atmos.fake.commandsHandled.sort(), ['album', 'song']);
+  assert.deepEqual(manifest.contributes.boot, { entry: 'boot.js' }, 'Space is Now Playing\'s');
 });
 
 test('rev/song lists songs by title first, then by artist or album, and plays the one chosen', async () => {
@@ -145,8 +117,6 @@ test('with an empty library, the lists say how to fill it', async () => {
 
 test('a song that won\'t load says so rather than "Playing"', async () => {
   player.reset();
-  player.queue = ['One More Time', 'Digital Love'];
-  player.broken = true;
-  await assert.rejects(run('play'), /Couldn’t play One More Time\. Is its file still there\?/);
-  await assert.rejects(run('next'), /Couldn’t play Digital Love/);
+  player.missing.add('t1');
+  await assert.rejects(run('song', { value: 't1' }), /Couldn’t find One More Time’s file/);
 });

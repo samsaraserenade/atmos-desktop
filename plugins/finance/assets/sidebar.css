@@ -74,12 +74,22 @@
 .pt-composition-bar:hover { background: rgba(var(--ink-rgb), .09); }
 .pt-composition-bar:focus-visible { outline: 1px solid rgba(var(--ink-rgb), .4); outline-offset: -1px; }
 
-/* Same click-to-flip affordance as .pt-composition-bar above, on the
-   Day/Week/Total tiles (see balance.js's mountBalanceSection). Each tile
-   already carries its own background/border tint from _renderPerformance,
-   so hover brightens those tiles in place rather than washing a flat
-   color over the whole row. */
-#tc-balance-performance { border-radius: 3px; }
+/* Performance (balance.js's mountPerformanceSection): edge to edge, in rows
+   the height of the other widgets' (28 px, as Allocation's and Spot's).
+   Day / Week / Total are one row of three cells, each tinted by its change
+   (_renderPerformance); clicking flips them between % and $, as the
+   invested/cash bar does. */
+.pt-perf-body { display: flex; flex-direction: column; padding-bottom: 4px; }
+#tc-balance-performance {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  border-bottom: 1px solid rgba(var(--ink-rgb), .065);
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  cursor: pointer;
+}
 #tc-balance-performance:hover { filter: brightness(1.18); }
 #tc-balance-performance:focus-visible { outline: 1px solid rgba(var(--ink-rgb), .4); outline-offset: -1px; }
 
@@ -148,13 +158,31 @@
    see balance.js's mountPerformanceSection): a small left-aligned heading
    in the tiles' own type, then rows. Which blocks show follows the
    selected tile, so there is nothing to fold away. */
-.pt-perf-card { cursor: pointer; }
-.pt-perf-card.is-active { box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), .42); }
-.pt-perf-card.is-active > div:first-child { color: rgb(var(--ink-rgb)); }
+.pt-perf-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 0;
+  padding: 0 8px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.pt-perf-card + .pt-perf-card { box-shadow: inset 1px 0 0 rgba(var(--ink-rgb), .06); }
+.pt-perf-label { color: rgba(var(--ink-rgb), .45); font-size: .6rem; font-weight: 600; letter-spacing: .08em; white-space: nowrap; }
+.pt-perf-value { font-size: .7rem; font-weight: 600; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The selected period: its label brightened and a line along its foot. */
+.pt-perf-card.is-active { box-shadow: inset 0 -2px 0 rgba(var(--ink-rgb), .55); }
+.pt-perf-card.is-active + .pt-perf-card { box-shadow: inset 1px 0 0 rgba(var(--ink-rgb), .06); }
+.pt-perf-card + .pt-perf-card.is-active { box-shadow: inset 1px 0 0 rgba(var(--ink-rgb), .06), inset 0 -2px 0 rgba(var(--ink-rgb), .55); }
+.pt-perf-card.is-active .pt-perf-label { color: rgb(var(--ink-rgb)); }
 .pt-perf-card:not(.is-active) > div { opacity: .78; }
-.pt-perf-card:focus-visible { outline: 1px solid rgba(var(--ink-rgb), .5); outline-offset: 1px; }
+.pt-perf-card:focus-visible { outline: 1px solid rgba(var(--ink-rgb), .5); outline-offset: -1px; }
+/* Movers, Change and All-Time below: a heading as Allocation's, then rows
+   of 28 px edge to edge. */
 .pt-mini-list-head {
-  padding: 0 0 4px;
+  padding: 8px 14px 4px;
   color: rgba(var(--ink-rgb), .42);
   font-size: .6rem;
   font-weight: 600;
@@ -169,7 +197,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 4px 0;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 14px;
   border-bottom: 1px solid rgba(var(--ink-rgb), .04);
   font-variant-numeric: tabular-nums;
 }

@@ -388,6 +388,9 @@ html[data-app-theme="amoled"] .command-bar-field { backdrop-filter:none; -webkit
    in the shell makes plugin and built-in sections follow the same spacing. */
 .fin-section-body > :first-child { margin-top:0 !important; padding-top:0 !important; }
 .fin-section.open .fin-section-body { max-height: none; }
+/* A widget a command just showed or moved (rev/widget): a brief glow. */
+@keyframes fin-section-ping { 0% { background: rgba(var(--ink-rgb),.1); } 100% { background: transparent; } }
+.fin-section.is-pinged > .fin-section-label { animation: fin-section-ping 1.1s ease-out; }
 .fin-section.has-custom-height.open .fin-section-body {
   height: var(--sidebar-section-height);
   overflow-y: auto;
