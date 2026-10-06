@@ -1,10 +1,11 @@
 {
   "name": "atmos",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "A modular personal desktop environment.",
   "license": "GPL-3.0-only",
   "author": "hashy",
   "main": "core/main.js",
+  "desktopName": "atmos.desktop",
   "scripts": {
     "start": "node scripts/start.cjs",
     "test:core": "node --test core/js/core/*.test.cjs",
@@ -17,6 +18,7 @@
     "new:extension": "node scripts/new-extension.cjs",
     "build": "electron-builder --win nsis --x64",
     "build:portable": "electron-builder --win portable --x64",
+    "build:linux": "electron-builder --linux AppImage --x64",
     "build:personal": "node scripts/build-personal.cjs",
     "publish:prepare": "node scripts/publish-release.cjs",
     "keys:create": "node scripts/extension-keys.cjs create",
@@ -43,6 +45,18 @@
       "shortcutName": "Atmos",
       "uninstallDisplayName": "Atmos",
       "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "core/assets/icon-linux.png",
+      "executableName": "atmos",
+      "category": "Network",
+      "synopsis": "A browser built around you",
+      "description": "Atmos: a browser and a workspace you extend.",
+      "syncDesktopName": true
+    },
+    "appImage": {
+      "artifactName": "Atmos-${version}.${ext}"
     },
     "files": [
       "core/**/*",

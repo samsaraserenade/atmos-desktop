@@ -69,8 +69,8 @@ test('main.js registers every channel through the gate, and the window controls 
   const channels = new Set([...source.matchAll(/_page\.(?:handle|on)\('([^']+)'/g)].map(match => match[1]));
   for (const name of [...source.matchAll(/_managerHandler\('([^']+)'/g)].map(match => match[1])) channels.add(`extensions:${name}`);
   for (const channel of [
-    'toggle-fullscreen', 'app:version', 'is-fullscreen', 'is-maximized', 'task-view:capture-preview', 'window-effects:get', 'window-effects:set-transparent',
-    'win-minimize', 'win-maximize', 'win-close', 'set-window-click-through', 'window-resize:start', 'window-resize:update', 'window-resize:end',
+    'toggle-fullscreen', 'app:version', 'is-fullscreen', 'is-maximized', 'task-view:capture-preview', 'appearance:color-scheme',
+    'win-minimize', 'win-maximize', 'win-close',
     'plugins:list', 'services:list', 'extension-state:load-all', 'extension-state:save', 'extension-state:save-sync', 'extensions:set-enabled',
     'extensions:approve', 'extensions:revoke', 'extensions:restart', 'extensions:notify', 'extensions:open-link', 'extensions:fetch', 'extensions:fetch-abort',
     'extensions:open-root', 'extensions:manager-status', 'extensions:install', 'location:allow-detect',
@@ -84,4 +84,10 @@ test('main.js registers every channel through the gate, and the window controls 
   const web = fs.readFileSync(path.join(__dirname, 'web-host.cjs'), 'utf8');
   const webChannels = new Set([...web.matchAll(/handle\('(web:[^']+)'/g)].map(match => match[1]));
   for (const channel of used) assert.ok(channels.has(channel) || webChannels.has(channel), `${channel} (used by the page) is gated`);
+  // The see-through window is gone (Atmos 0.24): nothing makes the window
+  // transparent, click-through or resizable from the page.
+  for (const channel of ['window-effects:get', 'window-effects:set-transparent', 'set-window-click-through', 'window-resize:start', 'window-resize:update', 'window-resize:end']) {
+    assert.ok(!channels.has(channel) && !used.includes(channel), `${channel} is gone`);
+  }
+  assert.doesNotMatch(source, /\btransparent\s*:|setIgnoreMouseEvents/, 'the window is opaque and takes its own clicks');
 });

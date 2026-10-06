@@ -536,7 +536,7 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
   // answered by Finance's engine frame, done by its panel.
   {
     const command = async text => {
-      await s.page.keyboard.press('Control+Backslash');
+      await s.page.keyboard.press('Alt+Backslash');
       await s.page.waitForTimeout(300);
       await s.page.keyboard.type(text, { delay: 20 });
       await s.page.waitForTimeout(900);
@@ -584,7 +584,7 @@ const step = message => { if (process.env.E2E_STEPS) console.error('[step]', mes
     await s.page.waitForTimeout(2000);
     await s.page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('audio-player'));
     await s.page.waitForTimeout(800);
-    await s.page.keyboard.press('Control+Backslash');
+    await s.page.keyboard.press('Alt+Backslash');
     await s.page.waitForTimeout(300);
     await s.page.keyboard.type('rev/timeframe 1h', { delay: 20 });
     await s.page.waitForTimeout(900);

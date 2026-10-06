@@ -1,5 +1,5 @@
 /**
- * Types for the Atmos SDK 1.4 (`import atmos from 'atmos-sdk'`).
+ * Types for the Atmos SDK 1.7 (`import atmos from 'atmos-sdk'`).
  *
  * The SDK is what a framed extension uses to talk to Atmos; Atmos serves it
  * to every frame. These typings let an editor check and complete calls; point
@@ -202,7 +202,13 @@ export declare function library(target: `service:${string}`, file: string): Prom
 // ── The system services ─────────────────────────────────────────────────────
 
 export interface WallpaperSummary {
+  /**
+   * @deprecated SDK 1.7: always `'wallpaper'`. Atmos has no see-through
+   * window any more; `'transparent'` (See-through) is never reported. No
+   * wallpaper is `thumbnail: null`.
+   */
   mode: string;
+  /** @deprecated SDK 1.7: always 100 (it was the wallpaper's opacity in See-through). */
   opacity: number;
   /** A small JPEG data URL of the current image, or null. */
   thumbnail: string | null;

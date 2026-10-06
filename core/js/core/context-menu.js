@@ -295,12 +295,10 @@ export function openContextMenu(x, y) {
   renderExtensionItems();
   menu.classList.remove('visible');
   positionAt(menu, x, y);
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
 export function closeContextMenu() {
   menu?.classList.remove('visible');
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
 document.addEventListener('contextmenu', event => {
@@ -368,14 +366,12 @@ export function openMenu(x, y, items, opts = {}) {
   for (const entry of items || []) renderMenuRow(el, entry, () => close());
   document.body.appendChild(el);
   positionAt(el, x, y);
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 
   function close() {
     if (_openMenu?.element !== el) return;
     el.remove();
     document.removeEventListener('pointerdown', onOutside, true);
     _openMenu = null;
-    window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
     opts.onClose?.();
   }
   function onOutside(event) { if (!el.contains(event.target)) close(); }

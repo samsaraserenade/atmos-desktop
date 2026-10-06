@@ -102,8 +102,9 @@ test('wallpaper: needs the Wallpaper service declared, and an image to set', asy
   await allowed.request('wallpaper.subscribe');
   await allowed.request('wallpaper.subscribe');
   assert.equal(listeners.length, 1);
-  listeners[0]({ mode: 'transparent' });
-  assert.deepEqual(allowed.posted.at(-1), { topic: 'wallpaper', payload: { mode: 'transparent' } });
+  // A change as Atmos reports it (no see-through window since SDK 1.7: the wallpaper removed, say).
+  listeners[0]({ mode: 'wallpaper', opacity: 100, thumbnail: null, canRestore: false });
+  assert.deepEqual(allowed.posted.at(-1), { topic: 'wallpaper', payload: { mode: 'wallpaper', opacity: 100, thumbnail: null, canRestore: false } });
   allowed.bridge.dispose();
   assert.equal(listeners.length, 0);
 

@@ -280,9 +280,9 @@ export function applyAppearance() {
   document.documentElement.dataset.sidebarPosition = appearanceState.sidebarPosition === 'left' ? 'left' : 'right';
   document.documentElement.dataset.commandBar = appearanceState.commandBar === 'sidebar' ? 'sidebar' : 'panel';
   document.documentElement.style.colorScheme = theme.id === 'atmos-light' ? 'light' : 'dark';
-  // Web pages and everything else Chromium draws follow the theme too.
-  window.atmosCore?.setColorScheme?.(document.documentElement.style.colorScheme);
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
+  // Web pages and everything else Chromium draws follow the theme too, and
+  // the window's own background is the workspace colour.
+  window.atmosCore?.setColorScheme?.(document.documentElement.style.colorScheme, theme.workspace);
 
   for (const listener of _changeListeners) {
     try { listener(); } catch (error) { console.warn('[appearance] onAppearanceChange listener failed:', error?.message); }

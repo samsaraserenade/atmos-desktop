@@ -43,7 +43,11 @@ function world(t) {
     fs.mkdirSync(path.join(from, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(from, 'dist', 'Atmos Setup 1.2.3.exe'), bytes);
   };
-  return { dir, from, out, pack, index, installer, trustedKeys: loadTrustedKeys([trusted]) };
+  const appImage = bytes => {
+    fs.mkdirSync(path.join(from, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(from, 'dist', 'Atmos-1.2.3.AppImage'), bytes);
+  };
+  return { dir, from, out, pack, index, installer, appImage, trustedKeys: loadTrustedKeys([trusted]) };
 }
 
 test('a release without its installer stops; --no-installer packs without one', t => {
@@ -64,13 +68,12 @@ test('the installer is copied under its release name and named in the signed ind
   const run = w.pack();
   assert.equal(run.status, 0, run.stderr);
   const index = w.index();
-  assert.deepEqual(index.core, {
-    version: '1.2.3',
-    installer: {
-      file: 'Atmos.Setup.1.2.3.exe', size: bytes.length,
-      sha256: crypto.createHash('sha256').update(bytes).digest('hex'), platform: 'win32', arch: 'x64',
-    },
-  });
+  const windows = {
+    file: 'Atmos.Setup.1.2.3.exe', size: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'), platform: 'win32', arch: 'x64',
+  };
+  // "installer" for Atmos 0.19 to 0.23, "installers" (every platform's) for 0.24 on.
+  assert.deepEqual(index.core, { version: '1.2.3', installer: windows, installers: [windows] });
   assert.ok(fs.readFileSync(path.join(w.out, 'Atmos.Setup.1.2.3.exe')).equals(bytes));
   assert.equal(checkIndexSignature(index, w.trustedKeys).ok, true, 'the installer entry is signed with the rest');
 
@@ -171,4 +174,66 @@ test('an unreachable previous index stops the run before anything is written; --
   assert.equal(offline.status, 0, offline.stderr);
   assert.match(offline.stdout, /versions not compared \(--offline\)/);
   assert.equal(w.index().packages.length, 1);
+});
+
+test('the Linux AppImage beside the installer is named in "installers", and a Linux copy replaces itself with it', async t => {
+  const w = world(t);
+  const exe = crypto.randomBytes(200 * 1024);
+  const image = crypto.randomBytes(250 * 1024);
+  w.installer(exe);
+  w.appImage(image);
+  const run = w.pack();
+  assert.equal(run.status, 0, run.stderr);
+  const index = w.index();
+  const linux = { file: 'Atmos-1.2.3.AppImage', size: image.length, sha256: crypto.createHash('sha256').update(image).digest('hex'), platform: 'linux', arch: 'x64' };
+  assert.equal(index.core.installer.file, 'Atmos.Setup.1.2.3.exe', 'the Windows one stays where 0.19 to 0.23 read it');
+  assert.deepEqual(index.core.installers, [index.core.installer, linux]);
+  assert.ok(fs.readFileSync(path.join(w.out, 'Atmos-1.2.3.AppImage')).equals(image));
+  assert.equal(checkIndexSignature(index, w.trustedKeys).ok, true);
+
+  // An AppImage of Atmos 1.2.2 on Linux: offered, downloaded, checked, put in place on quit.
+  const userData = path.join(w.dir, 'user');
+  const manager = createExtensionManager({
+    userData, installedRoot: kind => path.join(userData, kind), trustedKeys: w.trustedKeys, extraSources: [w.out], appVersion: '1.2.2',
+  });
+  const status = await manager.checkForUpdates();
+  const target = path.join(w.dir, 'bin', 'Atmos.AppImage');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'Atmos 1.2.2');
+  const updater = createAtmosUpdater({
+    appVersion: '1.2.2', stateFile: path.join(userData, 'atmos-update.json'), downloadDir: path.join(w.dir, 'downloads'),
+    install: { perMachine: false, appImage: target }, platform: 'linux', arch: 'x64', warn() {},
+    download: async () => { throw new Error('a folder source is copied, not downloaded'); },
+    spawnInstaller: () => { throw new Error('nothing is run on Linux'); },
+  });
+  assert.equal(await updater.consider(status.core.offer), true);
+  assert.equal(updater.installOnQuit(), true);
+  assert.ok(fs.readFileSync(target).equals(image));
+
+  // The next run without an AppImage clears the old one from <out>.
+  fs.rmSync(path.join(w.from, 'dist', 'Atmos-1.2.3.AppImage'));
+  assert.equal(w.pack().status, 0);
+  assert.deepEqual(fs.readdirSync(w.out).filter(name => name.endsWith('.AppImage')), []);
+  assert.deepEqual(w.index().core.installers.map(entry => entry.platform), ['win32']);
+});
+
+test('--appimage that doesn\'t exist stops the run; one older than the last commit is refused', t => {
+  const w = world(t);
+  w.installer(Buffer.from('exe'));
+  const missing = w.pack('--appimage', path.join(w.dir, 'missing.AppImage'));
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /no AppImage at/);
+  assert.equal(fs.existsSync(path.join(w.out, 'index.json')), false);
+
+  spawnSync('git', ['init', '-q'], { cwd: w.from });
+  w.appImage(Buffer.from('old build'));
+  const old = new Date(Date.now() - 3600 * 1000);
+  fs.utimesSync(path.join(w.from, 'dist', 'Atmos-1.2.3.AppImage'), old, old);
+  fs.utimesSync(path.join(w.from, 'dist', 'Atmos Setup 1.2.3.exe'), new Date(), new Date());
+  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'package.json'], { cwd: w.from });
+  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'release'], { cwd: w.from });
+  fs.utimesSync(path.join(w.from, 'dist', 'Atmos Setup 1.2.3.exe'), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+  const stale = w.pack('--allow-dirty');
+  assert.equal(stale.status, 1);
+  assert.match(stale.stderr, /Atmos-1\.2\.3\.AppImage is older than the last commit/);
 });

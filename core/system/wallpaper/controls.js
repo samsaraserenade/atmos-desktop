@@ -4,7 +4,6 @@ import { wallpaperState } from './persist.js';
 import { imageKind, removeWallpaper, restorePrevious, setState, setWallpaper, subscribe, useDefaultWallpaper } from './engine.js';
 
 const adjustments = [
-  ['opacity', 'Opacity', 0, 100, '%'],
   ['parallaxStrength', 'Parallax', 0, 100, '%'],
   ['glassBlur', 'Blur', 0, 50, 'px'],
   ['glassSaturation', 'Saturation', 0, 200, '%'],
@@ -24,18 +23,8 @@ export function mountControls(body, context) {
       <button type="button" class="sa-btn wallpaper-choose">Choose…</button>
       <button type="button" class="sa-btn wallpaper-default">Use default</button>
       <button type="button" class="sa-btn wallpaper-remove">Remove</button>`, '<span class="wallpaper-image-status"></span>')}
-    ${row('Mode', `
-      <span class="sa-segmented" role="radiogroup" aria-label="Wallpaper mode">
-        <button type="button" role="radio" data-wallpaper-mode="transparent">See-through</button><button type="button" role="radio" data-wallpaper-mode="wallpaper">Wallpaper</button>
-      </span>`, 'See-through shows your desktop behind Atmos')}
-    ${row('Transparent Window', `
-      <button type="button" class="sa-btn wallpaper-window-restart" hidden>Restart</button>
-      <label class="sm-toggle" title="Takes effect after a restart">
-        <input type="checkbox" class="wallpaper-window-effects" aria-label="Transparent window">
-        <span class="sm-toggle-track"><span class="sm-toggle-thumb"></span></span>
-      </label>`, '<span class="wallpaper-window-status">Checking…</span>')}
     <details class="sa-details">
-      <summary>Adjustments <small>opacity, blur, colour</small></summary>
+      <summary>Adjustments <small>parallax, blur, colour</small></summary>
       ${adjustments.map(([key, label, min, max]) => row(label, `
         <span class="sa-slider">
           <input type="range" class="crange" data-wallpaper-key="${key}" min="${min}" max="${max}" step="1" aria-label="Wallpaper ${label.toLowerCase()}">
@@ -49,9 +38,6 @@ export function mountControls(body, context) {
   const defaultButton = body.querySelector('.wallpaper-default');
   const restoreButton = body.querySelector('.wallpaper-restore');
   const imageStatus = body.querySelector('.wallpaper-image-status');
-  const effectsToggle = body.querySelector('.wallpaper-window-effects');
-  const effectsStatus = body.querySelector('.wallpaper-window-status');
-  const restartButton = body.querySelector('.wallpaper-window-restart');
 
   // Image
   const renderImage = () => {
@@ -91,47 +77,6 @@ export function mountControls(body, context) {
     if (file) await setWallpaper(file);
   });
 
-  // Mode
-  const modeButtons = [...body.querySelectorAll('[data-wallpaper-mode]')];
-  const renderMode = () => {
-    for (const button of modeButtons) {
-      const on = button.dataset.wallpaperMode === wallpaperState.mode;
-      button.classList.toggle('active', on);
-      button.setAttribute('aria-checked', String(on));
-    }
-  };
-  for (const button of modeButtons) {
-    context.listen(button, 'click', () => setState({ mode: button.dataset.wallpaperMode }));
-  }
-
-  // Transparent window (a main-process setting; takes effect after a restart)
-  const renderWindowEffects = effects => {
-    effectsToggle.checked = effects.configured === true;
-    const pending = effects.active !== effects.configured;
-    effectsStatus.textContent = pending ? 'Restart to apply' : effects.active ? 'On' : 'Off: a normal window';
-    restartButton.hidden = !pending;
-  };
-  if (window.atmosCore?.getWindowEffects) {
-    window.atmosCore.getWindowEffects().then(effects => {
-      if (!context.signal.aborted) renderWindowEffects(effects);
-    }).catch(() => {
-      if (context.signal.aborted) return;
-      effectsToggle.disabled = true;
-      effectsStatus.textContent = 'Unavailable';
-    });
-    context.listen(effectsToggle, 'change', async () => {
-      effectsToggle.disabled = true;
-      try { renderWindowEffects(await window.atmosCore.setTransparentWindow(effectsToggle.checked)); }
-      catch { effectsStatus.textContent = 'Could not save'; }
-      finally { effectsToggle.disabled = false; }
-    });
-    context.listen(restartButton, 'click', () => window.atmosCore.restartAtmos());
-  } else {
-    effectsToggle.checked = true;
-    effectsToggle.disabled = true;
-    effectsStatus.textContent = 'On';
-  }
-
   // Adjustments
   const sliders = [...body.querySelectorAll('[data-wallpaper-key]')];
   const renderSliders = () => {
@@ -151,5 +96,5 @@ export function mountControls(body, context) {
     });
   }
 
-  subscribe(() => { renderImage(); renderMode(); renderSliders(); }, { signal: context.signal });
+  subscribe(() => { renderImage(); renderSliders(); }, { signal: context.signal });
 }

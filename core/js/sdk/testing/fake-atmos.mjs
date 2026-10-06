@@ -58,7 +58,8 @@ function toResponse(answer) {
  * @param {object} [options.state]          the saved state to start from
  * @param {object|Function} [options.fetch] URL → answer, or (request) => answer
  * @param {object|null} [options.location]  { lat, lon, label, mode } or null
- * @param {object|null} [options.wallpaper] { mode, opacity, thumbnail } to start from (a data URL thumbnail, say)
+ * @param {object|null} [options.wallpaper] { thumbnail } to start from (a data URL thumbnail, say); a `mode` or
+ *                                          `opacity` given is taken and ignored, as Atmos does since SDK 1.7
  * @param {object} [options.appearance]
  * @param {Array<{ name: string }>} [options.commands]  as in extension.json "contributes.commands" (SDK 1.3)
  */
@@ -107,7 +108,10 @@ export function createFakeAtmos(options = {}) {
   const notLocationService = () => new AtmosPermissionError("only Atmos's Location service sets the location");
 
   // The wallpaper as a frame sees it; `mine` is whether this extension set it.
-  let wallpaperNow = options.wallpaper === null ? null : { mode: 'wallpaper', opacity: 100, thumbnail: null, ...clone(options.wallpaper || {}) };
+  // Its mode and opacity are always 'wallpaper' and 100 (SDK 1.7: no
+  // see-through window); 'transparent' is taken and changes nothing.
+  const asSeen = next => ({ thumbnail: null, ...clone(next || {}), mode: 'wallpaper', opacity: 100 });
+  let wallpaperNow = options.wallpaper === null ? null : asSeen(options.wallpaper);
   let wallpaperMine = false;
   let wallpaperBefore = null;
   const wallpaperSummary = () => (wallpaperNow ? { ...wallpaperNow, canRestore: wallpaperMine } : null);
@@ -331,7 +335,7 @@ export function createFakeAtmos(options = {}) {
     wallpaper: null,
     /** Change the wallpaper as the user would in Settings (onChange listeners hear it; restore() then does nothing). */
     setWallpaper(next) {
-      wallpaperNow = next ? { mode: 'wallpaper', opacity: 100, thumbnail: null, ...clone(next) } : null;
+      wallpaperNow = next ? asSeen(next) : null;
       wallpaperMine = false;
       deliver('wallpaper', wallpaperSummary());
     },
@@ -405,7 +409,7 @@ export function createFakeAtmos(options = {}) {
   }
 
   const atmos = {
-    SDK_VERSION: '1.6.0',
+    SDK_VERSION: '1.7.0',
     ready: Promise.resolve({ extension }),
     extension,
     surface: {
@@ -508,7 +512,7 @@ export function createFakeAtmos(options = {}) {
         if (!(file instanceof Blob) || !/^image\//.test(file.type || '')) throw new TypeError('wallpaper.set(file) needs an image File or Blob');
         if (!wallpaperMine) wallpaperBefore = wallpaperNow;
         fake.wallpaper = file;
-        wallpaperNow = { mode: wallpaperNow?.mode ?? 'wallpaper', opacity: wallpaperNow?.opacity ?? 100, thumbnail: null };
+        wallpaperNow = asSeen();
         wallpaperMine = true;
         deliver('wallpaper', wallpaperSummary());
       },

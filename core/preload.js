@@ -31,18 +31,12 @@ contextBridge.exposeInMainWorld('atmosCore', {
     ipcRenderer.on('maximized-changed', listener);
     return () => ipcRenderer.removeListener('maximized-changed', listener);
   },
-  getWindowEffects: ()                    => ipcRenderer.invoke('window-effects:get'),
   capturePanelPreview: rect               => ipcRenderer.invoke('task-view:capture-preview', rect),
   reloadAtmos:         ()                 => ipcRenderer.send('atmos:reload'),
-  setColorScheme:      scheme             => ipcRenderer.send('appearance:color-scheme', scheme === 'light' ? 'light' : 'dark'),
-  setTransparentWindow: enabled           => ipcRenderer.invoke('window-effects:set-transparent', enabled === true),
+  setColorScheme:      (scheme, workspace) => ipcRenderer.send('appearance:color-scheme', scheme === 'light' ? 'light' : 'dark', String(workspace ?? '')),
   minimize:         ()                   => ipcRenderer.send('win-minimize'),
   maximize:         ()                   => ipcRenderer.send('win-maximize'),
   close:            ()                   => ipcRenderer.send('win-close'),
-  setWindowClickThrough: enabled         => ipcRenderer.send('set-window-click-through', enabled === true),
-  beginWindowResize: (direction, x, y)   => ipcRenderer.send('window-resize:start', direction, x, y),
-  updateWindowResize: (x, y)             => ipcRenderer.send('window-resize:update', x, y),
-  endWindowResize: ()                    => ipcRenderer.send('window-resize:end'),
   openExtensionRoot: kind                => ipcRenderer.invoke('extensions:open-root', kind),
   // A framed extension's invoke(), made by Core's bridge on its behalf:
   // `stamp.caller` ("plugin:<id>") is who asked, which the main process

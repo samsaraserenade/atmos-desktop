@@ -5,9 +5,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createAtmosUpdater, readInstallerEntry } = require('./atmos-update.cjs');
+const { createAtmosUpdater, readInstallerEntry, pickInstaller, replaceAppImage } = require('./atmos-update.cjs');
 
 const WIN = { platform: 'win32', arch: 'x64' };
+const LINUX = { platform: 'linux', arch: 'x64' };
 const sha = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
 
 /**
@@ -469,4 +470,106 @@ test('an installer that couldn\'t start is said after the restart, and cleared b
   assert.match(after.state().startFailed, /couldn't be started/);
   after.installNow();
   assert.equal(JSON.parse(fs.readFileSync(w.options.stateFile, 'utf8')).startFailed, null);
+});
+
+// ── Linux: the AppImage replaces itself (Atmos 0.24) ─────────────────────────
+
+/** A release whose index names the Windows installer and the AppImage, as pack:extensions writes it. */
+function linuxRelease(version, bytes = Buffer.from(`appimage ${version} `.repeat(1000))) {
+  const windows = release(version);
+  const appImage = { file: `Atmos-${version}.AppImage`, size: bytes.length, sha256: sha(bytes), ...LINUX };
+  return { core: { ...windows.core, installers: [windows.core.installer, appImage] }, bytes, url: `${SOURCE}${appImage.file}` };
+}
+
+/** An updater for an AppImage at <dir>/Atmos.AppImage (the old one's bytes), recording relaunches. */
+function appImageWorld(t, options = {}) {
+  const w = world(t, options);
+  const target = path.join(w.dir, 'Applications', 'Atmos.AppImage');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'the running Atmos');
+  const relaunched = [];
+  const updater = w.make({ ...LINUX, install: { perMachine: false, appImage: target }, relaunchFrom: file => relaunched.push(file) });
+  return { ...w, target, relaunched, updater };
+}
+
+test('Linux reads its AppImage from "installers", Windows still its installer from either', () => {
+  const r = linuxRelease('0.24.0');
+  assert.deepEqual(pickInstaller(r.core, LINUX), r.core.installers[1]);
+  assert.deepEqual(pickInstaller(r.core, WIN), r.core.installer);
+  assert.deepEqual(pickInstaller({ installers: [r.core.installer] }, WIN), r.core.installer, 'from "installers" alone');
+  assert.equal(pickInstaller({ installer: r.core.installer }, LINUX), null, 'an index naming only the Windows one has nothing for Linux');
+  // Each platform takes only its own kind of file.
+  assert.equal(readInstallerEntry({ ...r.core.installers[1], file: 'Atmos-0.24.0.exe' }, LINUX), null);
+  assert.equal(readInstallerEntry({ ...r.core.installer, file: 'Atmos.Setup.0.24.0.AppImage' }, WIN), null);
+  for (const file of ['../Atmos.AppImage', '.Atmos.AppImage', 'Atmos.appimage', 'Atmos.AppImage.exe', 'a/Atmos.AppImage']) {
+    assert.equal(readInstallerEntry({ ...r.core.installers[1], file }, LINUX), null, file);
+  }
+  assert.equal(pickInstaller({ installers: 'nope', installer: null }, LINUX), null);
+});
+
+test('an AppImage update downloads, and replaces the AppImage when Atmos quits, without starting it again', async t => {
+  const w = appImageWorld(t);
+  const r = linuxRelease('0.24.0');
+  w.web.set(r.url, r.bytes);
+  assert.equal(await w.updater.consider(r.core), true);
+  assert.deepEqual(w.downloads, [r.url]);
+  assert.equal(w.updater.state().installsOnQuit, true);
+  assert.equal(w.updater.installOnQuit(), true);
+  assert.ok(fs.readFileSync(w.target).equals(r.bytes), 'the new AppImage is in place');
+  // Windows has no execute bits; these tests run there too (publish:prepare).
+  if (process.platform !== 'win32') assert.equal(fs.statSync(w.target).mode & 0o111, 0o111, 'and can be run');
+  assert.deepEqual(fs.readdirSync(path.dirname(w.target)), ['Atmos.AppImage'], 'nothing left beside it');
+  assert.deepEqual(w.relaunched, [], 'the user quit');
+  assert.equal(w.spawned.length, 0, 'no installer is run');
+  assert.equal(JSON.parse(fs.readFileSync(w.options.stateFile, 'utf8')).attempt.version, '0.24.0');
+});
+
+test('Restart to update replaces the AppImage and starts Atmos again from it', async t => {
+  const w = appImageWorld(t);
+  const r = linuxRelease('0.24.0');
+  w.web.set(r.url, r.bytes);
+  await w.updater.consider(r.core);
+  assert.equal(w.updater.installNow(), true);
+  assert.ok(fs.readFileSync(w.target).equals(r.bytes));
+  assert.deepEqual(w.relaunched, [w.target]);
+});
+
+test('an AppImage that can\'t be replaced is left as it was, and Settings can say why', async t => {
+  const w = appImageWorld(t);
+  const r = linuxRelease('0.24.0');
+  w.web.set(r.url, r.bytes);
+  await w.updater.consider(r.core);
+  // The copy beside it can't be renamed over it (a folder in its place).
+  fs.rmSync(w.target);
+  fs.mkdirSync(w.target);
+  fs.writeFileSync(path.join(w.target, 'keep'), 'x');
+  assert.throws(() => w.updater.installNow());
+  assert.ok(fs.statSync(w.target).isDirectory(), 'untouched');
+  assert.deepEqual(fs.readdirSync(path.dirname(w.target)), ['Atmos.AppImage'], 'its copy removed');
+  assert.deepEqual(w.relaunched, []);
+  assert.match(w.updater.state().startFailed || '', /./);
+});
+
+test('replaceAppImage refuses a copy that doesn\'t match the signed index', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-appimage-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const download = path.join(dir, 'download.AppImage');
+  const target = path.join(dir, 'Atmos.AppImage');
+  fs.writeFileSync(download, 'new');
+  fs.writeFileSync(target, 'old');
+  assert.throws(() => replaceAppImage(download, target, { size: 3, sha256: sha(Buffer.from('other')) }), /doesn't match/);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'old');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['Atmos.AppImage', 'download.AppImage']);
+  replaceAppImage(download, target, { size: 3, sha256: sha(Buffer.from('new')) });
+  assert.equal(fs.readFileSync(target, 'utf8'), 'new');
+});
+
+test('an index with no AppImage leaves a Linux copy saying a version is available', async t => {
+  const w = appImageWorld(t);
+  const r = release('0.24.0');
+  w.web.set(r.url, r.bytes);
+  assert.equal(await w.updater.consider(r.core), false);
+  assert.equal(w.updater.state().installable, false);
+  assert.equal(w.updater.state().version, '0.24.0');
+  assert.deepEqual(w.downloads, []);
 });

@@ -14,10 +14,12 @@
  * files on a web server). The index also names the Atmos version of the
  * tree it packed ("core": { "version" }, from its package.json), so an
  * older Atmos reading it says "Atmos X is available", and that version's
- * Windows installer ("core": { "installer": { file, size, sha256 } }),
- * copied into <out>, so an installed Atmos updates itself with it
+ * Windows installer ("core": { "installer": { file, size, sha256 } }) and
+ * Linux AppImage, every platform's in "core.installers", copied into
+ * <out>, so an installed Atmos updates itself with it
  * (core/js/core/atmos-update.cjs) after checking it against this signed
- * hash.
+ * hash. ("installer" stays the Windows one: Atmos 0.19 to 0.23 read only
+ * that.)
  *
  *   ids      plugin or service ids; default: the released ones in release.json.
  *            --all packs every extension except system ones (they are part of Core).
@@ -47,6 +49,12 @@
  *            wrote it; --any-installer allows it); --no-installer packs
  *            without one (installed copies then can't update themselves to
  *            this version).
+ *   --appimage  the Linux AppImage to name in the index too (default:
+ *            --from's dist/Atmos-<version>.AppImage, as npm run build:linux
+ *            writes it, if it is there: a release without one leaves Linux
+ *            copies to update by hand). Copied into <out> under that name;
+ *            one older than --from's last commit stops the run as an old
+ *            installer does.
  *
  * Extensions with uncommitted changes in --from (a git checkout) are
  * refused, so what is signed is what was pushed; --allow-dirty allows it.
@@ -72,6 +80,9 @@ const FLAGS = { '--all': 'all', '--keep': 'keep', '--untrusted': 'untrusted', '-
 const installerSource = version => `Atmos Setup ${version}.exe`;
 const installerAsset = version => `Atmos.Setup.${version}.exe`;
 const INSTALLER_ASSET = /^Atmos\.Setup\..+\.exe$/;
+// The Linux AppImage (package.json "build.appImage"): the same name as an asset.
+const appImageName = version => `Atmos-${version}.AppImage`;
+const APPIMAGE_ASSET = /^Atmos-.+\.AppImage$/;
 
 /** electron-builder style glob (relative to the kind folder) → RegExp. */
 function globToRegExp(glob) {
@@ -115,13 +126,13 @@ function copyBundled(root, kind, id, dest, filters) {
 
 function parseArgs(argv) {
   const args = {
-    ids: [], all: false, keep: false, untrusted: false, sameVersion: false, allowDirty: false, noInstaller: false, anyInstaller: false, offline: false, previous: null, installer: null,
+    ids: [], all: false, keep: false, untrusted: false, sameVersion: false, allowDirty: false, noInstaller: false, anyInstaller: false, offline: false, previous: null, installer: null, appimage: null,
     key: process.env.ATMOS_SIGNING_KEY || null, out: path.join(repo, 'dist', 'packages'), from: repo,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (FLAGS[arg]) args[FLAGS[arg]] = true;
-    else if (['--key', '--out', '--from', '--previous', '--installer'].includes(arg)) {
+    else if (['--key', '--out', '--from', '--previous', '--installer', '--appimage'].includes(arg)) {
       if (!argv[i + 1]) fail(`${arg} needs a value`);
       const value = argv[i += 1];
       args[arg.slice(2)] = /^https:\/\//i.test(value) ? value : path.resolve(value);
@@ -177,6 +188,7 @@ async function main() {
   // The installer, found (or refused) before anything is cleared or packed.
   const core = coreOf(args.from);
   const installerFrom = core ? findInstaller(args, core.version) : null;
+  const appImageFrom = core ? findAppImage(args, core.version) : null;
   // What the source published last, read (or refused) before anything is cleared.
   const previous = await previousIndex(args);
   const privateKey = await loadSigningKey(args.key);
@@ -189,7 +201,7 @@ async function main() {
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-pack-'));
   fs.mkdirSync(args.out, { recursive: true });
   if (!args.keep) {
-    const old = fs.readdirSync(args.out).filter(file => file.endsWith(PACKAGE_EXTENSION) || file === 'index.json' || INSTALLER_ASSET.test(file));
+    const old = fs.readdirSync(args.out).filter(file => file.endsWith(PACKAGE_EXTENSION) || file === 'index.json' || INSTALLER_ASSET.test(file) || APPIMAGE_ASSET.test(file));
     for (const file of old) fs.rmSync(path.join(args.out, file));
     if (old.length) console.log(`  cleared ${old.length} file${old.length === 1 ? '' : 's'} from ${path.relative(process.cwd(), args.out) || '.'}`);
   }
@@ -220,8 +232,13 @@ async function main() {
     fail(`${problems.join('; ')}. Existing installs only update to a higher version: bump "version" in extension.json (or --same-version). Nothing was written.`);
   }
   const installer = installerFrom ? await copyInstaller(args, installerFrom, core.version) : null;
-  const index = buildIndex(args.out, privateKey, 'Atmos', { core: core && installer ? { ...core, installer } : core });
-  console.log(`  ${path.relative(process.cwd(), path.join(args.out, 'index.json'))}  ${index.packages.length} packages${installer ? ' and the installer' : ''}, signed`);
+  const appImage = appImageFrom ? await copyAppImage(args, appImageFrom, core.version) : null;
+  const installers = [installer, appImage].filter(Boolean);
+  const index = buildIndex(args.out, privateKey, 'Atmos', {
+    core: core && installers.length ? { ...core, ...(installer ? { installer } : {}), installers } : core,
+  });
+  const what = [installer && 'the installer', appImage && 'the AppImage'].filter(Boolean).join(' and ');
+  console.log(`  ${path.relative(process.cwd(), path.join(args.out, 'index.json'))}  ${index.packages.length} packages${what ? ` and ${what}` : ''}, signed`);
   if (untrusted) console.log('pack: packed with --untrusted: Atmos will refuse these packages unless it trusts the key (--trusted-keys, unpackaged).');
 }
 
@@ -239,12 +256,42 @@ function findInstaller(args, version) {
     }
     return null;
   }
+  checkBuiltAfterCommit(args, from, 'npm run build');
+  return from;
+}
+
+/** Stops the run if `file` was built before --from's last commit (unless --any-installer). */
+function checkBuiltAfterCommit(args, file, how) {
   const commit = spawnSync('git', ['log', '-1', '--format=%ct'], { cwd: args.from, encoding: 'utf8' });
   const committedAt = commit.status === 0 ? Number(commit.stdout.trim()) * 1000 : NaN;
-  if (!args.anyInstaller && Number.isFinite(committedAt) && fs.statSync(from).mtimeMs < committedAt) {
-    fail(`${from} is older than the last commit in ${args.from}, so it may not be what was published: build it again (npm run build there), or --any-installer`);
+  if (!args.anyInstaller && Number.isFinite(committedAt) && fs.statSync(file).mtimeMs < committedAt) {
+    fail(`${file} is older than the last commit in ${args.from}, so it may not be what was published: build it again (${how} there), or --any-installer`);
   }
+}
+
+/**
+ * The Linux AppImage for `version`: --appimage, or --from's dist/ if
+ * npm run build:linux wrote one there; null without one (--no-installer
+ * leaves it out too, unless named).
+ */
+function findAppImage(args, version) {
+  if (args.noInstaller && !args.appimage) return null;
+  const from = args.appimage || path.join(args.from, 'dist', appImageName(version));
+  if (!fs.existsSync(from)) {
+    if (args.appimage) fail(`no AppImage at ${from}: build it first (npm run build:linux, on Linux, in ${args.from})`);
+    return null;
+  }
+  checkBuiltAfterCommit(args, from, 'npm run build:linux');
   return from;
+}
+
+/** The AppImage copied into <out>, as an entry of the index's "core.installers". */
+async function copyAppImage(args, from, version) {
+  const to = path.join(args.out, appImageName(version));
+  if (path.resolve(from) !== path.resolve(to)) fs.copyFileSync(from, to);
+  const entry = await installerEntry(to, { platform: 'linux', arch: 'x64' });
+  console.log(`  ${path.relative(process.cwd(), to)}  the AppImage, ${(entry.size / 1024 / 1024).toFixed(1)} MB`);
+  return entry;
 }
 
 /**
@@ -263,7 +310,7 @@ async function copyInstaller(args, from, version) {
 /**
  * The index's "core.installer" for an installer file: its name, size and
  * SHA-256, and the platform it installs on (npm run build makes an x64
- * installer: --win nsis --x64).
+ * installer: --win nsis --x64; npm run build:linux an x64 AppImage).
  */
 async function installerEntry(file, { platform = 'win32', arch = 'x64' } = {}) {
   const hash = crypto.createHash('sha256');

@@ -32,7 +32,7 @@
  * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = '1.6.0';
+export const SDK_VERSION = '1.7.0';
 
 let port = null;
 let nextId = 1;
@@ -682,10 +682,12 @@ export function library(target, file) {
  *                  the one it replaced, and Settings says whose it is
  *   restore()      put back the one this extension's image replaced;
  *                  resolves false when the image showing isn't its own
- *   get()          { mode, opacity, thumbnail, canRestore }: thumbnail is a
+ *   get()          { thumbnail, canRestore, mode, opacity }: thumbnail is a
  *                  small JPEG data URL of the current image (null when there
- *                  is none); canRestore, whether restore() would do anything
- *   onChange(fn)   the same, whenever the image or mode changes
+ *                  is none); canRestore, whether restore() would do anything;
+ *                  mode and opacity are deprecated (SDK 1.7): always
+ *                  'wallpaper' and 100, Atmos having no see-through window
+ *   onChange(fn)   the same, whenever the image changes
  */
 export const wallpaper = Object.freeze({
   set: file => ask('wallpaper.set', file),

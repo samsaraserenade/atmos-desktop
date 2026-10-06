@@ -828,7 +828,7 @@ test('a signed index naming a newer Atmos offers it; an older, equal or malforme
   status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
   assert.deepEqual(status.core, {
     current: '0.12.0', available: '0.13.0', seen: true,
-    offer: { version: '0.13.0', installer: null, source: w.source },
+    offer: { version: '0.13.0', installer: null, installers: [], source: w.source },
   });
   assert.equal(status.packages.length, 1, 'the packages are read as before');
 
@@ -838,7 +838,15 @@ test('a signed index naming a newer Atmos offers it; an older, equal or malforme
   w.resignWith({ core: { version: '0.13.0', installer } });
   status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
   const { url: _ignored, ...fields } = installer;
-  assert.deepEqual(status.core.offer, { version: '0.13.0', installer: fields, source: w.source });
+  assert.deepEqual(status.core.offer, { version: '0.13.0', installer: fields, installers: [], source: w.source });
+
+  // Every platform's (0.24): "installers", the same fields each, at most 8.
+  const appImage = { file: 'Atmos-0.13.0.AppImage', size: 4321, sha256: 'b'.repeat(64), platform: 'linux', arch: 'x64', extra: true };
+  w.resignWith({ core: { version: '0.13.0', installer, installers: [installer, appImage, 'junk', ...Array(10).fill(appImage)] } });
+  status = await w.start({ appVersion: '0.12.0' }).manager.checkForUpdates();
+  const { extra: _extra, ...linux } = appImage;
+  assert.deepEqual(status.core.offer.installers.slice(0, 2), [fields, linux]);
+  assert.equal(status.core.offer.installers.length, 7, 'at most 8 looked at; one not an entry');
 
   for (const [version, app] of [['0.12.0', '0.12.0'], ['0.11.0', '0.12.0'], ['not a version', '0.12.0'], ['0.13.0', null]]) {
     w.resignWith({ core: { version } });

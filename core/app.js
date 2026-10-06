@@ -48,39 +48,6 @@ function _syncMaximizedState(maximized) {
 window.atmosCore?.onMaximizedChange?.(_syncMaximizedState);
 window.atmosCore?.isMaximized?.()?.then(_syncMaximizedState);
 
-const _windowEffects = await (window.atmosCore?.getWindowEffects?.() ?? Promise.resolve({ active: false }));
-document.documentElement.classList.toggle('custom-window-effects', _windowEffects.active === true);
-
-// Transparent frameless windows lose reliable native edge resizing on
-// Windows. Install custom handles only for that optional launch mode; the
-// default opaque window keeps Electron's cheaper native resize path.
-for (const direction of _windowEffects.active ? ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] : []) {
-  const handle = document.createElement('div');
-  handle.className = `window-resize-handle window-resize-${direction}`;
-  handle.dataset.direction = direction;
-  document.body.appendChild(handle);
-
-  let pointerId = null;
-  handle.addEventListener('pointerdown', event => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    pointerId = event.pointerId;
-    handle.setPointerCapture(pointerId);
-    window.atmosCore?.beginWindowResize?.(direction, event.screenX, event.screenY);
-  });
-  handle.addEventListener('pointermove', event => {
-    if (event.pointerId !== pointerId) return;
-    window.atmosCore?.updateWindowResize?.(event.screenX, event.screenY);
-  });
-  const finishResize = event => {
-    if (event.pointerId !== pointerId) return;
-    pointerId = null;
-    window.atmosCore?.endWindowResize?.();
-  };
-  handle.addEventListener('pointerup', finishResize);
-  handle.addEventListener('pointercancel', finishResize);
-}
-
 // ── Double-click title bar → toggle fullscreen ────────────────────────────────
 document.getElementById('titlebar')?.addEventListener('dblclick', event => {
   if (event.target.closest('.win-controls')) return;

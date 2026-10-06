@@ -190,7 +190,7 @@ async function commands(s, server) {
   out_.soundSaved = (await savedState(page))?.data?.notificationSound;
 
   // rev/invite, from the open room, to the homeserver.
-  await key('Control+Backslash');
+  await key('Alt+Backslash');
   await keys('invite @friend2:test');
   out_.invite = rowsOf(await barUntil(now => now.rows.some(row => row.title === 'Invite @friend2:test')));
   await key('Enter');
@@ -200,7 +200,7 @@ async function commands(s, server) {
   };
 
   // rev/create-room: its options as chips; public asks for an address.
-  await key('Control+Backslash');
+  await key('Alt+Backslash');
   await keys('create-room Plugin Showcase');
   const create = await barUntil(now => now.chips.length > 0);
   out_.createRow = rowsOf(create);
@@ -222,7 +222,7 @@ async function commands(s, server) {
   await activate(page, other);
   await page.waitForTimeout(600);
   await page.evaluate(() => document.activeElement?.blur?.());
-  await key('Control+Backslash');
+  await key('Alt+Backslash');
   await keys('go test');
   out_.elsewhere = { from: other, rows: rowsOf(await barUntil(now => now.rows.some(row => row.title === 'Test Room'))) };
   await key('Enter');

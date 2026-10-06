@@ -1,8 +1,10 @@
 // Atmos updating itself (core/js/core/atmos-update.cjs), through Settings →
-// Atmos, with a local source whose signed index names Atmos 99.0.0 and
-// its installer. Unpackaged, --update-test-install=<file> stands in for an
-// installed copy: the installer isn't run, what would have run is written to
-// <file>.
+// Atmos, with a local source whose signed index names Atmos 99.0.0, its
+// Windows installer ("installer", and in "installers") and its Linux
+// AppImage ("installers"). Unpackaged, --update-test-install=<file> stands
+// in for an installed copy: the installer isn't run, what would have run is
+// written to <file>. Steps 1 to 8 are Windows' (--update-test-platform=win32
+// reads the index as Windows does); step 9 is Linux's.
 //
 //  1. The check finds 99.0.0, downloads (copies) and checks the installer by
 //     itself: "Atmos 99.0.0 is ready to install … installs when you quit";
@@ -25,6 +27,11 @@
 //     its download is kept, and it installs on quit. At a new start with
 //     the source unreachable: "Couldn't check", the download kept, and
 //     ready again from it once the source is back.
+//  9. Linux (--update-test-appimage=<file> the AppImage Atmos runs from):
+//     the AppImage, not the Windows installer, downloads and is checked;
+//     quitting puts it in place of <file>, executable, and doesn't start
+//     Atmos again; Restart to update puts it in place and starts Atmos
+//     again from <file>.
 //
 // Usage: node scripts/e2e/atmos-update.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
@@ -52,17 +59,22 @@ async function world(prefix) {
   fs.mkdirSync(source, { recursive: true });
   const installer = path.join(source, 'Atmos.Setup.99.0.0.exe');
   fs.writeFileSync(installer, crypto.randomBytes(2 * 1024 * 1024));
-  // This platform's, so that the updater takes it (a release names win32/x64).
-  const entry = await installerEntry(installer, { platform: process.platform, arch: process.arch });
-  buildIndex(source, key.privateKey, 'Test source', { core: { version: '99.0.0', installer: entry } });
+  const appImage = path.join(source, 'Atmos-99.0.0.AppImage');
+  fs.writeFileSync(appImage, crypto.randomBytes(3 * 1024 * 1024));
+  // As a release names them (pack:extensions): x64, this machine's.
+  const entry = await installerEntry(installer, { platform: 'win32', arch: process.arch });
+  const appImageEntry = await installerEntry(appImage, { platform: 'linux', arch: process.arch });
+  buildIndex(source, key.privateKey, 'Test source', { core: { version: '99.0.0', installer: entry, installers: [entry, appImageEntry] } });
   const record = path.join(iso.home, 'installer-run.json');
-  return { ...iso, trustedFile, source, installer, entry, record };
+  return { ...iso, trustedFile, source, installer, entry, appImage, appImageEntry, record };
 }
 
-async function launch(w) {
+/** Windows' update path, or with `appImage` (a file) Linux's. */
+async function launch(w, { appImage = null } = {}) {
+  const stand = appImage ? [`--update-test-appimage=${appImage}`] : ['--update-test-platform=win32'];
   const app = await electron.launch({
     executablePath: ELECTRON,
-    args: [repo, `--trusted-keys=${w.trustedFile}`, `--extension-source=${w.source}`, `--update-test-install=${w.record}`, '--no-sandbox', '--disable-gpu'],
+    args: [repo, `--trusted-keys=${w.trustedFile}`, `--extension-source=${w.source}`, `--update-test-install=${w.record}`, ...stand, '--no-sandbox', '--disable-gpu'],
     cwd: repo, env: w.env,
   });
   const logs = []; app.process().stdout.on('data', d => logs.push(String(d))); app.process().stderr.on('data', d => logs.push(String(d)));
@@ -229,6 +241,35 @@ const exited = app => new Promise(resolve => {
   await waitRow(s.page, /ready to install/);
   check('8 back online: ready again from the kept download', true);
   await quit(s);
+
+  // 9. Linux: the AppImage replaces itself.
+  const w9 = await world('atmos-update-appimage-');
+  const target = path.join(w9.home, 'Applications', 'Atmos.AppImage');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'the AppImage Atmos runs from');
+  s = await launch(w9, { appImage: target });
+  await openManager(s.page);
+  await checkNow(s.page);
+  await waitRow(s.page, /ready to install/);
+  row = await atmosRow(s.page);
+  await s.page.screenshot({ path: path.join(out, '9-appimage-ready.png') });
+  const appImageDownload = path.join(w9.installRoot, 'atmos-updates', 'Atmos-99.0.0.AppImage');
+  check('9 the AppImage downloaded and matching, not the Windows installer', fs.existsSync(appImageDownload) && sha(appImageDownload) === w9.appImageEntry.sha256
+    && !fs.existsSync(path.join(w9.installRoot, 'atmos-updates', 'Atmos.Setup.99.0.0.exe')));
+  check('9 ready, installs on quit', /installs when you quit Atmos/.test(row.text), row.text);
+  await quit(s);
+  check('9 quitting puts the new AppImage in place, executable', sha(target) === w9.appImageEntry.sha256 && (fs.statSync(target).mode & 0o111) === 0o111);
+  check('9 nothing left beside it, nothing run, not started again', JSON.stringify(fs.readdirSync(path.dirname(target))) === '["Atmos.AppImage"]' && readRecord(w9) === null, readRecord(w9));
+  fs.writeFileSync(target, 'the AppImage Atmos runs from, again');
+  s = await launch(w9, { appImage: target });
+  await openManager(s.page);
+  await checkNow(s.page);
+  await waitRow(s.page, /ready to install/);
+  await s.page.click('.sm-manager-row[data-key="atmos"] [data-manager-action="install-atmos"]');
+  check('9 Restart to update quits Atmos', await exited(s.app));
+  record = readRecord(w9);
+  check('9 Restart to update: the new AppImage in place, and Atmos started again from it', sha(target) === w9.appImageEntry.sha256 && record?.relaunchFrom === target, record);
+  await s.app.close().catch(() => {});
 
   const failed = checks.filter(item => !item.ok);
   fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify({ checks, failed: failed.length }, null, 2));

@@ -1,85 +1,25 @@
-import { wallpaperState } from './persist.js';
-
+// What's behind the wallpaper: the theme's workspace colour (light with
+// Atmos Light), on the body, so a removed wallpaper or one still loading
+// shows that and never the window's own colour.
 let active = false;
-let ignoringMouse = false;
-let lastPointer = null;
 let previousRootBackground = '';
 let previousBodyBackground = '';
-let transparentWindowActive = false;
 
-function isInteractivePoint(x, y) {
-  const element = document.elementFromPoint(x, y);
-  if (!element || element === document.documentElement || element === document.body) return false;
-  if (element.closest('[data-atmos-surface-layer="workspace-background"]')) return false;
-  if (element.matches([
-    '#media-fullscreen', '#panel-primary', '#panel-content',
-    '.panel-section', '.panel-section-content', '.panel-plugin-viewport',
-  ].join(','))) return false;
-  return true;
-}
-
-function setClickThrough(enabled) {
-  if (ignoringMouse === enabled) return;
-  ignoringMouse = enabled;
-  window.atmosCore?.setWindowClickThrough?.(enabled);
-}
-
-function refreshHitTesting() {
-  if (!active || !transparentWindowActive || wallpaperState.mode !== 'transparent') {
-    setClickThrough(false);
-    return;
-  }
-  if (document.querySelector('#settings-menu.open')) {
-    setClickThrough(false);
-    return;
-  }
-  setClickThrough(lastPointer ? !isInteractivePoint(lastPointer.x, lastPointer.y) : true);
-}
-
-export function applyWallpaperPresentation(state = wallpaperState) {
+export function applyWallpaperPresentation() {
   if (!active) return;
-  // Behind the wallpaper: the theme's workspace colour (light with Atmos
-  // Light), unless the window is see-through.
-  const background = transparentWindowActive && state.mode === 'transparent' ? 'transparent' : 'rgb(var(--workspace-rgb, 0,0,0))';
   document.documentElement.style.background = 'transparent';
-  document.body.style.background = background;
-  refreshHitTesting();
-}
-
-export function isTransparentWindowActive() {
-  return transparentWindowActive;
+  document.body.style.background = 'rgb(var(--workspace-rgb, 0,0,0))';
 }
 
 export async function mountWallpaperInteraction(context) {
   if (active) return;
-  const effects = window.atmosCore?.getWindowEffects
-    ? await window.atmosCore.getWindowEffects()
-    : { active: true, configured: true };
-  transparentWindowActive = effects.active === true;
   active = true;
   previousRootBackground = document.documentElement.style.background;
   previousBodyBackground = document.body.style.background;
-
-  let hitTestFrame = null;
-  const trackPointer = event => {
-    lastPointer = { x: event.clientX, y: event.clientY };
-    if (hitTestFrame !== null) return;
-    hitTestFrame = context.requestAnimationFrame(() => {
-      hitTestFrame = null;
-      refreshHitTesting();
-    });
-  };
-  context.listen(document, 'mousemove', trackPointer, true);
-  context.listen(document, 'dragover', trackPointer, true);
-  context.listen(window, 'atmos:interactive-ui-changed', refreshHitTesting);
   context.onCleanup(() => {
     active = false;
-    hitTestFrame = null;
-    transparentWindowActive = false;
-    lastPointer = null;
     document.documentElement.style.background = previousRootBackground;
     document.body.style.background = previousBodyBackground;
-    setClickThrough(false);
   });
   applyWallpaperPresentation();
 }

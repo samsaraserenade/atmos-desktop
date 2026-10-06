@@ -1,7 +1,7 @@
 {
   "all": {
     "declared": "all",
-    "sdkVersion": "1.6.0",
+    "sdkVersion": "1.7.0",
     "api": [
       "SDK_VERSION",
       "appearance",
@@ -271,7 +271,7 @@
   },
   "none": {
     "declared": "none",
-    "sdkVersion": "1.6.0",
+    "sdkVersion": "1.7.0",
     "api": [
       "SDK_VERSION",
       "appearance",

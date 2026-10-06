@@ -152,6 +152,11 @@ function installerFields(installer) {
   return { file, size, sha256: hash, platform, arch };
 }
 
+/** "installers" (one per platform, Atmos 0.24), the same fields each; at most 8. */
+function installersFields(installers) {
+  return Array.isArray(installers) ? installers.slice(0, 8).map(installerFields).filter(Boolean) : [];
+}
+
 /**
  * @param {object} options
  * @param {string} options.userData            Atmos's user-data folder
@@ -318,12 +323,12 @@ function createExtensionManager({
       .map(item => ({ ...item, source: source.location }));
     rememberOfficialIds(source.location, packages);
     // The newest Atmos, as the signed index states it ("core": { "version",
-    // "installer" }). The download page "Atmos X is available" opens is
+    // "installer", "installers" }). The download page "Atmos X is available" opens is
     // Core's own setting, never a URL from a source; the installer Atmos
     // updates itself with comes from this source, checked against the
     // index's hash (atmos-update.cjs).
     const core = isValidVersion(index.core?.version)
-      ? { version: index.core.version, installer: installerFields(index.core.installer), source: source.location }
+      ? { version: index.core.version, installer: installerFields(index.core.installer), installers: installersFields(index.core.installers), source: source.location }
       : null;
     return { name: typeof index.name === 'string' ? index.name : null, packages, core };
   }

@@ -32,12 +32,6 @@ html { height:100%; width:100%; overflow:hidden; background:transparent; font-fa
 ::-webkit-scrollbar-thumb { background:rgba(var(--ink-rgb), var(--atmos-scrollbar-alpha, .12)); border-radius:2px; }
 ::-webkit-scrollbar-thumb:hover { background:rgba(var(--ink-rgb), var(--atmos-scrollbar-hover-alpha, .24)); }
 body { height:100%; width:100%; overflow:hidden; background:rgb(var(--surface-rgb)); }
-html.custom-window-effects body { border-radius:12px; clip-path:inset(0 round 12px); }
-html.custom-window-effects body::after { content:''; position:fixed; inset:0; z-index:1590; border:1px solid rgba(var(--ink-rgb),.18); border-radius:12px; pointer-events:none; }
-html.custom-window-effects.window-maximized body,
-html.custom-window-effects.window-fullscreen body { border-radius:0; clip-path:none; }
-html.custom-window-effects.window-maximized body::after,
-html.custom-window-effects.window-fullscreen body::after { display:none; }
 /* ── Boot splash — Rev centered over the app background until startup
    finishes (app.js dispatches 'atmos:boot-complete'; see the inline script), same press/release click reaction as the
    About page, plus a status line and a progress bar pinned to the very
@@ -111,18 +105,6 @@ html[data-app-theme="atmos-light"] #boot-splash-bg.boot-splash-bg-visible { opac
 #win-fullscreen.active { color:rgba(var(--ink-rgb),.9); background:rgba(var(--ink-rgb),.1); }
 #win-fullscreen svg { width:11px; height:11px; }
 #win-close:hover { color:rgb(var(--ink-rgb)); background:rgba(232,17,35,0.75); }
-.window-resize-handle { position:fixed; z-index:1600; -webkit-app-region:no-drag; touch-action:none; }
-.window-resize-n,.window-resize-s { left:7px; right:7px; height:7px; cursor:ns-resize; }
-.window-resize-n { top:0; }
-.window-resize-s { bottom:0; }
-.window-resize-e,.window-resize-w { top:7px; bottom:7px; width:7px; cursor:ew-resize; }
-.window-resize-e { right:0; }
-.window-resize-w { left:0; }
-.window-resize-ne,.window-resize-nw,.window-resize-se,.window-resize-sw { width:12px; height:12px; }
-.window-resize-ne { top:0; right:0; cursor:nesw-resize; }
-.window-resize-nw { top:0; left:0; cursor:nwse-resize; }
-.window-resize-se { right:0; bottom:0; cursor:nwse-resize; }
-.window-resize-sw { left:0; bottom:0; cursor:nesw-resize; }
 input[type=range].crange { -webkit-appearance:none; width:100%; height:3px; background:rgba(var(--ink-rgb),.12); border-radius:2px; outline:none; cursor:pointer; }
 input[type=range].crange::-webkit-slider-thumb { -webkit-appearance:none; width:9px; height:9px; background:rgba(var(--ink-rgb),.88); border-radius:50%; cursor:pointer; box-shadow:0 0 5px rgba(var(--ink-rgb),.25); transition:transform .1s,background .1s; }
 input[type=range].crange::-webkit-slider-thumb:hover { background:rgb(var(--ink-rgb)); transform:scale(1.18); }
@@ -1089,10 +1071,10 @@ p.sm-trust-caution { margin: 0 0 8px; }
 .ctx-panel { overflow:hidden; max-height:0; opacity:0; transition:max-height .35s cubic-bezier(0.22,1,0.36,1), opacity .2s ease; }
 .ctx-panel.open { max-height:800px; opacity:1; }
 
-/* AMOLED keeps the workspace black even when a wallpaper or transparent
-   window is configured. Theme switching restores those preferences. A
-   section a web page shows through (.atmos-web-under, web-layer.js) keeps
-   no background: the page is beneath it, and the body is black anyway. */
+/* AMOLED keeps the workspace black even when a wallpaper is set; theme
+   switching brings it back. A section a web page shows through
+   (.atmos-web-under, web-layer.js) keeps no background: the page is
+   beneath it, and the body is black anyway. */
 html[data-app-theme="amoled"] body { background:#000 !important; }
 html[data-app-theme="amoled"] [data-atmos-surface-layer="workspace-background"],
 html[data-app-theme="amoled"] #boot-splash-bg { display:none !important; }

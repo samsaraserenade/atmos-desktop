@@ -3,10 +3,8 @@ import {
 } from 'atmos-core/persist.js';
 
 export const wallpaperState = registerStateNamespace('wallpaper', {
-  version: 2,
+  version: 3,
   defaults: {
-    mode: 'wallpaper',
-    opacity: 100,
     // Off until chosen (Atmos 0.18): the wallpaper stays still.
     parallaxStrength: 0,
     glassBlur: 0,
@@ -17,6 +15,7 @@ export const wallpaperState = registerStateNamespace('wallpaper', {
     hue: 0,
     positionX: 50,
     positionY: 50,
+    // No image: the theme's workspace colour shows instead (Remove).
     wallpaperRemoved: false,
     // Set by an extension (atmos.wallpaper.set): which one ("plugin:<id>"),
     // its name for Settings, and what it replaced ('own', 'default' or
@@ -25,10 +24,26 @@ export const wallpaperState = registerStateNamespace('wallpaper', {
     setByName: null,
     previous: null,
   },
+  migrate: (data, fromVersion) => (fromVersion < 3 ? withoutSeeThrough(data) : data),
 });
 
+/**
+ * Version 3 (Atmos 0.24): the see-through window is gone, and with it the
+ * wallpaper's `mode` ('transparent' or 'wallpaper') and `opacity`, which
+ * only mattered in a see-through window. Remove used to save See-through at
+ * 0% as well as `wallpaperRemoved`, and only the flag says removed: an image
+ * chosen after a Remove clears it and leaves See-through at 0% saved (an
+ * opaque window showed that image). Saved before the flag existed,
+ * See-through at 0% was how no wallpaper was kept.
+ */
+export function withoutSeeThrough(data) {
+  if (!data || typeof data !== 'object') return data;
+  const { mode, opacity, ...rest } = data;
+  if (rest.wallpaperRemoved === undefined && mode === 'transparent' && Number(opacity) === 0) rest.wallpaperRemoved = true;
+  return rest;
+}
+
 let importedLegacyState = false;
-let hasPluginPresentationState = false;
 
 // Wallpaper was the Background plugin, which saved under 'background'.
 // Carry that namespace over once; the older bridges below read it too.
@@ -37,7 +52,7 @@ registerPersist('wallpaper-from-background', {
   hydrate(blob) {
     const saved = blob?.extensionState;
     if (saved?.wallpaper || !saved?.background?.data) return;
-    const data = saved.background.data;
+    const data = withoutSeeThrough(saved.background.data);
     for (const key of Object.keys(wallpaperState)) {
       if (data[key] !== undefined) wallpaperState[key] = data[key];
     }
@@ -50,7 +65,6 @@ registerPersist('background-legacy-migration', {
   serialize: () => ({}),
   hydrate(blob) {
     const saved = blob?.extensionState?.wallpaper ?? blob?.extensionState?.background;
-    hasPluginPresentationState = ['transparent', 'wallpaper'].includes(saved?.data?.mode);
     if (saved) return;
     const mappings = {
       parallaxStrength: 'parallaxStrength', glassBlur: 'glassBlur',
@@ -71,17 +85,9 @@ registerPersist('background-legacy-migration', {
 });
 
 onStateLoaded(() => {
-  if (!hasPluginPresentationState) {
-    try {
-      const legacyMode = localStorage.getItem('atmos_background_mode');
-      if (legacyMode === 'transparent' || legacyMode === 'wallpaper') {
-        wallpaperState.mode = legacyMode;
-        wallpaperState.opacity = legacyMode === 'wallpaper' ? 100 : 0;
-        importedLegacyState = true;
-      }
-      localStorage.removeItem('atmos_background_mode');
-    } catch {}
-  }
+  // The oldest Atmos kept See-through or Wallpaper here; neither is a choice
+  // now (the see-through window is gone).
+  try { localStorage.removeItem('atmos_background_mode'); } catch {}
   // Core builds a fresh root object on save, so this successful namespaced
   // write also drops the obsolete root fields instead of preserving sediment.
   if (importedLegacyState) save();

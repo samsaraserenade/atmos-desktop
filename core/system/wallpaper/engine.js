@@ -1,7 +1,7 @@
 import { createEventScope } from 'atmos-core/core/events.js';
 import { deleteAsset, loadAsset, saveAsset } from 'atmos-core/persist.js';
 import { wallpaperState, updateWallpaperState } from './persist.js';
-import { applyWallpaperPresentation, isTransparentWindowActive } from './interaction.js';
+import { applyWallpaperPresentation } from './interaction.js';
 
 const events = createEventScope('wallpaper');
 const temporary = new Map();
@@ -30,11 +30,8 @@ function effective() {
 
 function paint() {
   const value = effective();
-  applyWallpaperPresentation(value);
+  applyWallpaperPresentation();
   if (!imageEl || !overlayEl) return;
-  imageEl.parentElement.style.opacity = String(
-    value.mode === 'wallpaper' || !isTransparentWindowActive() ? 1 : value.opacity / 100,
-  );
   imageEl.style.backgroundImage = value.image ? `url("${String(value.image).replaceAll('"', '\\"')}")` : 'none';
   imageEl.style.backgroundPosition = `${value.positionX}% ${value.positionY}%`;
   imageEl.style.filter = `brightness(${value.brightness / 100}) contrast(${value.contrast / 100}) hue-rotate(${value.hue}deg) saturate(${value.glassSaturation / 100})`;
@@ -101,18 +98,26 @@ export function mount(host, context) {
   });
 }
 
-export function getState() { return Object.freeze({ ...effective() }); }
+// `mode` and `opacity` are what they always are now, for code that still
+// reads them: the see-through window they described is gone (Atmos 0.24).
+const SEE_THROUGH_GONE = Object.freeze({ mode: 'wallpaper', opacity: 100 });
+
+export function getState() { return Object.freeze({ ...effective(), ...SEE_THROUGH_GONE }); }
 export function getPersistentState() {
-  return Object.freeze({ ...wallpaperState, image: persistentImage });
+  return Object.freeze({ ...wallpaperState, image: persistentImage, ...SEE_THROUGH_GONE });
 }
+
+let warnedSeeThrough = false;
 
 export function setState(patch) {
   const next = {};
-  if (patch.mode != null) {
-    if (!['transparent', 'wallpaper'].includes(patch.mode)) throw new TypeError(`background: invalid mode '${patch.mode}'`);
-    next.mode = patch.mode;
+  // Deprecated (SDK 1.7): 'transparent' (See-through) and an opacity are
+  // still taken, so nothing that sets them breaks, and change nothing.
+  if (patch.mode != null && !['transparent', 'wallpaper'].includes(patch.mode)) throw new TypeError(`background: invalid mode '${patch.mode}'`);
+  if ((patch.mode === 'transparent' || patch.opacity != null) && !warnedSeeThrough) {
+    warnedSeeThrough = true;
+    console.warn('[wallpaper] mode \'transparent\' and opacity are deprecated and do nothing: Atmos has no see-through window');
   }
-  if (patch.opacity != null) next.opacity = clamp(patch.opacity, 0, 100);
   if (patch.parallaxStrength != null) next.parallaxStrength = clamp(patch.parallaxStrength, 0, 100);
   if (patch.glassBlur != null) next.glassBlur = clamp(patch.glassBlur, 0, 50);
   if (patch.glassSaturation != null) next.glassSaturation = clamp(patch.glassSaturation, 0, 200);
@@ -207,7 +212,7 @@ export async function removeWallpaper() {
   if (persistentObjectUrl) URL.revokeObjectURL(persistentObjectUrl);
   persistentObjectUrl = null;
   persistentImage = '';
-  updateWallpaperState({ mode: 'transparent', opacity: 0, wallpaperRemoved: true });
+  updateWallpaperState({ wallpaperRemoved: true });
   paint();
 }
 
@@ -219,8 +224,7 @@ export async function useDefaultWallpaper() {
   if (persistentObjectUrl) URL.revokeObjectURL(persistentObjectUrl);
   persistentObjectUrl = null;
   persistentImage = DEFAULT_IMAGE;
-  // Remove switched to see-through; the default image is meant to be seen.
-  updateWallpaperState({ wallpaperRemoved: false, ...(wallpaperState.mode === 'transparent' && wallpaperState.opacity === 0 ? { mode: 'wallpaper', opacity: 100 } : {}) });
+  updateWallpaperState({ wallpaperRemoved: false });
   paint();
 }
 

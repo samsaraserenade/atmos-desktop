@@ -1,12 +1,15 @@
 'use strict';
 /**
- * Atmos updating itself: an installed copy on Windows downloads the newer
- * installer, checks it, and runs it when Atmos quits or from "Restart to
- * update", as Chrome applies its updates.
+ * Atmos updating itself: an installed copy on Windows, or an AppImage on
+ * Linux, downloads the newer version, checks it, and installs it when Atmos
+ * quits or from "Restart to update", as Chrome applies its updates.
  *
  * What to install comes from a source's signed index (extension-manager
  * readSource): "core": { "version", "installer": { file, size, sha256,
- * platform, arch } }. Only an official key can sign an index, so the
+ * platform, arch }, "installers": [ the same, one per platform ] }.
+ * "installer" is the Windows one, which Atmos 0.19 to 0.23 read;
+ * "installers" (0.24) lists every platform's, and this platform's entry is
+ * taken from either. Only an official key can sign an index, so the
  * installer is trusted as far as its hash: it is fetched from the same
  * source as the index, never past the signed size, and run only if its
  * SHA-256 matches, checked when the download finishes and again just
@@ -22,6 +25,12 @@
  * closed (will-quit), so pages have had their last events. A per-machine
  * install needs Windows' permission, so it is never installed on quit,
  * only from "Restart to update", where the prompt is expected.
+ *
+ * On Linux the update is the new AppImage itself (`install.appImage`, the
+ * file Atmos runs from): at will-quit it is copied beside that file,
+ * checked once more and renamed over it, so the AppImage is whole, old or
+ * new, whatever happens; the running Atmos keeps the old one open until it
+ * exits. "Restart to update" then starts the new file (`relaunch`).
  *
  * "Update Atmos automatically" (on by default) downloads in the background
  * and installs on quit; off, Atmos only says a version is available and
@@ -40,8 +49,16 @@ const { readJson, writeJson } = require('./json-files.cjs');
 const { compareVersions, isValidVersion } = require('./extension-version.cjs');
 
 const MAX_INSTALLER_BYTES = 1024 * 1024 * 1024;
-// A file name, as the release lists it: no folders, no leading dot.
-const INSTALLER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.exe$/;
+// A file name, as the release lists it: no folders, no leading dot. What
+// each platform installs from: electron-builder's NSIS installer on
+// Windows, the AppImage itself on Linux.
+const INSTALLER_NAMES = {
+  win32: /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.exe$/,
+  linux: /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.AppImage$/,
+};
+const INSTALLER_NAME = INSTALLER_NAMES.win32;
+// At most this many entries in "installers" are looked at.
+const MAX_INSTALLERS = 8;
 // An installer still running when Atmos starts again (someone opened Atmos
 // during an install on quit) isn't a failure yet.
 const ATTEMPT_GRACE_MS = 3 * 60 * 1000;
@@ -51,17 +68,57 @@ const NUDGE_AFTER_MS = 2 * 24 * 60 * 60 * 1000;
 
 /**
  * The installer an index's "core" entry names, checked, or null: a safe
- * file name, a size within bounds, a SHA-256, and this platform and
- * architecture.
+ * file name of the kind this platform installs from, a size within
+ * bounds, a SHA-256, and this platform and architecture.
  */
 function readInstallerEntry(installer, { platform, arch }) {
   if (!installer || typeof installer !== 'object') return null;
   const { file, size, sha256: hash } = installer;
-  if (typeof file !== 'string' || !INSTALLER_NAME.test(file) || file.includes('..')) return null;
+  const name = INSTALLER_NAMES[platform];
+  if (!name || typeof file !== 'string' || !name.test(file) || file.includes('..')) return null;
   if (!Number.isInteger(size) || size <= 0 || size > MAX_INSTALLER_BYTES) return null;
   if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) return null;
   if (installer.platform !== platform || installer.arch !== arch) return null;
   return { file, size, sha256: hash, platform, arch };
+}
+
+/**
+ * This platform's installer from an index's "core" entry: the first of
+ * "installers" that reads as one (readInstallerEntry), else "installer"
+ * (the Windows one, kept for Atmos 0.19 to 0.23), else null.
+ */
+function pickInstaller(core, { platform, arch }) {
+  const listed = Array.isArray(core?.installers) ? core.installers.slice(0, MAX_INSTALLERS) : [];
+  for (const candidate of [...listed, core?.installer]) {
+    const entry = readInstallerEntry(candidate, { platform, arch });
+    if (entry) return entry;
+  }
+  return null;
+}
+
+/**
+ * Put a downloaded AppImage in place of the one Atmos runs from (`target`):
+ * copied beside it, made executable, checked against the signed size and
+ * SHA-256, flushed, then renamed over it, so the target is never half
+ * written. Throws, leaving the target as it was, if any step fails.
+ */
+function replaceAppImage(file, target, expected, fsImpl = fs) {
+  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.update`);
+  fsImpl.rmSync(temporary, { force: true });
+  try {
+    fsImpl.copyFileSync(file, temporary);
+    fsImpl.chmodSync(temporary, 0o755);
+    if (fsImpl.statSync(temporary).size !== expected.size || hashFileSync(temporary, fsImpl) !== expected.sha256) {
+      throw new Error("The copied AppImage doesn't match the signed index");
+    }
+    // 'r+': Windows refuses to flush a file opened read-only (EPERM).
+    const fd = fsImpl.openSync(temporary, 'r+');
+    try { fsImpl.fsyncSync(fd); } finally { fsImpl.closeSync(fd); }
+    fsImpl.renameSync(temporary, target);
+  } catch (failure) {
+    fsImpl.rmSync(temporary, { force: true });
+    throw failure;
+  }
 }
 
 /** SHA-256 of a file, read in pieces (installers are ~100 MB). */
@@ -72,18 +129,18 @@ async function hashFile(file) {
 }
 
 /** The same, synchronously: for checking the installer while Atmos quits. */
-function hashFileSync(file) {
+function hashFileSync(file, fsImpl = fs) {
   const hash = crypto.createHash('sha256');
-  const fd = fs.openSync(file, 'r');
+  const fd = fsImpl.openSync(file, 'r');
   try {
     const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
     for (;;) {
-      const read = fs.readSync(fd, buffer, 0, buffer.length, null);
+      const read = fsImpl.readSync(fd, buffer, 0, buffer.length, null);
       if (!read) break;
       hash.update(buffer.subarray(0, read));
     }
   } finally {
-    fs.closeSync(fd);
+    fsImpl.closeSync(fd);
   }
   return hash.digest('hex');
 }
@@ -108,18 +165,20 @@ function spawnDetached(file, args, spawn = require('child_process').spawn, warn 
  * @param {string} options.appVersion      the running Atmos
  * @param {string} options.stateFile       user data's atmos-update.json (the setting and the last attempt)
  * @param {string} options.downloadDir     where installers are downloaded
- * @param {{ perMachine: boolean } | null} options.install
+ * @param {{ perMachine: boolean, appImage?: string } | null} options.install
  *        how this copy is installed, or null when it can't update itself
- *        (running from source, portable, not Windows, not an NSIS install)
+ *        (running from source, portable, not an NSIS install or an
+ *        AppImage it can write); `appImage`, the AppImage file to replace
  * @param {(url: string, file: string, options: { maxBytes: number, signal: AbortSignal, onProgress: (bytes: number) => void }) => Promise<void>} options.download
  *        an https download written to `file`; refuses past maxBytes
  * @param {(file: string, args: string[]) => void} options.spawnInstaller  starts the installer, detached
+ * @param {(file: string) => void} [options.relaunchFrom]  starts Atmos again from `file` once it has quit (an AppImage's "Restart to update")
  * @param {() => void} [options.onChange]   something Settings shows changed
  * @param {string} [options.platform] @param {string} [options.arch]
  * @param {() => number} [options.now]
  */
 function createAtmosUpdater({
-  appVersion, stateFile, downloadDir, install = null, download, spawnInstaller,
+  appVersion, stateFile, downloadDir, install = null, download, spawnInstaller, relaunchFrom = () => {},
   onChange = () => {}, warn = message => console.warn(message),
   platform = process.platform, arch = process.arch, now = () => Date.now(),
 }) {
@@ -290,7 +349,7 @@ function createAtmosUpdater({
    */
   function consider(core, { answered = null } = {}) {
     const newer = core && isValidVersion(core.version) && isValidVersion(appVersion) && compareVersions(core.version, appVersion) > 0;
-    const installer = newer ? readInstallerEntry(core.installer, { platform, arch }) : null;
+    const installer = newer ? pickInstaller(core, { platform, arch }) : null;
     const next = newer ? { version: core.version, installer, source: typeof core.source === 'string' ? core.source : null } : null;
     if (next && !next.source) next.installer = null;
     const heard = answered ? new Set(answered) : null;
@@ -344,7 +403,12 @@ function createAtmosUpdater({
     checkReady();
     save({ attempt: { version: offer.version, from: appVersion, at: new Date(now()).toISOString(), relaunch }, startFailed: null });
     try {
-      spawnInstaller(readyFile, installerArgs({ relaunch }));
+      if (install.appImage) {
+        replaceAppImage(readyFile, install.appImage, offer.installer);
+        if (relaunch) relaunchFrom(install.appImage);
+      } else {
+        spawnInstaller(readyFile, installerArgs({ relaunch }));
+      }
     } catch (failure) {
       // Kept, so Settings can say why after Atmos starts again.
       save({ attempt: null, startFailed: { version: offer.version, message: failure.message, at: new Date(now()).toISOString() } });
@@ -422,4 +486,4 @@ function createAtmosUpdater({
   return { startup, consider, download: startDownload, checkReady, installNow, installOnQuit, wouldInstallOnQuit, nudgeDue, setAuto, state };
 }
 
-module.exports = { createAtmosUpdater, readInstallerEntry, spawnDetached, hashFile, hashFileSync, INSTALLER_NAME, MAX_INSTALLER_BYTES, NUDGE_AFTER_MS };
+module.exports = { createAtmosUpdater, readInstallerEntry, pickInstaller, replaceAppImage, spawnDetached, hashFile, hashFileSync, INSTALLER_NAME, INSTALLER_NAMES, MAX_INSTALLER_BYTES, NUDGE_AFTER_MS };

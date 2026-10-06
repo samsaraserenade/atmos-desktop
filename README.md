@@ -126,8 +126,8 @@ Atmos Core owns the shell, and extensions fill it.
 - **Appearance.** Themes, imported fonts, shared positive/negative/neutral
   colours, and per-panel blur and opacity. Atmos draws the frosted glass
   itself, so every extension gets the same material over your wallpaper.
-- **Wallpaper.** Any image, with opacity, vignette and brightness controls,
-  painted behind the whole workspace.
+- **Wallpaper.** Any image, with blur, vignette and brightness controls,
+  painted behind the whole workspace (or none: the theme's colour).
 - **Background audio.** Each extension gets its own playback channel that
   keeps going through panel switches, layout changes and reloads, so
   sounds from different extensions never cut each other off.
@@ -326,7 +326,7 @@ Requirements:
 
 - Node.js
 - npm
-- Windows for packaged builds
+- Windows for the installer; Linux for the AppImage
 - Python 3.10+ only to run or test Finance's portfolio server
 
 Install dependencies and run Atmos:
@@ -364,6 +364,13 @@ Create a portable build:
 
 ```bash
 npm run build:portable
+```
+
+On Linux, build an AppImage (`dist/Atmos-<version>.AppImage`; the same
+extensions as the installer):
+
+```bash
+npm run build:linux
 ```
 
 ### Build an extension

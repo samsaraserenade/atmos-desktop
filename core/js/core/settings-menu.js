@@ -572,7 +572,7 @@ function _renderHome() {
           <div class="sm-home-title-fallback">${APP_NAME}</div>
         </div>
         <div class="sm-home-version">${_appVersion ? `Version ${_appVersion}` : 'Version —'}</div>
-        <div class="sm-home-updates">${_atmosHomeHtml()}</div>
+        <div class="sm-home-updates">${_atmosHomeHtml()}${_keyringHtml()}</div>
       </div>
       ${_shortcutsHtml()}
     </div>`;
@@ -1458,12 +1458,28 @@ function _leftUnused(extension, installed, pendingByKey) {
 }
 
 /**
+ * Linux without a keyring Chromium can use (main.js _keyringMissing):
+ * cookies and what extensions seal are kept under a fixed key, so say so,
+ * once, under the version.
+ */
+function _keyringHtml() {
+  const missing = _manager?.summary?.keyringMissing;
+  if (!missing) return '';
+  return `
+    <div class="sm-home-update sm-manager-row" data-key="keyring">
+      <div class="sm-home-update-name">No keyring</div>
+      <div class="sm-home-update-detail">Atmos found no keyring to lock your sign-ins with, so cookies, Finance’s server token and Matrix Chat’s keys are saved without real encryption. Start Atmos with a keyring unlocked at login: the Atmos session does, with gnome-keyring.</div>
+    </div>`;
+}
+
+/**
  * Settings → Atmos, under the version: whether it's up to date, or the
  * newer version and what to do about it, and "Update automatically". A
  * newer version comes from a source's signed index; an installed copy on
- * Windows downloads it, checks it and installs it (atmos-update.cjs; its
- * offer outlasts a check that couldn't reach the source), any other copy
- * offers the download page (the main process opens it).
+ * Windows, or an AppImage on Linux, downloads it, checks it and installs it
+ * (atmos-update.cjs; its offer outlasts a check that couldn't reach the
+ * source), any other copy offers the download page (the main process opens
+ * it).
  */
 function _atmosHomeHtml() {
   if (!window.atmosCore?.extensionManager || !_manager) return '';
@@ -1905,7 +1921,6 @@ export function openSettingsMenu() {
   _loadVersion();
   _render();
   _overlay.classList.add('open');
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
   _refreshExtensions();
   void _loadManager();
 }
@@ -1918,7 +1933,6 @@ export function openOnboardingSettings() {
 
 export function closeSettingsMenu() {
   _overlay?.classList.remove('open');
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
 export function toggleSettingsMenu() {

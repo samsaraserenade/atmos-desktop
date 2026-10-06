@@ -491,10 +491,10 @@ refused call rejects with an `AtmosPermissionError` naming what to declare.
 Subscriptions (`events.on`, `listen`, the `onChange`s) don't reject: a
 refusal is logged in the frame's console.
 
-**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.6.0'` (Atmos 0.23),
+**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.7.0'` (Atmos 0.24),
 and a later 1.x only adds. What 1.1 added is marked **1.1**; 1.2 added
 only `atmos.web`, for official extensions; 1.3, `atmos.commands` (with
-`"commands"` in the manifest) and ui.css's bar; 1.4, `atmos.nowPlaying`; 1.5, `atmos.web.close(tabId, { sleep })` for official extensions, and Atmos's own keys taken before a frame's code sees them; 1.6, a command's `aliases`. Everything below is **stable** unless marked
+`"commands"` in the manifest) and ui.css's bar; 1.4, `atmos.nowPlaying`; 1.5, `atmos.web.close(tabId, { sleep })` for official extensions, and Atmos's own keys taken before a frame's code sees them; 1.6, a command's `aliases`; 1.7 adds nothing and deprecates the wallpaper's `mode` and `opacity` (Atmos has no see-through window). Everything below is **stable** unless marked
 **experimental** (it may still change in a minor version). The calls in
 "Official extensions only" at the end of this section may change in a
 minor version too, and Atmos refuses them to community extensions.
@@ -506,7 +506,7 @@ minor version too, and Atmos refuses them to community extensions.
 | `atmos.extension` | `{ id, kind, tier, version }`: which extension this frame belongs to |
 | `atmos.surface` | `{ type, id, presentation, glass, drawer }`: `type` is `'panel'`, `'sidebar'`, `'settings'` or `'boot'`; `presentation` is `'full'`, `'tile'` or `'window'` (panels) and never changes, since a layout change makes a new frame |
 | `atmos.ready` | A promise that resolves once the frame is connected. Entry files already run after it |
-| `atmos.SDK_VERSION` | `'1.6.0'` (Atmos 0.23); `'1.5.0'` in Atmos 0.22, `'1.4.0'` in Atmos 0.21, `'1.3.0'` in Atmos 0.20, `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
+| `atmos.SDK_VERSION` | `'1.7.0'` (Atmos 0.24); `'1.6.0'` in Atmos 0.23, `'1.5.0'` in Atmos 0.22, `'1.4.0'` in Atmos 0.21, `'1.3.0'` in Atmos 0.20, `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
 
 ### State and events
 
@@ -594,7 +594,7 @@ flight):
 
 | Call | What it does | Needs |
 |---|---|---|
-| `atmos.wallpaper.set(file)` / `get()` / `onChange(fn)` | Set an image `File` or `Blob` as the wallpaper; `{ mode, opacity, thumbnail, canRestore }` now and whenever it changes (`thumbnail` is a small JPEG data URL, for sampling colours). Atmos keeps the image yours replaced, and Settings → Appearance says "Set by Weather" with a Restore previous button | `"invokes": ["service:wallpaper"]` |
+| `atmos.wallpaper.set(file)` / `get()` / `onChange(fn)` | Set an image `File` or `Blob` as the wallpaper; `{ thumbnail, canRestore, mode, opacity }` now and whenever it changes (`thumbnail` is a small JPEG data URL, for sampling colours, and `null` with no wallpaper). `mode` and `opacity` are **deprecated** since 1.7: always `'wallpaper'` and `100`, since Atmos has no see-through window (`'transparent'` is never reported). Atmos keeps the image yours replaced, and Settings → Appearance says "Set by Weather" with a Restore previous button | `"invokes": ["service:wallpaper"]` |
 | `atmos.wallpaper.restore()` **1.1** | Put back the wallpaper your image replaced. Resolves `false` when the image showing isn't yours (the user or another extension changed it since); `canRestore` says beforehand. After several extensions in a row, what comes back is still what the user had | `"invokes": ["service:wallpaper"]` |
 | `atmos.audio.load(source, { id, position, play, loop })` | This extension's own playback channel, which lives all session and keeps playing whatever frames come and go. `source` is a `Blob`/`File`, or an `atmos-resource://` URL from a provider it registers (official). `id` is your own label, reported back as `id`. **1.1:** `loop: true` starts it over at the end inside Atmos, with no `'ended'` and no frame involved (a soundscape keeps looping when its panel closes). Resolves with the state | `"invokes": ["service:audio"]` |
 | `atmos.audio.play()` / `pause()` / `seek(s)` / `setVolume(0–1)` / `stop()` / `state()` / `onChange(fn)` | Control it; `play()` resolves whether it started. `{ type, id, source, loop, playing, currentTime, duration, volume, ended, error }` on every change, in every frame of the extension. `id` and `loop` are **1.1**; `source` is the same label as `id` (all Atmos 0.15 reports) | `"invokes": ["service:audio"]` |
@@ -1866,7 +1866,7 @@ returns it (`createFakeAtmos` only makes one). Its options:
 | `state` | The saved state to start from |
 | `fetch` | Answers for `atmos.fetch()`: `{ 'https://…': answer }` (or `'POST https://…'`), or `request => answer`. An answer is a `Response`, `{ status, headers, json \| text \| body }`, or an `Error` to throw |
 | `location`, `appearance` | What `atmos.location` and `atmos.appearance` give |
-| `wallpaper` | The wallpaper `atmos.wallpaper.get()` starts from (`{ mode, opacity, thumbnail }`), or `null` |
+| `wallpaper` | The wallpaper `atmos.wallpaper.get()` starts from (`{ thumbnail }`), or `null`. A `mode` (`'transparent'` too) or `opacity` given is taken and ignored, as Atmos does since SDK 1.7 |
 
 `atmos.fake` lets a test see and steer what happens:
 
@@ -1926,6 +1926,19 @@ Before sharing an extension:
     that check their arguments, shared only when they must be.
 
 ## 10. Compatibility
+
+**SDK 1.7 (Atmos 0.24).** Nothing added; an SDK 1.6 extension runs
+unchanged. The Atmos window is always opaque now: the see-through window
+(Settings → Appearance → Wallpaper's See-through mode, its opacity and the
+Transparent Window switch) is gone, on every platform.
+
+- `atmos.wallpaper.get()` and `onChange()`'s `mode` and `opacity` are
+  deprecated: still there, always `'wallpaper'` and `100`. An extension
+  that looked for `mode: 'transparent'` with `opacity: 0` to tell there was
+  no wallpaper reads `thumbnail: null` instead.
+- The test kit's fake (`createFakeAtmos({ wallpaper })`,
+  `fake.setWallpaper()`) still takes a `mode` of `'transparent'` and an
+  `opacity`, and reports what Atmos does.
 
 **SDK 1.4 (Atmos 0.21).** Only additions; an SDK 1.3 extension runs
 unchanged, but for one move: Location is an official service now

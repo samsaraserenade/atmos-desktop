@@ -456,7 +456,6 @@ export function openSidebar() {
   document.body.classList.add('drawer-open');
   sidebarState.open = true;
   save();
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
 export function closeSidebar() {
@@ -464,7 +463,6 @@ export function closeSidebar() {
   document.body.classList.remove('drawer-open');
   sidebarState.open = false;
   save();
-  window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
 export function toggleSidebar() {

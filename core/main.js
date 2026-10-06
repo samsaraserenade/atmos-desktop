@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage, utilityProcess, powerMonitor, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage, utilityProcess, powerMonitor, nativeTheme, safeStorage } = require('electron');
 const fs   = require('fs');
 const path = require('path');
 
@@ -29,7 +29,6 @@ const { createFrameAccess, createAtmosExtHandler } = require('./js/core/atmos-ex
 
 let _extensionPreferences = null;
 let _startupDisabled = { plugin: new Set(), service: new Set() };
-const _windowResizeSessions = new WeakMap();
 
 // A detached Windows launch can outlive the terminal that supplied stdout.
 // Do not turn a diagnostic write to that closed pipe into an app crash.
@@ -164,30 +163,13 @@ function _registerAtmosAppProtocol() {
 
 const DEFAULT_WINDOW_BOUNDS = { width: 1280, height: 800 };
 const WINDOW_STATE_FILENAME = 'window-state.json';
-const WINDOW_APPEARANCE_FILENAME = 'window-appearance.json';
-let _windowAppearance = { transparent: false };
-
-function _loadWindowAppearance() {
-  try {
-    const saved = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), WINDOW_APPEARANCE_FILENAME), 'utf8'));
-    return { transparent: saved?.transparent === true };
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.warn('[main] unable to restore window appearance:', error.message);
-    return { transparent: false };
-  }
-}
-
-function _saveWindowAppearance() {
-  try {
-    const target = path.join(app.getPath('userData'), WINDOW_APPEARANCE_FILENAME);
-    const temporary = `${target}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(_windowAppearance, null, 2));
-    fs.renameSync(temporary, target);
-  } catch (error) {
-    console.warn('[main] unable to save window appearance:', error.message);
-    throw error;
-  }
-}
+// The window is opaque, with the theme's workspace colour behind the page
+// (Atmos Dark's until the page says which theme it has). The see-through
+// window it could be until 0.24 is gone (DECISIONS "No see-through
+// window"); a window-appearance.json an older Atmos saved is ignored.
+const WINDOW_BACKGROUND = '#050506';
+// The window's icon: Windows reads the .ico; elsewhere Electron takes a PNG.
+const WINDOW_ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon-linux.png');
 
 function _loadWindowState() {
   try {
@@ -239,19 +221,20 @@ function createWindow() {
   console.log('[main] preload exists:', fs.existsSync(preloadPath));
 
   const windowState = _loadWindowState();
-  const transparentWindow = _windowAppearance.transparent === true;
 
   const win = new BrowserWindow({
     ...DEFAULT_WINDOW_BOUNDS,
     ...windowState.bounds,
     fullscreen: windowState.isFullScreen,
     frame: false,
-    transparent: transparentWindow,
-    backgroundColor: transparentWindow ? '#00000000' : '#050505',
+    // The page's own title, from the start: what a compositor's rules see
+    // as the window maps (linux/hyprland.conf, sway.conf).
+    title: 'ATMOS',
+    backgroundColor: WINDOW_BACKGROUND,
     resizable: true,
     roundedCorners: true,
     hasShadow: false,
-    icon: path.join(__dirname, 'assets/icon.ico'),
+    icon: WINDOW_ICON,
     webPreferences: {
       nodeIntegration:  false,
       contextIsolation: true,
@@ -265,7 +248,6 @@ function createWindow() {
       webviewTag:       true,
     }
   });
-  win.__atmosTransparentWindow = transparentWindow;
   _web.setWindow(win);
   // Its first paint is the page's boot splash, the same picture as the
   // startup splash above it: that one can go now.
@@ -404,24 +386,6 @@ _page.handle('task-view:capture-preview', async (event, requestedRect) => {
   }
 });
 
-_page.handle('window-effects:get', event => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  return {
-    active: win?.__atmosTransparentWindow === true,
-    configured: _windowAppearance.transparent === true,
-  };
-});
-
-_page.handle('window-effects:set-transparent', (event, enabled) => {
-  _windowAppearance = { transparent: enabled === true };
-  _saveWindowAppearance();
-  const win = BrowserWindow.fromWebContents(event.sender);
-  return {
-    active: win?.__atmosTransparentWindow === true,
-    configured: _windowAppearance.transparent,
-  };
-});
-
 _page.on('win-minimize', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.minimize();
 });
@@ -434,51 +398,6 @@ _page.on('win-maximize', (event) => {
 
 _page.on('win-close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
-});
-
-_page.on('set-window-click-through', (event, enabled) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (!win || win.isDestroyed()) return;
-  win.setIgnoreMouseEvents(enabled === true, enabled === true ? { forward: true } : undefined);
-});
-
-_page.on('window-resize:start', (event, direction, screenX, screenY) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (!win || win.isDestroyed() || win.isMaximized() || win.isFullScreen()) return;
-  if (!/^(n|s|e|w|ne|nw|se|sw)$/.test(direction)) return;
-  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
-  _windowResizeSessions.set(event.sender, {
-    direction,
-    screenX,
-    screenY,
-    bounds: win.getBounds(),
-  });
-});
-
-_page.on('window-resize:update', (event, screenX, screenY) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const session = _windowResizeSessions.get(event.sender);
-  if (!win || win.isDestroyed() || !session || !Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
-
-  const dx = Math.round(screenX - session.screenX);
-  const dy = Math.round(screenY - session.screenY);
-  const start = session.bounds;
-  const next = { ...start };
-  if (session.direction.includes('e')) next.width = Math.max(400, start.width + dx);
-  if (session.direction.includes('s')) next.height = Math.max(300, start.height + dy);
-  if (session.direction.includes('w')) {
-    next.width = Math.max(400, start.width - dx);
-    next.x = start.x + start.width - next.width;
-  }
-  if (session.direction.includes('n')) {
-    next.height = Math.max(300, start.height - dy);
-    next.y = start.y + start.height - next.height;
-  }
-  win.setBounds(next, false);
-});
-
-_page.on('window-resize:end', event => {
-  _windowResizeSessions.delete(event.sender);
 });
 
 // ── Extension discovery ──────────────────────────────────────────────────
@@ -713,6 +632,57 @@ function _updateTestFile() {
   return flag ? path.resolve(flag.slice('--update-test-install='.length)) : null;
 }
 
+/**
+ * Unpackaged, two more stand-ins for the end-to-end runs:
+ * --update-test-appimage=<file> is the AppImage an update replaces (a
+ * relaunch from it is written to the --update-test-install record instead),
+ * and --update-test-platform=<platform> is the platform whose installer
+ * the index is read for (win32, to see the NSIS path on Linux).
+ */
+function _updateTestFlag(name) {
+  if (app.isPackaged) return null;
+  const flag = process.argv.find(arg => arg.startsWith(`--${name}=`));
+  return flag ? flag.slice(name.length + 3) : null;
+}
+
+/**
+ * The AppImage this copy runs from, when it can replace it: the AppImage
+ * runtime names its file in APPIMAGE, and Atmos must be able to write
+ * both the file and its folder (an AppImage put in /opt by root is
+ * updated the way it was installed, not by Atmos).
+ */
+function _appImageFile() {
+  const file = process.env.APPIMAGE;
+  if (process.platform !== 'linux' || !app.isPackaged || !file || !path.isAbsolute(file)) return null;
+  try {
+    fs.accessSync(file, fs.constants.W_OK);
+    fs.accessSync(path.dirname(file), fs.constants.W_OK);
+    return fs.statSync(file).isFile() ? file : null;
+  } catch {
+    return null;
+  }
+}
+
+// In the Atmos session on Linux (linux/atmos-run sets ATMOS_SESSION=1) the
+// session starts Atmos again when it exits with this code; quitting with 0
+// ends the session.
+const SESSION_RESTART_CODE = 75;
+const _inSession = process.env.ATMOS_SESSION === '1';
+let _sessionRestart = false;
+
+/**
+ * Start Atmos again once it has quit (app.relaunch): from an AppImage, its
+ * file, not the mount the running copy sees as its program, which is gone
+ * once it exits; `from` names another file to start (an AppImage just put
+ * in place). In the Atmos session, left to the session: Atmos exits with
+ * SESSION_RESTART_CODE and atmos-run starts the AppImage again.
+ */
+function _relaunchAtmos(from = null) {
+  if (_inSession) { _sessionRestart = true; return; }
+  const appImage = from || (process.platform === 'linux' && app.isPackaged ? process.env.APPIMAGE : null);
+  app.relaunch(appImage ? { execPath: appImage, args: process.argv.slice(1) } : undefined);
+}
+
 // electron-builder's registry key for Atmos's install (Software\<APP_GUID>,
 // in HKCU for this user, HKLM for every user): UUID v5 of the appId
 // "com.hashy.atmosphere" in its namespace (atmos-update.test.cjs checks it).
@@ -741,12 +711,21 @@ function _installedForEveryUser(dir) {
 /**
  * How this copy of Atmos is installed, for updating itself: an NSIS
  * install on Windows (its uninstaller beside Atmos.exe), for this user or
- * for every user (asked only when it matters, then remembered). Null when
- * it can't update itself: running from source, the portable build,
- * another platform.
+ * for every user (asked only when it matters, then remembered); on Linux,
+ * an AppImage it can replace. Null when it can't update itself: running
+ * from source, the portable build, an AppImage it can't write, a folder
+ * build, macOS.
  */
 function _updateInstall() {
-  if (!app.isPackaged) return _updateTestFile() ? { perMachine: false } : null;
+  if (!app.isPackaged) {
+    const appImage = _updateTestFlag('update-test-appimage');
+    if (appImage) return { perMachine: false, appImage: path.resolve(appImage) };
+    return _updateTestFile() ? { perMachine: false } : null;
+  }
+  if (process.platform === 'linux') {
+    const appImage = _appImageFile();
+    return appImage ? { perMachine: false, appImage } : null;
+  }
   if (process.platform !== 'win32' || process.env.PORTABLE_EXECUTABLE_FILE) return null;
   const dir = path.dirname(process.execPath);
   let names = [];
@@ -783,6 +762,13 @@ const _updater = createAtmosUpdater({
   install: _updateInstall(),
   download: (url, file, options) => _sources.downloadToFile(url, file, options),
   spawnInstaller: _spawnInstaller,
+  // An AppImage replaced for "Restart to update": started again from its file.
+  relaunchFrom: file => {
+    const testFile = _updateTestFile();
+    if (testFile) fs.writeFileSync(testFile, JSON.stringify({ relaunchFrom: file, at: new Date().toISOString() }));
+    else _relaunchAtmos(file);
+  },
+  platform: _updateTestFlag('update-test-platform') || process.platform,
   onChange: () => { if (_started) _broadcastManager(); },
 });
 
@@ -946,6 +932,34 @@ function _describePackage(entry) {
 
 // ── Extension manager (Settings → Extensions, the footer icon) ───────────
 
+let _keyringWarned = false;
+/**
+ * Linux: Chromium keeps cookies, and safeStorage what extensions seal
+ * (Finance's connection, Matrix Chat's vault key), with a key from the
+ * desktop's keyring (gnome-keyring, KWallet). With none it can reach (none
+ * running or unlocked, or a desktop it doesn't know, such as Hyprland,
+ * started without --password-store) it falls back to a fixed key, which
+ * hides nothing: { backend } then, for Settings → Atmos to say so; null
+ * with a keyring, or elsewhere.
+ */
+function _keyringMissing() {
+  if (process.platform !== 'linux' || !app.isReady()) return null;
+  let backend;
+  try {
+    backend = safeStorage.getSelectedStorageBackend();
+    if (backend !== 'basic_text' && safeStorage.isEncryptionAvailable()) return null;
+  } catch {
+    return null;
+  }
+  // Chromium picks its store when it first needs one, so this is said the
+  // first time it's seen, not at startup.
+  if (!_keyringWarned) {
+    _keyringWarned = true;
+    console.warn(`[main] no keyring (Chromium's "${backend}" store): cookies and what extensions seal are kept under a fixed key; start Atmos with a keyring unlocked at login (--password-store=gnome-libsecret)`);
+  }
+  return { backend };
+}
+
 /** What the footer icon needs: approvals, updates, changes waiting for a restart, and problems. */
 function _managerSummary(status = _manager.status()) {
   const problems = [];
@@ -980,6 +994,7 @@ function _managerSummary(status = _manager.status()) {
     // Whether the last check heard from a source that names Atmos versions
     // (a folder of packages alone doesn't say whether Atmos is current).
     reached: !status.checkedAt || status.core?.seen === true,
+    keyringMissing: _keyringMissing(),
   };
 }
 
@@ -1006,7 +1021,7 @@ function _openStartupSplash() {
   _bootMessage = pickBootMessage(readBootMessages(path.join(__dirname, 'js', 'boot', 'splash.js')));
   _startupSplash = openStartupSplash({
     BrowserWindow, screen, state: _loadWindowState(), defaults: DEFAULT_WINDOW_BOUNDS,
-    imagePath: path.join(__dirname, 'assets', 'Rev2.png'), icon: path.join(__dirname, 'assets', 'icon.ico'),
+    imagePath: path.join(__dirname, 'assets', 'Rev2.png'), icon: WINDOW_ICON,
     line: _bootMessage?.text,
   });
 }
@@ -1551,10 +1566,10 @@ _page.handle('extensions:revoke', async (_event, kind, id) => {
 });
 
 _page.handle('extensions:restart', () => {
-  // Any restart Atmos makes itself (Restart to apply, the window effects'
-  // restart, the first start's Install and restart): an Atmos update that
-  // would install on quit goes in now instead, and the installer starts
-  // Atmos again; the extensions' changes apply then.
+  // Any restart Atmos makes itself (Restart to apply, the first start's
+  // Install and restart): an Atmos update that would install on quit goes
+  // in now instead, and the installer starts Atmos again; the extensions'
+  // changes apply then.
   if (_updater.wouldInstallOnQuit()) {
     try {
       _quitToInstall();
@@ -1567,7 +1582,7 @@ _page.handle('extensions:restart', () => {
   // handlers flush pending saves and the window state is written. Nothing
   // installs on the way out: the installer would close the new Atmos.
   _relaunching = true;
-  app.relaunch();
+  _relaunchAtmos();
   app.quit();
 });
 
@@ -1841,9 +1856,17 @@ function _reloadAtmos(win) {
 
 // Atmos's theme is light or dark everywhere: web pages (prefers-color-scheme),
 // extension frames and the system's own dialogs follow it, not Windows'
-// setting (appearance.js sends it whenever the theme changes).
-_page.on('appearance:color-scheme', (_event, scheme) => {
+// setting (appearance.js sends it whenever the theme changes). With it, the
+// theme's workspace colour ("r,g,b") becomes the window's own background,
+// what shows before the page paints and at its edges while it resizes.
+_page.on('appearance:color-scheme', (event, scheme, workspace) => {
   if (scheme === 'light' || scheme === 'dark') nativeTheme.themeSource = scheme;
+  const rgb = /^(\d{1,3}),(\d{1,3}),(\d{1,3})$/.exec(String(workspace ?? '').replace(/\s+/g, ''))?.slice(1).map(Number);
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!rgb || rgb.some(value => value > 255) || !win || win.isDestroyed()) return;
+  // Sent with every appearance change (a slider dragged): set only a new colour.
+  const colour = `#${rgb.map(value => value.toString(16).padStart(2, '0')).join('')}`;
+  if (win.getBackgroundColor().toLowerCase() !== colour) win.setBackgroundColor(colour);
 });
 
 _page.on('atmos:reload', event => {
@@ -2187,7 +2210,6 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   }
   _catalog.refresh(); // what was listed above (to plan installs) may have changed
   _extensionPreferences = createExtensionPreferences(path.join(app.getPath('userData'), 'extension-preferences.json'));
-  _windowAppearance = _loadWindowAppearance();
   _startupDisabled = {
     plugin: _extensionPreferences.disabledIds('plugin'),
     service: _extensionPreferences.disabledIds('service'),
@@ -2316,12 +2338,17 @@ app.on('will-quit', () => {
       console.log(`[update] installing Atmos ${_updater.state().version}; it starts again afterwards`);
     } catch (error) {
       console.warn('[update] not installed, starting again as before:', error.message);
-      app.relaunch();
+      _relaunchAtmos();
     }
     return;
   }
   if (_relaunching) return;
   if (_updater.installOnQuit()) console.log(`[update] installing Atmos ${_updater.state().version} as Atmos quits`);
+});
+
+// Atmos restarting itself in the Atmos session: the session starts it again.
+app.on('quit', () => {
+  if (_sessionRestart) app.exit(SESSION_RESTART_CODE);
 });
 
 app.on('activate', () => {
