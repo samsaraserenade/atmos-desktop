@@ -1,6 +1,6 @@
 // Atmos's command bar (core/js/core/command-bar.js) end to end, with a
 // developer-folder extension that adds commands (SDK 1.3):
-//   - in a panel (the default): Ctrl+\ lays Atmos's bar along the bottom of
+//   - in a panel (the default): Alt+\ lays Atmos's bar along the bottom of
 //     the panel you're in (a panel with no bar of its own), or over the bar
 //     a panel declares (atmos.commands.bar); the list as wide as the panel;
 //   - Atmos's commands (switch, settings <page>, extensions, sidebar), a
@@ -11,9 +11,9 @@
 //     (a toggle, chips, a text field), a danger row, a next step it fills
 //     in, an error, Atmos's own names refused, rev/ typed into its field
 //     handing over to the bar (atmos.commands.open);
-//   - Ctrl+\ inside an extension's frame;
+//   - Alt+\ inside an extension's frame;
 //   - in the sidebar (Appearance → Command Bar): the footer row as the field.
-// Ctrl+\ in a web page is in browser.cjs.
+// Alt+\ in a web page is in browser.cjs.
 // Usage: node scripts/e2e/command-bar.cjs [outDir]   (see scripts/e2e/README.md)
 const { _electron: electron } = require('playwright-core');
 const fs = require('fs'), path = require('path');
@@ -197,16 +197,16 @@ const check = (name, ok, detail) => {
 
     // ── In a panel with no bar of its own (Atmos Browser) ────────────────
     const browser = await panelBox('plugin:browser');
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     let now = await state();
-    check('Ctrl+\\ opens Atmos\'s bar along the bottom of the panel, with the keyboard, the sidebar left closed',
+    check('Alt+\\ opens Atmos\'s bar along the bottom of the panel, with the keyboard, the sidebar left closed',
       now.where === 'own bar' && now.focused && !now.sidebar, now);
     check('…54 px, as wide as the panel, on its bottom edge',
       now.field && browser && now.field.height === 54 && Math.abs(now.field.width - browser.width) <= 1 && Math.abs(now.field.bottom - browser.bottom) <= 1 && Math.abs(now.field.left - browser.left) <= 1, { field: now.field, browser });
     check('the list rises from it, as wide', now.list && Math.abs(now.list.bottom - now.field.top) <= 1 && now.list.width === now.field.width, { list: now.list, field: now.field });
     const headings = await page.evaluate(() => [...document.querySelectorAll('#command-bar-list .command-bar-heading')].map(item => item.textContent.trim()));
     check('every command, under its extension\'s name: the browser\'s first (the panel it\'s for), then Atmos\'s, then the rest by name',
-      JSON.stringify(now.rows.slice(0, 9)) === JSON.stringify(['Atmos Browser', 'rev/new-tab', 'rev/tab', 'rev/close-tab', 'Atmos', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch'])
+      JSON.stringify(now.rows.slice(0, 12)) === JSON.stringify(['Atmos Browser', 'rev/new-tab', 'rev/tab', 'rev/close-tab', 'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload'])
       && JSON.stringify(headings) === JSON.stringify(['Atmos Browser', 'Atmos', 'Audio Player', 'Command Probe · community', 'Finance', 'Matrix Chat'])
       && now.rows.includes('rev/roll') && now.rows.includes('rev/chart') && now.rows.includes('rev/go') && now.sources.every(source => source === ''), { rows: now.rows, headings, sources: now.sources });
     await page.screenshot({ path: path.join(out, '01-own-bar.png') });
@@ -228,21 +228,21 @@ const check = (name, ok, detail) => {
 
     // Shift+Enter: and go there. Alt+Enter: stay here, whatever the command asks.
     const panelNow = () => page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).getActivePanelPluginId());
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/look');
     const foot = await page.evaluate(() => document.querySelector('#command-bar-list .command-bar-foot')?.textContent.trim());
     await page.keyboard.press('Alt+Enter');
     await wait(800);
     const stayed = { panel: await panelNow(), flash: (await state()).flash };
     await wait(3600);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/look');
     await press('Enter');
     await wait(800);
     const looked = { panel: await panelNow(), flash: (await state()).flash };
     await page.evaluate(async () => (await import('atmos-core/core/panel-registry.js')).activatePanelPlugin('browser'));
     await wait(3600);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/roll 3');
     await page.keyboard.press('Shift+Enter');
     await wait(800);
@@ -255,7 +255,7 @@ const check = (name, ok, detail) => {
     await wait(3600);
 
     // Atmos's own: a panel by name, settings pages, Tab, Esc, the mouse.
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/switch/');
     now = await state();
     check('rev/switch/ lists the panels', ['Browser', 'Finance', 'Music', 'Chat', 'Probe'].every(label => now.rows.includes(label)), now.rows);
@@ -266,7 +266,7 @@ const check = (name, ok, detail) => {
     await press('Enter');
     now = await state();
     check('a panel by name: Enter switches to it and the bar closes', now.panel === 'portfolio-tracker' && !now.open, now);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/settings/appearance');
     await press('Enter');
     await wait(500);
@@ -274,7 +274,7 @@ const check = (name, ok, detail) => {
     check('rev/settings/appearance opens Settings on it', now.settings && now.settingsPage === 'Appearance', now);
     await closeSettings();
     await wait(300);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('ext');
     await press('Tab');
     now = await state();
@@ -283,37 +283,37 @@ const check = (name, ok, detail) => {
     await wait(500);
     now = await state();
     check('rev/extensions opens Settings on Extensions', now.settings && now.settingsPage === 'Extensions', now);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await wait(300);
     now = await state();
-    check('Ctrl+\\ over Settings closes it and opens the bar', !now.settings && now.open && now.focused, now);
-    await press('Control+Backslash');
+    check('Alt+\\ over Settings closes it and opens the bar', !now.settings && now.open && now.focused, now);
+    await press('Alt+Backslash');
     now = await state();
-    check('Ctrl+\\ again closes it', !now.open, now);
-    await press('Control+Backslash');
+    check('Alt+\\ again closes it', !now.open, now);
+    await press('Alt+Backslash');
     await type('rev/sidebar');
     await press('Enter');
     now = await state();
     check('rev/sidebar opens the sidebar', now.sidebar && !now.open, now);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('sidebar');
     await press('Enter');
     now = await state();
     check('…and closes it', !now.sidebar && !now.open, now);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('a b');
     now = await state();
     check('typing in the bar is only typing (Tab, Space reach no shortcut)', now.open && !now.sidebar && now.value === 'a b', now);
     await press('Escape'); await press('Escape');
 
-    // Ctrl+\ inside an extension's frame (Finance's panel).
+    // Alt+\ inside an extension's frame (Finance's panel).
     const finance = await panelBox('plugin:finance');
     if (finance) await page.mouse.click(finance.left + finance.width / 2, finance.top + 120);
     await wait(400);
     const inFrame = await page.evaluate(() => document.activeElement?.tagName);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     now = await state();
-    check('Ctrl+\\ inside an extension\'s frame opens the bar over that panel', inFrame === 'IFRAME' && now.open && now.focused && now.field && finance && Math.abs(now.field.bottom - finance.bottom) <= 1, { inFrame, now, finance });
+    check('Alt+\\ inside an extension\'s frame opens the bar over that panel', inFrame === 'IFRAME' && now.open && now.focused && now.field && finance && Math.abs(now.field.bottom - finance.bottom) <= 1, { inFrame, now, finance });
     await press('Escape');
     now = await state();
     check('Esc gives the frame its keyboard back', !now.open && now.activeTag === 'IFRAME', now);
@@ -330,11 +330,11 @@ const check = (name, ok, detail) => {
     const glass = await page.evaluate(() => [...document.querySelectorAll('.atmos-frame-glass[data-material="shell"]')].map(piece => Math.round(piece.getBoundingClientRect().height)));
     check('the SDK\'s standard bar (ui.css .atmos-bar): 54 px, a hairline on top, Atmos\'s shell glass under it',
       standard?.height === 54 && /inset/.test(standard.shadow) && standard.padding === '0px 18px 0px 14px' && glass.includes(54), { standard, glass });
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     now = await state();
     check('over a panel that has a bar, Atmos\'s bar lies on it', now.where === 'panel bar' && probeBox && Math.abs(now.field.bottom - probeBox.bottom) <= 1 && now.field.height === 54, { now, probeBox });
     check('its commands come first while it shows, under its name, then Atmos\'s; never Atmos\'s names from it',
-      JSON.stringify(now.rows.slice(0, 12)) === JSON.stringify(['Command Probe · community', 'rev/roll', 'rev/pick', 'rev/wipe', 'rev/step', 'rev/boom', 'rev/look', 'Atmos', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch'])
+      JSON.stringify(now.rows.slice(0, 15)) === JSON.stringify(['Command Probe · community', 'rev/roll', 'rev/pick', 'rev/wipe', 'rev/step', 'rev/boom', 'rev/look', 'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload'])
       && now.rows.filter(row => row === 'rev/switch').length === 1, now);
     await page.screenshot({ path: path.join(out, '03-panel-bar.png') });
     await type('rev/roll 3');
@@ -343,7 +343,7 @@ const check = (name, ok, detail) => {
     check('with its panel showing, the panel runs it', now.flash === 'Rolled 3 (panel)', now.flash);
 
     // What it lists, and its options.
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/pick ');
     now = await until(async () => { const value = await state(); return value.rows.includes('Apple') ? value : null; }) || await state();
     check('a command that lists: its rows and options', JSON.stringify(now.rows) === JSON.stringify(['Fruit', 'Apple', 'Apricot', 'Banana', 'Cherry'])
@@ -380,7 +380,7 @@ const check = (name, ok, detail) => {
     await page.screenshot({ path: path.join(out, '05-picked.png') });
 
     // A danger row, a next step, an error.
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/wipe');
     // Enter twice at once: the first gives it a space, the second comes before its row shows.
     await page.keyboard.press('Enter');
@@ -396,7 +396,7 @@ const check = (name, ok, detail) => {
     await press('Enter');
     now = await state();
     check('…which does it', !now.open && now.flash === 'Wiped', now);
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     await type('rev/step');
     await press('Enter');
     now = await until(async () => { const value = await state(); return value.chips.includes('large*') ? value : null; }) || await state();
@@ -466,7 +466,7 @@ const check = (name, ok, detail) => {
 
     // ── In the sidebar (Appearance → Command Bar) ──────────────────────────
     await page.evaluate(async () => (await import('atmos-core/core/appearance.js')).setCommandBarPlace('sidebar'));
-    await press('Control+Backslash');
+    await press('Alt+Backslash');
     now = await state();
     check('in the sidebar: the footer row is the field, the sidebar opens with it', now.where === 'footer' && now.focused && now.sidebar, now);
     const listOk = now.list && now.footer && Math.abs(now.list.bottom - now.footer.top) <= 1 && now.list.width >= Math.max(now.footer.width, 380) - 1;

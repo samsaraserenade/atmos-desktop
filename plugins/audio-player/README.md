@@ -62,10 +62,11 @@ display keys. The library lives in IndexedDB in Audio Player's own origin
 (`"isolation": "origin"`), written by the engine and read by the views.
 
 **Space** plays and pauses from anywhere in Atmos (the boot contribution
-declares `"keys": ["Space"]`), except in a text field or in a panel that
-uses Space itself.
+declares `"keys": ["Space"]`), except in a text field or on a button, or in
+a panel whose own code takes Space; in any other panel it's Music's, and the
+panel doesn't also scroll (since Atmos 0.22).
 
-**rev/ commands** in Atmos's command bar (Ctrl+\\, SDK 1.3), declared in
+**rev/ commands** in Atmos's command bar (Alt+\\, SDK 1.3), declared in
 `extension.json` and answered by the engine (`src/commands.js`), so they
 work whichever panel is showing: `rev/play` (play or pause; `rev/play
 <name>` plays that song or album), `rev/next`, `rev/previous`, `rev/song`

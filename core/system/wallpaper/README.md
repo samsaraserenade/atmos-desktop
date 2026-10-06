@@ -2,7 +2,7 @@
 
 System service that paints what sits behind everything in Atmos: the
 wallpaper image and its effects, desktop blending and click-through, the
-controls on Settings → Appearance, clipboard paste (Ctrl+Shift+V) and
+controls on Settings → Appearance, a copied image pasted with `rev/wallpaper paste` and
 temporary visual overrides. See-through mode supports an adjustable 0–100%
 wallpaper opacity while leaving Atmos UI and extension surfaces interactive.
 Native transparency, rounded clipping and custom resize edges are opt-in and

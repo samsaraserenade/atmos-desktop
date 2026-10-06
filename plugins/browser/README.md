@@ -208,7 +208,7 @@ never fire while you type in a page):
 | Ctrl+T / Ctrl+Shift+T | New tab / reopen the last closed tab |
 | Ctrl+Shift+N | New private tab |
 | Ctrl+W, Ctrl+F4 | Close the tab |
-| Ctrl+Tab, Ctrl+PageDown / Ctrl+Shift+Tab, Ctrl+PageUp | Next / previous tab (in the strip's order; outside the browser, Ctrl+Tab is still Atmos's Task View) |
+| Ctrl+Tab, Ctrl+PageDown / Ctrl+Shift+Tab, Ctrl+PageUp | Next / previous tab (in the strip's order; Atmos's switcher is Alt+\`, so Ctrl+Tab is only ever the browser's) |
 | Ctrl+1…8, Ctrl+9 | That tab, the last tab |
 | Ctrl+R, F5 / Ctrl+Shift+R, Shift+F5 | Reload / reload without the cache |
 | Alt+← / Alt+→ | Back / forward |
@@ -224,7 +224,7 @@ searches.
 
 ## Commands
 
-In Atmos's command bar (Ctrl+\, from any panel), answered by the engine
+In Atmos's command bar (Alt+\, from any panel), answered by the engine
 in the background frame (`src/commands.js`):
 
 | Command | |

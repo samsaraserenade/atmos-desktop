@@ -9,6 +9,7 @@
  */
 
 import { listContextMenuItems } from './context-menu-registry.js';
+import { onEscape } from './shortcuts.js';
 
 const menu = document.getElementById('ctx-menu');
 const extensionItems = document.getElementById('ctx-extension-items');
@@ -307,8 +308,11 @@ document.addEventListener('contextmenu', event => {
   openContextMenu(event.clientX, event.clientY);
 });
 
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') closeContextMenu();
+// Escape closes a menu first, whatever is under it (shortcuts.js's stack).
+onEscape({
+  priority: 100,
+  isOpen: () => !!_openMenu || menu?.classList.contains('visible') === true,
+  close: () => { if (_openMenu) _openMenu.close(); else closeContextMenu(); },
 });
 
 document.querySelectorAll('.ctx-panel').forEach(panel => {
@@ -370,19 +374,16 @@ export function openMenu(x, y, items, opts = {}) {
     if (_openMenu?.element !== el) return;
     el.remove();
     document.removeEventListener('pointerdown', onOutside, true);
-    document.removeEventListener('keydown', onKeydown, true);
     _openMenu = null;
     window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
     opts.onClose?.();
   }
   function onOutside(event) { if (!el.contains(event.target)) close(); }
-  function onKeydown(event) { if (event.key === 'Escape') close(); }
   // pointerdown (capture), not click: fires before whatever's under the
   // pointer reacts to its own click/contextmenu, so opening a second menu
   // (or clicking through to something else) doesn't fight this one for
   // ordering — same contract the plugins this replaces already relied on.
   document.addEventListener('pointerdown', onOutside, true);
-  document.addEventListener('keydown', onKeydown, true);
 
   _openMenu = { element: el, close, owner: opts.owner ?? null };
   return { element: el, close };

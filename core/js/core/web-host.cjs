@@ -869,6 +869,11 @@ function createWebHost({ app, session, net, BrowserWindow, WebContentsView, nati
         commands.exitFullscreen(contents);
         return;
       }
+      // Alt coming up in a page: Atmos's switcher, held from it, switches.
+      // (Where Electron reports a page's key releases: under X it doesn't, and
+      // the switcher has moved the keyboard to Atmos's page by the time a
+      // person lets go.)
+      if (input.type === 'keyUp' && input.key === 'Alt') send(guestId, 'command', { command: 'alt-up' });
       const command = policy.shortcutFor(input);
       if (!command) {
         // Keys reach this for every frame of the page.

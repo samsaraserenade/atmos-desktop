@@ -159,7 +159,7 @@ The generated attachment bundle is consumed from `vendor/`; its source entry is 
   `rev/dm`, `rev/create-room`, `rev/create-space`, `rev/invite`,
   `rev/leave`, `rev/notifications` (the ping sound, on or off), declared in
   `extension.json` (`contributes.commands`) and answered in the background
-  frame by `ui/command-handlers.js`, so they work from any panel (Ctrl+\\)
+  frame by `ui/command-handlers.js`, so they work from any panel (Alt+\\)
   with the Chat panel closed. In the Chat panel the bar opens over the
   message bar (`atmos.commands.bar`), and typing `rev/` there hands what's
   typed to it (`atmos.commands.field`, keys typed fast following it); `@`

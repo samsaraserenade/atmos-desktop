@@ -18,9 +18,18 @@ export const PREFIX = 'rev/';
 /** Atmos's own commands, in the order the bar lists them. */
 export const CORE_COMMANDS = Object.freeze([
   { name: 'sidebar', about: 'Open or close the sidebar' },
+  { name: 'sidebar-side', about: 'Move the sidebar to the other side' },
   { name: 'settings', args: 'page', about: 'Open Settings, or one of its pages', optionalArgs: true },
   { name: 'extensions', about: 'Install, update and remove extensions' },
   { name: 'switch', args: 'panel', about: 'Show another panel', takesArgs: true },
+  { name: 'wallpaper', args: 'paste', about: 'Paste the copied image as the wallpaper, or choose one', optionalArgs: true },
+  { name: 'reload', about: 'Reload Atmos' },
+].map(Object.freeze));
+
+/** What `rev/wallpaper <what>` does. */
+export const WALLPAPER_ACTIONS = Object.freeze([
+  { id: 'paste', label: 'Paste', about: 'Use the image you copied' },
+  { id: 'choose', label: 'Choose', about: 'Pick an image file' },
 ].map(Object.freeze));
 
 /** Settings' pages, as `rev/settings <page>` names them. */
@@ -260,6 +269,13 @@ export function suggest(text, { panels = [], activePanel = null, pages = SETTING
     const found = matchTargets(args, pages).map(pageRow);
     if (!args) found.unshift({ title: 'Settings', sub: 'Where you left it', action: 'Open', enter: runs('settings'), tab: completes(`${PREFIX}settings `) });
     return result(found.length ? found : [{ note: `Settings has no page called “${args}”.` }]);
+  }
+  if (command.name === 'wallpaper') {
+    const found = matchTargets(args, WALLPAPER_ACTIONS).map(action => ({
+      title: `${PREFIX}wallpaper ${action.id}`, sub: action.about, action: action.label,
+      enter: runs('wallpaper', action.id), tab: completes(`${PREFIX}wallpaper ${action.id}`),
+    }));
+    return result(found.length ? found : [{ note: `${PREFIX}wallpaper takes paste or choose.` }]);
   }
   return result([{ title: `${PREFIX}${command.name}`, sub: command.about, action: 'Run', enter: runs(command.name), tab: completes(`${PREFIX}${command.name}`) }]);
 }

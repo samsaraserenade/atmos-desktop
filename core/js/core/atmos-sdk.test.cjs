@@ -20,6 +20,7 @@ function fakeFrameGlobals() {
     parent,
     addEventListener: (...args) => windowTarget.addEventListener(...args),
     removeEventListener: (...args) => windowTarget.removeEventListener(...args),
+    dispatchEvent: event => windowTarget.dispatchEvent(event),
     dispatch: (type, detail) => {
       const event = new Event(type);
       Object.assign(event, detail);
@@ -32,7 +33,7 @@ function fakeFrameGlobals() {
 }
 
 /** Load a fresh copy of the SDK, connect it, and give back Core's end of the port. */
-async function connectedSdk(t, { extension = { id: 'hello', kind: 'plugin', tier: 'third-party', version: '1.0.0' }, surface = { type: 'boot' } } = {}) {
+async function connectedSdk(t, { extension = { id: 'hello', kind: 'plugin', tier: 'third-party', version: '1.0.0' }, surface = { type: 'boot' }, keys = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atmos-sdk-'));
   fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
   fs.copyFileSync(SDK, path.join(dir, 'atmos-sdk.js'));
@@ -54,7 +55,7 @@ async function connectedSdk(t, { extension = { id: 'hello', kind: 'plugin', tier
   const connected = sdk.__connect();
   env.window.dispatch('message', {
     source: env.parent,
-    data: { type: 'atmos:connect', init: { sdkVersion: '1.0.0', extension, surface, appearance: null, shortcutKeys: [] } },
+    data: { type: 'atmos:connect', init: { sdkVersion: '1.0.0', extension, surface, appearance: null, atmosKeys: [], globalKeys: [], ...keys } },
     ports: [channel.port2],
   });
   await connected;
@@ -421,4 +422,48 @@ test('commands: a handler Core refuses (not declared) is dropped and says why', 
   assert.match(errors.join('\n'), /cannot handle rev\/nope: rev\/nope isn't a command/);
   core.postMessage({ command: 1, action: 'run', name: 'nope', input: {} });
   assert.ok((await next(message => message.commandReply === 1)).error, 'dropped');
+});
+
+test('keys: Atmos\'s are taken before the extension sees them, even typing; a declared global key is Atmos\'s, never both', async t => {
+  const keymap = await import('./keymap.mjs');
+  const { next, env } = await connectedSdk(t, {
+    surface: { type: 'panel' },
+    keys: { atmosKeys: keymap.atmosKeysForFrames(), globalKeys: ['Space'] },
+  });
+  const seen = [];
+  // The extension's own listener (its code loads after the SDK connected).
+  env.window.addEventListener('keydown', event => seen.push(event.key));
+  const press = (init, type = 'keydown') => {
+    const event = new Event(type, { cancelable: true });
+    Object.assign(event, { key: '', code: '', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, isComposing: false, ...init });
+    env.window.dispatchEvent(event);
+    return event;
+  };
+  const switcher = press({ key: '`', code: 'Backquote', altKey: true });
+  assert.ok(switcher.defaultPrevented, 'it types nothing');
+  assert.deepEqual(seen, [], 'the extension never saw it');
+  assert.deepEqual((await next(message => message.method === 'ui.key')).args[0], {
+    key: '`', code: 'Backquote', ctrlKey: false, shiftKey: false, altKey: true, metaKey: false,
+  });
+  press({ key: '¬', code: 'Backquote', ctrlKey: true, shiftKey: true });
+  assert.equal((await next(message => message.method === 'ui.key')).args[0].shiftKey, true, 'Ctrl+Shift+` (the sidebar)');
+  press({ key: 'Alt', code: 'AltLeft' }, 'keyup');
+  await next(message => message.method === 'ui.altup');
+
+  // Space, declared by a background frame: Atmos's, and the frame doesn't
+  // also scroll.
+  const space = press({ key: ' ', code: 'Space' });
+  assert.ok(space.defaultPrevented);
+  assert.equal((await next(message => message.method === 'ui.key')).args[0].code, 'Space');
+  // A key the extension took itself stays its own.
+  const own = new Event('keydown', { cancelable: true });
+  Object.assign(own, { key: ' ', code: 'Space', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false });
+  own.preventDefault();
+  env.window.dispatchEvent(own);
+  // Tab is never Atmos's now.
+  const tab = press({ key: 'Tab', code: 'Tab' });
+  assert.equal(tab.defaultPrevented, false);
+  // Ctrl+R goes on (main.js reloads the frame); the next message is it, not Space or Tab.
+  press({ key: 'r', code: 'KeyR', ctrlKey: true });
+  assert.equal((await next(message => message.method === 'ui.key')).args[0].key, 'r');
 });

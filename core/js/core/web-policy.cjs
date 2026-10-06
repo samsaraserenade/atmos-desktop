@@ -36,6 +36,10 @@
  *                 a page isn't on
  */
 
+// The shortcuts' table (an ES module; Node and Electron's main process
+// require one without top-level await).
+const keymap = require('./keymap.mjs');
+
 // Ordinary tabs: cookies, storage and cache kept on disk (Partitions/atmos-browser).
 const PARTITION = 'persist:atmos-browser';
 // Private tabs: in memory only, shared by the private tabs open at a time
@@ -455,45 +459,16 @@ function openableDownload(name) {
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
 /**
- * The browser's own shortcuts, taken before a page sees them (Electron's
- * before-input-event): a command name, or null for keys that belong to the
- * page. Atmos's single-key shortcuts are never taken from a page.
+ * Atmos's and the browser's own shortcuts, taken before a page sees them
+ * (Electron's before-input-event): a command name ('switcher', 'command-bar',
+ * 'settings', 'sidebar', or one of the browser's), or null for keys that
+ * belong to the page. The table is keymap.mjs, shared with Atmos's page, the
+ * SDK and Settings. Single keys are never taken from a page.
  */
 function shortcutFor(input) {
   if (!input || input.type !== 'keyDown') return null;
-  const ctrl = !!(input.control || input.meta);
-  const key = String(input.key || '');
-  const lower = key.toLowerCase();
-  if (ctrl && !input.alt) {
-    // Atmos's command bar (command-bar.js), from a page as from anywhere.
-    if (key === '\\' || key === '|' || input.code === 'IntlBackslash') return 'command-bar';
-    if (lower === 'l') return 'focus-address';
-    if (lower === 't') return input.shift ? 'reopen-tab' : 'new-tab';
-    if (lower === 'n' && input.shift) return 'new-private-tab';
-    if (lower === 'w' || key === 'F4') return 'close-tab';
-    if (key === 'Tab') return input.shift ? 'previous-tab' : 'next-tab';
-    if (key === 'PageDown') return 'next-tab';
-    if (key === 'PageUp') return 'previous-tab';
-    if (/^[1-8]$/.test(key)) return `tab-${key}`;
-    if (key === '9') return 'last-tab';
-    if (lower === 'r') return input.shift ? 'hard-reload' : 'reload';
-    if (lower === 'f') return 'find';
-    if (lower === 'd' && !input.shift) return 'bookmark';
-    if (lower === 'h' && !input.shift) return 'history';
-    if (lower === 'j' && !input.shift) return 'downloads';
-    if (key === '+' || key === '=') return 'zoom-in';
-    if (key === '-' || key === '_') return 'zoom-out';
-    if (key === '0') return 'zoom-reset';
-    if (lower === 'p' && !input.shift) return 'print';
-  }
-  // Atmos's sidebar (sidebar-shell.js), from a page as from anywhere: Alt
-  // and the key left of 1, whatever it types.
-  if (input.alt && !ctrl && !input.shift && (input.code === 'Backquote' || key === '`')) return 'sidebar';
-  if (!ctrl && !input.alt && key === 'F5') return input.shift ? 'hard-reload' : 'reload';
-  if (!ctrl && !input.alt && !input.shift && key === 'F6') return 'focus-address';
-  if (input.alt && !ctrl && !input.shift && key === 'ArrowLeft') return 'back';
-  if (input.alt && !ctrl && !input.shift && key === 'ArrowRight') return 'forward';
-  return null;
+  const item = keymap.bindingFor(input);
+  return item ? keymap.commandOf(item) : null;
 }
 
 /**

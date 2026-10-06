@@ -266,7 +266,7 @@ const r = {};
   await s.page.waitForTimeout(500);
   r.afterSecondSpace = (await channelState(s.page)).playing;
 
-  // rev/ commands in Atmos's command bar (Ctrl+\), from another panel:
+  // rev/ commands in Atmos's command bar (Alt+\), from another panel:
   // Audio Player's boot frame answers them.
   const bar = () => s.page.evaluate(() => ({
     rows: [...document.querySelectorAll('#command-bar-list .command-bar-item')].map(item => `${item.querySelector('.command-bar-item-title')?.firstChild?.textContent.trim()}${item.querySelector('.command-bar-item-source')?.textContent.trim() ? ` (${item.querySelector('.command-bar-item-source').textContent.trim()})` : ''}`),
@@ -274,7 +274,7 @@ const r = {};
     open: !!document.getElementById('command-bar-field')?.isConnected,
   }));
   const command = async text => {
-    await s.page.keyboard.press('Control+Backslash');
+    await s.page.keyboard.press('Alt+Backslash');
     await s.page.waitForTimeout(300);
     await s.page.keyboard.type(text, { delay: 25 });
     await s.page.waitForTimeout(600);
@@ -312,7 +312,7 @@ const r = {};
   const timeAt = await panel2?.evaluate(() => { const rect = document.getElementById('mp-cur-fs').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; });
   if (musicFrame && timeAt) await s.page.mouse.click(musicFrame.x + timeAt.x, musicFrame.y + timeAt.y);
   await s.page.waitForTimeout(300);
-  await s.page.keyboard.press('Control+Backslash');
+  await s.page.keyboard.press('Alt+Backslash');
   await s.page.waitForTimeout(500);
   const overMusic = await s.page.evaluate(() => {
     const field = document.getElementById('command-bar-field');

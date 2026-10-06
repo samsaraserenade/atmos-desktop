@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage, utilityProcess, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, screen, protocol, session, Notification, net, webContents, WebContentsView, nativeImage, utilityProcess, powerMonitor, nativeTheme } = require('electron');
 const fs   = require('fs');
 const path = require('path');
 
@@ -315,11 +315,16 @@ function createWindow() {
         ? win.webContents.closeDevTools()
         : win.webContents.openDevTools({ mode: 'detach' });
     }
-    // Ctrl+R reloads Atmos, except in Atmos Browser's panel, where it reloads the tab.
-    // The browser's pages close first, as Chrome closes a tab (web-host.cjs closePages).
-    if (input.key === 'r' && input.control && input.type === 'keyDown' && !_isWebExtensionFrame(win.webContents.focusedFrame)) {
+    // Ctrl+R reloads what has the keyboard: an extension's frame (its
+    // panel, widget or settings page) by itself; Atmos Browser's panel
+    // reloads its tab (the browser takes the key); Atmos's own page, all of
+    // Atmos (as rev/reload does).
+    if (input.key === 'r' && input.control && !input.alt && !input.meta && input.type === 'keyDown') {
+      const frame = _topFrameOf(win.webContents.focusedFrame, win.webContents.mainFrame);
+      if (frame && _isWebExtensionFrame(frame)) return;
       event.preventDefault();
-      void _web.closePages().finally(() => { if (!win.isDestroyed()) win.webContents.reload(); });
+      if (frame && frame.origin?.startsWith('atmos-ext://')) frame.reload();
+      else if (!frame) _reloadAtmos(win);
     }
   });
 
@@ -1815,6 +1820,37 @@ function _isWebExtension(ref) {
 }
 
 /** Whether a frame of the Atmos window is one of a web extension's (its panel, say). */
+/**
+ * The frame directly inside the Atmos page that `frame` is in (an
+ * extension's frame, whatever frame of its own has the keyboard), or null
+ * when it's the Atmos page itself.
+ */
+function _topFrameOf(frame, mainFrame) {
+  // Frames are compared by their node in the frame tree (Electron may hand
+  // out a new WebFrameMain object for the same frame).
+  const same = (a, b) => !!a && !!b && a.frameTreeNodeId === b.frameTreeNodeId;
+  let current = frame;
+  while (current?.parent && !same(current.parent, mainFrame)) current = current.parent;
+  return current && !same(current, mainFrame) && same(current.parent, mainFrame) ? current : null;
+}
+
+/** Atmos's page again, the browser's pages closing first, as Chrome closes a tab (web-host.cjs closePages). */
+function _reloadAtmos(win) {
+  void _web.closePages().finally(() => { if (!win.isDestroyed()) win.webContents.reload(); });
+}
+
+// Atmos's theme is light or dark everywhere: web pages (prefers-color-scheme),
+// extension frames and the system's own dialogs follow it, not Windows'
+// setting (appearance.js sends it whenever the theme changes).
+_page.on('appearance:color-scheme', (_event, scheme) => {
+  if (scheme === 'light' || scheme === 'dark') nativeTheme.themeSource = scheme;
+});
+
+_page.on('atmos:reload', event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) _reloadAtmos(win);
+});
+
 function _isWebExtensionFrame(frame) {
   const origin = frame?.origin;
   if (!origin || !origin.startsWith('atmos-ext://')) return false;

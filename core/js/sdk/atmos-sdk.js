@@ -32,7 +32,7 @@
  * The SDK itself is MIT-licensed (LICENSE beside this file).
  */
 
-export const SDK_VERSION = '1.4.0';
+export const SDK_VERSION = '1.5.0';
 
 let port = null;
 let nextId = 1;
@@ -268,30 +268,51 @@ function watchSize(type) {
   report();
 }
 
+/** Whether a key event is one of Atmos's (init.atmosKeys: keymap.mjs's match rules). */
+function isAtmosKey(event) {
+  const ctrl = event.ctrlKey || event.metaKey;
+  return (init?.atmosKeys || []).some(m => ctrl === !!m.ctrl && event.altKey === !!m.alt
+    && (m.shift === undefined || event.shiftKey === m.shift)
+    && ((m.codes || []).includes(event.code)
+      || (m.keys || []).some(k => k === event.key || (k.length === 1 && k === String(event.key).toLowerCase()))));
+}
+
+const sendKey = event => notify('ui.key', {
+  key: event.key, code: event.code,
+  ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey,
+});
+
 function forwardKeys() {
-  // Keys pressed inside a frame never reach Atmos's own shortcuts; pass on
-  // the ones that aren't typing. Listening on window runs after the
-  // extension's own document listeners, so a key it handled
-  // (preventDefault) stays its own.
+  // Atmos's own keys (Alt+` the switcher, Alt+\ the command bar, Ctrl+`
+  // Settings, Ctrl+Shift+` the sidebar) are taken first, before anything of
+  // the extension's sees them (this runs before its code loads, and the
+  // window's capture phase comes first), even while typing: an extension
+  // can't take them, and none of them types anything.
+  window.addEventListener('keydown', event => {
+    if (event.isComposing || !isAtmosKey(event)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    sendKey(event);
+  }, true);
+  // Alt coming up, for a switcher held from here (Atmos took the keyboard at
+  // Alt+`, but a quick tap can come up before it did).
+  window.addEventListener('keyup', event => { if (event.key === 'Alt') notify('ui.altup'); }, true);
+  // The rest that aren't typing go on to Atmos, after the extension: listening
+  // on window (bubbling) runs after its own document listeners, so a key it
+  // handled (preventDefault) stays its own.
   window.addEventListener('keydown', event => {
     if (event.defaultPrevented) return;
     const typing = event.target?.closest?.('input, textarea, select, [contenteditable]');
     const control = event.target?.closest?.('button, a[href], [role="button"], summary');
     const shortcut = event.ctrlKey || event.metaKey || event.altKey || /^F\d+$/.test(event.key);
-    // Space outside fields and buttons can be a global key (Audio Player's play/pause).
-    const space = event.code === 'Space' && !typing && !control;
-    // Atmos's single-key shortcut (Tab for the sidebar), outside fields and
-    // buttons, where Tab moves focus.
-    const atmosKey = !typing && !control && (init?.shortcutKeys || []).includes(event.key);
-    // Alt+` (the sidebar) is Atmos's even while typing, and an Alt key
-    // nothing takes would make Windows chime.
-    const sidebarKey = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === 'Backquote';
-    if (atmosKey || sidebarKey) event.preventDefault();
-    if (!(shortcut || space || atmosKey || (event.key === 'Escape' && !typing))) return;
-    notify('ui.key', {
-      key: event.key, code: event.code,
-      ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey,
-    });
+    // A key an extension's background frame declared (Audio Player's Space),
+    // outside fields and buttons: Atmos's then, not the frame's (it doesn't
+    // also scroll), unless the frame's own code took it above.
+    const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+    const global = plain && !typing && !control && (init?.globalKeys || []).includes(event.code);
+    if (global) event.preventDefault();
+    if (!(shortcut || global || (event.key === 'Escape' && !typing))) return;
+    sendKey(event);
   });
   // Atmos closes its menus when the pointer is used elsewhere.
   document.addEventListener('pointerdown', () => notify('ui.pointerdown'), true);

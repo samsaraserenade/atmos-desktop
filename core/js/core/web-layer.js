@@ -25,6 +25,10 @@
  * extension's frames can drive it or hear from it.
  */
 import { closeOpenMenu } from './context-menu.js';
+import { onEscape, runShortcut } from './shortcuts.js';
+import { BINDINGS } from './keymap.mjs';
+
+const ATMOS_KEY_IDS = new Set(BINDINGS.filter(item => item.group === 'atmos').map(item => item.id));
 
 const api = window.atmosCore?.web ?? null;
 const PARTITION = 'persist:atmos-browser';
@@ -220,6 +224,12 @@ function setSurface(owner, iframe, rect) {
 function passThrough(state, iframe, section) {
   for (const element of state.passThrough) element.style.pointerEvents = '';
   state.passThrough = [];
+  // The section a page shows through: no background of its own may cover
+  // the page beneath it (AMOLED's solid black sections did, so pages were
+  // black: index.html, .atmos-web-under).
+  if (state.underSection && state.underSection !== section) state.underSection.classList.remove('atmos-web-under');
+  state.underSection = section && iframe ? section : null;
+  state.underSection?.classList.add('atmos-web-under');
   if (!iframe || !section) return;
   for (let element = iframe.parentElement; element && element !== section.parentElement; element = element.parentElement) {
     element.style.pointerEvents = 'none';
@@ -367,14 +377,16 @@ function raiseNotice() {
 }
 document.addEventListener('fullscreenchange', raiseNotice);
 
-// Escape pressed in Atmos (not in the page) while a page is fullscreen: out of it.
-document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || event.ctrlKey || event.altKey || event.metaKey) return;
-  for (const [owner, state] of _owners) {
-    const tab = state.fullscreen !== null ? _tabs.get(tabKey(owner, state.fullscreen)) : null;
-    if (tab?.guestId) { void api.command(tab.guestId, 'exitFullscreen').catch(() => {}); event.preventDefault(); }
-  }
-}, true);
+// Escape pressed in Atmos (not in the page) while a page is fullscreen: out
+// of it (one layer of shortcuts.js's Escape stack).
+const _fullscreenGuests = () => [..._owners]
+  .map(([owner, state]) => (state.fullscreen !== null ? _tabs.get(tabKey(owner, state.fullscreen)) : null))
+  .filter(tab => tab?.guestId);
+onEscape({
+  priority: 60,
+  isOpen: () => _fullscreenGuests().length > 0,
+  close: () => { for (const tab of _fullscreenGuests()) void api.command(tab.guestId, 'exitFullscreen').catch(() => {}); },
+});
 
 // ── Events from the main process ─────────────────────────────────────────────
 
@@ -393,13 +405,15 @@ api?.onEvent((guestId, type, payload) => {
     return;
   }
   const { owner, tabId } = tab;
-  // Ctrl+\ in a page: Atmos's command bar, not the browser's. Alt+`: the sidebar.
-  if (type === 'command' && payload?.command === 'command-bar') {
-    window.dispatchEvent(new Event('atmos:command-bar'));
+  // Atmos's own keys taken from a page (keymap.mjs's 'atmos' group:
+  // switcher, command bar, Settings, sidebar) are Atmos's, not the
+  // browser's; Alt coming up in a page ends a held switcher.
+  if (type === 'command' && ATMOS_KEY_IDS.has(payload?.command)) {
+    runShortcut(payload.command);
     return;
   }
-  if (type === 'command' && payload?.command === 'sidebar') {
-    window.dispatchEvent(new Event('atmos:toggle-sidebar'));
+  if (type === 'command' && payload?.command === 'alt-up') {
+    window.dispatchEvent(new Event('atmos:alt-up'));
     return;
   }
   if (type === 'mouse-down') {

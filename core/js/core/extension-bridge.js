@@ -757,6 +757,8 @@ export function createExtensionBridge({ extension, surface, post, deps }) {
     // Notifications (no reply expected).
     'surface.resize': height => deps.resize?.(Math.max(0, Math.min(4000, Number(height) || 0))),
     'ui.key': init => deps.dispatchKey?.(init),
+    // Alt came up in the frame (a held switcher, Alt+`, switches).
+    'ui.altup': () => deps.altUp?.(),
     'ui.pointerdown': () => deps.closeMenus?.(),
     'drawer.wheel': (deltaY, deltaMode) => {
       if (surface.drawer && Number.isFinite(deltaY)) deps.drawer?.wheel(deltaY, deltaMode);

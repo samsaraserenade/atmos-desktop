@@ -21,7 +21,7 @@
 <title>ATMOS</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-html { height:100%; width:100%; overflow:hidden; background:transparent; font-family:var(--app-font-family, 'Segoe UI',Roboto,Helvetica,sans-serif); --ink-rgb:255,255,255; --surface-rgb:22,22,24; }
+html { height:100%; width:100%; overflow:hidden; background:transparent; font-family:var(--app-font-family, 'Segoe UI',Roboto,Helvetica,sans-serif); --ink-rgb:255,255,255; --surface-rgb:22,22,24; --workspace-rgb:5,5,6; --panel-tint-rgb:0,0,0; }
 /* Atmos's scrollbar, everywhere on this page (the sidebar's, as extension
    frames get it from /__atmos/frame.css): thin, no track, no arrows. A more
    specific ::-webkit-scrollbar rule (Settings' list) wins, and an element
@@ -638,7 +638,8 @@ body.sidebar-section-resizing { cursor: ns-resize !important; user-select: none 
 .atmos-frame-glass-layer { position:absolute; inset:0; z-index:0; overflow:hidden; pointer-events:none; }
 .atmos-frame-glass { position:absolute; }
 .atmos-frame-glass[data-material="panel"] {
-  background:color-mix(in srgb, #000 calc(var(--panel-opacity, var(--default-panel-opacity, .69)) * 100%), transparent);
+  /* The theme's tint (black, or white with Atmos Light, where the ink is dark). */
+  background:color-mix(in srgb, rgb(var(--panel-tint-rgb, 0,0,0)) calc(var(--panel-opacity, var(--default-panel-opacity, .69)) * 100%), transparent);
   backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%);
   -webkit-backdrop-filter:blur(var(--panel-blur, var(--default-panel-blur, 0px))) saturate(180%);
 }
@@ -829,6 +830,21 @@ p.sm-trust-caution { margin: 0 0 8px; }
 .sm-home-auto { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; margin-top: 4px; border-top: 1px solid rgba(var(--ink-rgb),.07); font-size: .66rem; color: rgba(var(--ink-rgb),.6); }
 .sm-home-auto > span { cursor: help; }
 .sm-home-updates > .sm-trust-error { margin: 0; font-size: .64rem; }
+/* Keyboard shortcuts, beside the app's information (keymap.mjs). */
+/* Below the app's information, the page's full width. */
+.sm-home { height: auto; flex-wrap: wrap; }
+.sm-home-keys { flex: 1 1 100%; min-width: 0; max-width: 640px; margin-left: -14px; }
+.sm-home-keys-title { font-size: .8rem; color: rgb(var(--ink-rgb)); padding: 0 14px; }
+.sm-home-keys-note { font-size: .64rem; color: rgba(var(--ink-rgb),.4); padding: 3px 14px 0; }
+.sm-keys { flex-wrap: nowrap; white-space: nowrap; gap: 3px; }
+.sm-keys kbd, .sm-keys code {
+  font: inherit; font-size: .64rem; line-height: 1; padding: 4px 6px; border-radius: 5px;
+  color: rgba(var(--ink-rgb),.8); background: rgba(var(--ink-rgb),.06);
+  border: 1px solid rgba(var(--ink-rgb),.1); border-bottom-width: 2px;
+}
+.sm-keys code { font-family: ui-monospace, Consolas, monospace; border-bottom-width: 1px; }
+.sm-keys-plus, .sm-keys-or { font-size: .6rem; color: rgba(var(--ink-rgb),.3); }
+.sm-keys-or { padding: 0 4px; }
 /* ── Appearance page ───────────────────────────────────────────────────────
    Settings → Appearance (settings-menu.js _renderAppearancePage()). Core's
    sections (appearance.js) and the services that add one (Wallpaper,
@@ -1071,7 +1087,9 @@ p.sm-trust-caution { margin: 0 0 8px; }
 .ctx-panel.open { max-height:800px; opacity:1; }
 
 /* AMOLED keeps the workspace black even when a wallpaper or transparent
-   window is configured. Theme switching restores those preferences. */
+   window is configured. Theme switching restores those preferences. A
+   section a web page shows through (.atmos-web-under, web-layer.js) keeps
+   no background: the page is beneath it, and the body is black anyway. */
 html[data-app-theme="amoled"] body { background:#000 !important; }
 html[data-app-theme="amoled"] [data-atmos-surface-layer="workspace-background"],
 html[data-app-theme="amoled"] #boot-splash-bg { display:none !important; }
@@ -1079,7 +1097,7 @@ html[data-app-theme="amoled"] #settings-drawer,
 html[data-app-theme="amoled"] #settings-menu-panel,
 html[data-app-theme="amoled"] .ctx-menu-surface,
 html[data-app-theme="amoled"] .panel-window-titlebar,
-html[data-app-theme="amoled"] #media-fullscreen .panel-section,
+html[data-app-theme="amoled"] #media-fullscreen .panel-section:not(.atmos-web-under),
 html[data-app-theme="amoled"] .sm-sidebar,
 html[data-app-theme="amoled"] .sm-onboarding-steps > div {
   background:#000;

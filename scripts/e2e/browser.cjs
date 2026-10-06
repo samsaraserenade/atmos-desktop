@@ -90,6 +90,8 @@ function xinput() {
     click: (x, y, button = 1) => send(`click ${Math.round(x)} ${Math.round(y)} ${button}`),
     move: (x, y) => send(`move ${Math.round(x)} ${Math.round(y)}`),
     key: combo => send(`key ${combo}`),
+    down: key => send(`keydown ${key}`),
+    up: key => send(`keyup ${key}`),
     type: text => send(`type ${text}`),
     close: () => proc.kill(),
   };
@@ -120,6 +122,8 @@ async function launch(extra = []) {
       ...(process.env.E2E_ELECTRON_ARGS || '').split(/\s+/).filter(Boolean), ...extra],
     cwd: repo,
     env: iso.env,
+    // Playwright would emulate a light prefers-color-scheme; pages follow Atmos's theme.
+    colorScheme: 'no-override',
   });
   const logs = [];
   app.process().stdout.on('data', data => logs.push(String(data)));
@@ -182,6 +186,9 @@ setTimeout(() => {
     click: async (...args) => { await focusWindow(); return input.click(...args); },
     move: (...args) => input.move(...args),
     key: combo => input.key(combo),
+    // A key held as a person holds it (Alt for the switcher): the next key
+    // comes, then a moment, then it's let go.
+    hold: async (key, combo, ms = 120) => { await input.down(key); await input.key(combo); await wait(ms); await input.up(key); },
     type: text => input.type(text),
     close: () => input.close(),
   };
@@ -419,10 +426,10 @@ setTimeout(() => {
     const stillBrowser = await registry(r => r.getActivePanelPluginId());
     const sidebarOpen = await page.evaluate(() => document.body.classList.contains('drawer-open'));
     check('keys typed in a page reach the page, Atmos\'s single-key shortcuts never fire', typed.value === 'a[b]c`d' && typed.keys.includes('Tab') && stillBrowser === 'browser' && sidebarOpen === sidebarBefore, { typed, stillBrowser, sidebarBefore, sidebarOpen });
-    // Ctrl+\ is Atmos's command bar (command-bar.js), from a page too, and the page never sees it.
+    // Alt+\ is Atmos's command bar (command-bar.js), from a page too, and the page never sees it.
     await x.click(layer.x + field.x + 20, layer.y + field.y + 10);
     await wait(200);
-    await x.key('ctrl+\\');
+    await x.key('alt+\\');
     // It opens over the bottom of the browser's panel (Atmos's own bar: the browser declares none).
     const barOpen = await until(() => page.evaluate(() => {
       const bar = document.getElementById('command-bar-field');
@@ -432,7 +439,7 @@ setTimeout(() => {
       return { own: bar.classList.contains('is-own'), height: Math.round(rect.height), onPanel: !!panel && Math.abs(rect.bottom - panel.bottom) <= 1 && Math.abs(rect.width - panel.width) <= 1 };
     }), { timeout: 3000 });
     const keysAfterBar = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)'));
-    check('Ctrl+\\ in a page opens Atmos\'s command bar over the browser\'s panel, and the page doesn\'t get it',
+    check('Alt+\\ in a page opens Atmos\'s command bar over the browser\'s panel, and the page doesn\'t get it',
       !!barOpen && barOpen.own && barOpen.onPanel && barOpen.height === 54 && !keysAfterBar.includes('\\'), { barOpen, keysAfterBar });
     await x.key('Escape');
     const barClosed = await until(() => page.evaluate(() => !document.getElementById('command-bar-field')?.isConnected
@@ -442,25 +449,46 @@ setTimeout(() => {
     const afterBar = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify({ value: document.getElementById("field").value })'));
     check('…Esc closes it and the page has the keyboard again, the sidebar as it was', barClosed && afterBar.value.includes('z')
       && await page.evaluate(() => document.body.classList.contains('drawer-open')) === sidebarOpen, { barClosed, afterBar, active: await page.evaluate(() => document.activeElement?.tagName) });
-    // Alt+` is Atmos's sidebar from anywhere: typing in a page (which never
-    // gets it), and from the address bar, where Tab can't be.
+    // Ctrl+Shift+` is Atmos's sidebar from anywhere: typing in a page (which
+    // never gets it), and from the address bar, where Tab can't be.
     const drawerOpen = () => page.evaluate(() => document.body.classList.contains('drawer-open'));
     const keysBeforeAlt = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)')).length;
-    await x.key('alt+grave');
+    await x.key('ctrl+shift+grave');
     const toggledInPage = await until(async () => (await drawerOpen()) !== sidebarOpen, { timeout: 3000 });
     const keysAfterAlt = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)')).slice(keysBeforeAlt);
     await x.key('ctrl+l');
     await wait(300);
-    await x.key('alt+grave');
+    await x.key('ctrl+shift+grave');
     const backFromAddress = await until(async () => (await drawerOpen()) === sidebarOpen, { timeout: 3000 });
     await x.key('Escape');
     await wait(200);
-    check('Alt+` opens and closes the sidebar while typing in a page (the page doesn\'t get it) and from the address bar',
-      !!toggledInPage && !!backFromAddress && !keysAfterAlt.includes('`'), { toggledInPage, backFromAddress, keysAfterAlt });
+    check('Ctrl+Shift+` opens and closes the sidebar while typing in a page (the page doesn\'t get it) and from the address bar',
+      !!toggledInPage && !!backFromAddress && !keysAfterAlt.some(key => /[`~]/.test(key)), { toggledInPage, backFromAddress, keysAfterAlt });
+    // Alt+` (the switcher) from a page: a quick tap goes to the panel shown
+    // before (Finance, shown once here) and back; the page never gets it.
+    await registry(r => r.activatePanelPlugin('portfolio-tracker'));
+    await wait(1200);
+    await registry(r => r.activatePanelPlugin('browser'));
+    await wait(1500);
+    await x.click(layer.x + field.x + 20, layer.y + field.y + 10);
+    await wait(300);
+    const keysBeforeSwitch = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)')).length;
+    await x.hold('alt', 'grave');
+    const switchedAway = await until(async () => (await registry(r => r.getActivePanelPluginId())) === 'portfolio-tracker', { timeout: 3000 });
+    const keysAfterSwitch = JSON.parse(await inPage(`${A}/solid`, 'JSON.stringify(__keys)')).slice(keysBeforeSwitch);
+    await wait(1500);
+    await x.hold('alt', 'grave');
+    const switchedBack = await until(async () => (await registry(r => r.getActivePanelPluginId())) === 'browser', { timeout: 3000 });
+    const switcherGone = await page.evaluate(() => !document.getElementById('task-view').classList.contains('open'));
+    check('Alt+` in a page goes to the panel before and back again (the page doesn\'t get it)',
+      !!switchedAway && !!switchedBack && switcherGone && !keysAfterSwitch.includes('`'), { switchedAway, switchedBack, switcherGone, keysAfterSwitch });
+    await wait(1200);
+    await x.click(layer.x + field.x + 20, layer.y + field.y + 10);
+    await wait(300);
     // The browser's rev/ commands (src/commands.js), typed in Atmos's bar:
     // a new tab going somewhere, a tab by name, closing one.
     const tabsBefore = (await tabs()).length;
-    await x.key('ctrl+\\');
+    await x.key('alt+\\');
     await wait(300);
     await x.type(`rev/new-tab ${B}/solid?title=Opened`);
     await wait(700);
@@ -468,13 +496,13 @@ setTimeout(() => {
     const openedByBar = await settled('Opened', 8000);
     const afterNew = await tabs();
     check('rev/new-tab with an address opens it in a new tab', !!openedByBar && afterNew.length === tabsBefore + 1, { afterNew: afterNew.map(tab => tab.title) });
-    await x.key('ctrl+\\');
+    await x.key('alt+\\');
     await wait(300);
     await x.type('rev/tab Typing');
     await wait(700);
     await x.key('Return');
     const backToTyping = await settled('Typing', 5000);
-    await x.key('ctrl+\\');
+    await x.key('alt+\\');
     await wait(300);
     await x.type('rev/close-tab Opened');
     await wait(700);
@@ -902,6 +930,20 @@ setTimeout(() => {
     grab('12-settings-over-page');
     await page.evaluate(async () => (await import('atmos-core/core/settings-menu.js')).closeSettingsMenu());
     await wait(600);
+    // AMOLED Black: the page still shows (its section's black was over it).
+    const themeBefore = await page.evaluate(async () => (await import('atmos-core/core/appearance.js')).getAppTheme());
+    await page.evaluate(async () => (await import('atmos-core/core/appearance.js')).setAppTheme('amoled'));
+    await wait(700);
+    const amoledPixel = pixel(640, 400);
+    grab('12b-amoled-page');
+    const darkPage = await inPage(`${A}/solid`, 'matchMedia("(prefers-color-scheme: dark)").matches');
+    await page.evaluate(async () => (await import('atmos-core/core/appearance.js')).setAppTheme('atmos-light'));
+    await wait(600);
+    const lightPage = await inPage(`${A}/solid`, 'matchMedia("(prefers-color-scheme: light)").matches');
+    await page.evaluate(async theme => (await import('atmos-core/core/appearance.js')).setAppTheme(theme), themeBefore);
+    await wait(500);
+    check('with AMOLED Black, the page still shows', near(amoledPixel, hex('1d4ed8'), 30), amoledPixel);
+    check('pages follow Atmos\'s theme: dark with AMOLED, light with Atmos Light', darkPage === true && lightPage === true, { darkPage, lightPage });
     await wait(1500); // Task View takes the panel's preview after a page loads
     await page.evaluate(() => window.dispatchEvent(new Event('atmos:open-task-view')));
     await wait(1000);

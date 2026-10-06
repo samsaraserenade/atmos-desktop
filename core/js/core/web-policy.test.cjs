@@ -391,17 +391,24 @@ test('the browser\'s shortcuts are taken before the page; single keys never are'
   assert.equal(key('j', { control: true }), 'downloads');
   assert.equal(key('p', { control: true }), 'print');
   assert.equal(key('n', { control: true }), null, 'no new windows');
-  // Atmos's command bar: the \ | key (US \, UK's left of Z), with Shift too, Cmd on a Mac.
-  assert.equal(key('\\', { control: true, code: 'Backslash' }), 'command-bar');
-  assert.equal(key('\\', { control: true, code: 'IntlBackslash' }), 'command-bar');
-  assert.equal(key('|', { control: true, shift: true, code: 'IntlBackslash' }), 'command-bar');
-  assert.equal(key('Unidentified', { control: true, code: 'IntlBackslash' }), 'command-bar');
-  assert.equal(key('\\', { meta: true }), 'command-bar');
+  // Atmos's own keys (keymap.mjs), from a page as from anywhere.
+  // The command bar: Alt and the \ | key (US \, UK's left of Z), with Shift too.
+  assert.equal(key('\\', { alt: true, code: 'Backslash' }), 'command-bar');
+  assert.equal(key('\\', { alt: true, code: 'IntlBackslash' }), 'command-bar');
+  assert.equal(key('|', { alt: true, shift: true, code: 'IntlBackslash' }), 'command-bar');
+  assert.equal(key('Unidentified', { alt: true, code: 'IntlBackslash' }), 'command-bar');
   assert.equal(key('\\', { control: true, alt: true }), null, 'AltGr+\\ types a character');
-  // Atmos's sidebar: Alt and the key left of 1, whatever it types there.
-  assert.equal(key('`', { alt: true, code: 'Backquote' }), 'sidebar');
-  assert.equal(key('Dead', { alt: true, code: 'Backquote' }), 'sidebar', 'a layout where it is a dead key');
+  assert.equal(key('\\', { control: true, code: 'Backslash' }), null, 'Ctrl+\\ is the page\'s since 0.22');
+  assert.equal(key('#', { alt: true, code: 'Backslash' }), null, 'UK\'s # key, where US has \\');
+  // The key left of 1, whatever it types there: Alt the switcher, Ctrl
+  // Settings, Ctrl+Shift the sidebar.
+  assert.equal(key('`', { alt: true, code: 'Backquote' }), 'switcher');
+  assert.equal(key('Dead', { alt: true, code: 'Backquote' }), 'switcher', 'a layout where it is a dead key');
+  assert.equal(key('`', { control: true, code: 'Backquote' }), 'settings');
+  assert.equal(key('¬', { control: true, shift: true, code: 'Backquote' }), 'sidebar', 'UK');
+  assert.equal(key('~', { control: true, shift: true, code: 'Backquote' }), 'sidebar', 'US');
   assert.equal(key('`', { alt: true, control: true, code: 'Backquote' }), null, 'AltGr there types a character');
+  assert.equal(key('`', { alt: true, shift: true, code: 'Backquote' }), null, 'Alt+Shift+` is the switcher\'s own, once open');
   assert.equal(key('`', { code: 'Backquote' }), null, 'a plain ` is typing');
   for (const single of [']', '[', '\\', 'Tab', ' ', 'Escape', 'a', 'ArrowLeft']) assert.equal(key(single), null, single);
   assert.equal(policy.shortcutFor({ type: 'keyUp', key: 't', control: true }), null);

@@ -1,6 +1,6 @@
 /**
- * Atmos's command bar: rev/ commands, typed. Ctrl+\ (from anywhere: Atmos's
- * page, an extension's frame, a web page in Atmos Browser) opens it; Ctrl+\
+ * Atmos's command bar: rev/ commands, typed. Alt+\ (from anywhere: Atmos's
+ * page, an extension's frame, a web page in Atmos Browser) opens it; Alt+\
  * or Esc closes it. Where it opens (Settings → Appearance → Command Bar):
  *
  *   panel (the default)  over the bottom bar of the panel you're in, when
@@ -36,8 +36,9 @@ import {
 } from './command-list.js';
 import { activatePanelPlugin, getActivePanelPluginId, listPanelPlugins } from './panel-registry.js';
 import { sidebarState } from './sidebar-state.js';
-import { closeSidebar, openSidebar } from './sidebar-shell.js';
+import { closeSidebar, flipSidebarSide, openSidebar } from './sidebar-shell.js';
 import { appearanceState } from './appearance.js';
+import { onShortcut } from './shortcuts.js';
 import { escapeHtml } from './escape-html.js';
 import {
   commandBarTarget, extensionCommandSources, extensionHasPanel, giveKeyboardBack, requestExtensionCommand, runExtensionCommand,
@@ -495,6 +496,24 @@ function run({ command, target }) {
     if (wanted) openSidebar(); else closeSidebar();
     return;
   }
+  if (command === 'sidebar-side') {
+    closeBar({ restoreSidebar: false });
+    flipSidebarSide();
+    return;
+  }
+  if (command === 'wallpaper') {
+    // The wallpaper service (core/system/wallpaper/boot.js) listens. Paste
+    // reads the clipboard, which wants the page focused: the bar's field
+    // had it, so the keyboard isn't handed back first.
+    closeBar({ restoreFocus: target !== 'paste' });
+    window.dispatchEvent(new CustomEvent('atmos:wallpaper', { detail: { action: target === 'choose' ? 'choose' : 'paste' } }));
+    return;
+  }
+  if (command === 'reload') {
+    closeBar({ restoreFocus: false });
+    window.atmosCore?.reloadAtmos?.();
+    return;
+  }
   if (command === 'switch') {
     closeBar();
     try { activatePanelPlugin(target); }
@@ -699,20 +718,9 @@ export function toggleCommandBar() {
   if (open) closeBar(); else openCommandBar();
 }
 
-/** Ctrl+\ (the \ | key; Ctrl+| with Shift), Cmd+\ on a Mac. */
-export function isCommandBarKey(event) {
-  if (!(event.ctrlKey || event.metaKey) || event.altKey) return false;
-  return event.key === '\\' || event.key === '|' || event.code === 'IntlBackslash';
-}
-
-// Atmos's page, and frames (their SDK passes keys with Ctrl on as a
-// keydown here). Taken even while typing: the key types nothing.
-document.addEventListener('keydown', event => {
-  if (!isCommandBarKey(event)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  toggleCommandBar();
-}, true);
+// Alt+\ from anywhere, even while typing (shortcuts.js; keymap.mjs): the
+// key types nothing then.
+onShortcut('command-bar', () => toggleCommandBar());
 // A web page in Atmos Browser (web-layer.js, from web-policy.cjs's shortcuts).
 window.addEventListener('atmos:command-bar', () => toggleCommandBar());
 // rev/ typed into an extension's field (atmos.commands.open, .field): the

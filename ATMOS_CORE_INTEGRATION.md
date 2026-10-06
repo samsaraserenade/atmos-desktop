@@ -491,10 +491,10 @@ refused call rejects with an `AtmosPermissionError` naming what to declare.
 Subscriptions (`events.on`, `listen`, the `onChange`s) don't reject: a
 refusal is logged in the frame's console.
 
-**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.4.0'` (Atmos 0.21),
+**What SDK 1.x promises.** `atmos.SDK_VERSION` is `'1.5.0'` (Atmos 0.22),
 and a later 1.x only adds. What 1.1 added is marked **1.1**; 1.2 added
 only `atmos.web`, for official extensions; 1.3, `atmos.commands` (with
-`"commands"` in the manifest) and ui.css's bar; 1.4, `atmos.nowPlaying`. Everything below is **stable** unless marked
+`"commands"` in the manifest) and ui.css's bar; 1.4, `atmos.nowPlaying`; 1.5, `atmos.web.close(tabId, { sleep })` for official extensions, and Atmos's own keys taken before a frame's code sees them. Everything below is **stable** unless marked
 **experimental** (it may still change in a minor version). The calls in
 "Official extensions only" at the end of this section may change in a
 minor version too, and Atmos refuses them to community extensions.
@@ -506,7 +506,7 @@ minor version too, and Atmos refuses them to community extensions.
 | `atmos.extension` | `{ id, kind, tier, version }`: which extension this frame belongs to |
 | `atmos.surface` | `{ type, id, presentation, glass, drawer }`: `type` is `'panel'`, `'sidebar'`, `'settings'` or `'boot'`; `presentation` is `'full'`, `'tile'` or `'window'` (panels) and never changes, since a layout change makes a new frame |
 | `atmos.ready` | A promise that resolves once the frame is connected. Entry files already run after it |
-| `atmos.SDK_VERSION` | `'1.4.0'` (Atmos 0.21); `'1.3.0'` in Atmos 0.20, `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
+| `atmos.SDK_VERSION` | `'1.5.0'` (Atmos 0.22); `'1.4.0'` in Atmos 0.21, `'1.3.0'` in Atmos 0.20, `'1.2.0'` in Atmos 0.17 to 0.19, `'1.1.0'` in Atmos 0.16, `'1.0.0'` in Atmos 0.15 |
 
 ### State and events
 
@@ -685,7 +685,7 @@ itself (`'plugin:<own id>'`) without declaring anything.
 
 ### Commands in Atmos's bar (1.3)
 
-Atmos's command bar (Ctrl+\\ from anywhere, or the sidebar's ATMOS
+Atmos's command bar (Alt+\\ from anywhere, or the sidebar's ATMOS
 wordmark when it lives there) takes `rev/` commands: Atmos's own
 (`rev/sidebar`, `rev/settings [page]`, `rev/extensions`, `rev/switch
 <panel>`) and those extensions declare. It opens over the bottom bar of
@@ -910,12 +910,21 @@ script them. `atmos.state` is kept in a file of its own
 - Draw outside its surface or catch input outside it. Only Atmos draws
   across the workspace.
 
-Keys pressed inside a focused frame that aren't typing are passed on to
-Atmos: modifier combinations (Ctrl+` for Settings, Alt+` for the sidebar,
-Ctrl+\ for the command bar), F-keys, Escape, Space
-outside fields and buttons, and Atmos's single-key shortcuts outside fields
-and buttons (Tab for the sidebar, Shift+Tab to move it). A key the frame handled itself (`preventDefault()`)
-stays its own.
+Atmos's own keys are Atmos's in every frame, even while typing in a field:
+Alt+` (switch panels), Alt+\ (the command bar), Ctrl+` (Settings) and
+Ctrl+Shift+` (the sidebar). The SDK takes them before any of your code
+sees them, so you can't use them, and they type nothing. The full list is
+in Settings → Atmos (and `core/js/core/keymap.mjs`). Everything else is
+yours: Tab, Ctrl+Tab, Ctrl+Shift+V and any other key.
+
+Other keys pressed inside a focused frame that aren't typing are passed on
+to Atmos after your code has seen them: modifier combinations, F-keys,
+Escape (one press closes the topmost thing: a menu, the switcher,
+Settings), and a key an official extension's background frame declared
+(Audio Player's Space) outside fields and buttons. A key the frame handled
+itself (`preventDefault()`) stays its own; a declared key it didn't handle
+is Atmos's only (the frame doesn't also scroll). Ctrl+R in a frame reloads
+that frame.
 
 ### Official extensions only
 
@@ -1950,7 +1959,7 @@ it; the location set before waits until it's installed.
 **SDK 1.3 (Atmos 0.20).** Only additions; an SDK 1.2 extension runs
 unchanged.
 
-- Atmos's command bar (Ctrl+\\), and `"commands"` in the manifest with
+- Atmos's command bar (Alt+\\), and `"commands"` in the manifest with
   `atmos.commands` (`handle`, `bar`, `field`, `open`, `refresh`) for an extension's
   own `rev/` commands (section 4, "Commands in Atmos's bar"). An extension
   that uses them needs `"engines": { "atmos": ">=0.20.0" }`.

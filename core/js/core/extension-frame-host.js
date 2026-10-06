@@ -34,6 +34,8 @@ import { forgetEarlierLocation, takeEarlierLocation } from './location-legacy.js
 import { createPanelDrawer } from './panel-drawer.js';
 import { panelState } from './panel-state.js';
 import { webFor } from './web-layer.js';
+import { onEscape } from './shortcuts.js';
+import { atmosKeysForFrames } from './keymap.mjs';
 
 // allow-popups: a link a frame opens in a new window (target="_blank") goes
 // to Atmos's window-open handler, which never opens a window: it hands
@@ -50,7 +52,7 @@ const APPEARANCE_VARS = [
 ];
 const BOOT_TIMEOUT_MS = 10000;
 // The SDK frames get (core/js/sdk/atmos-sdk.js SDK_VERSION; a test keeps them equal).
-export const SDK_VERSION = '1.4.0';
+export const SDK_VERSION = '1.5.0';
 
 const _states = new Map();   // "kind:id" -> { extension, value }: each extension's atmos.state
 const _frames = new Map();   // "kind:id" -> Set<frame record>
@@ -59,6 +61,8 @@ const _incompatible = new Set(); // "kind:id" of those made for another Atmos (n
 const SERVICE_WAIT_MS = 15000;
 const _exposed = new Map();        // "kind:id" -> { methods, call, owner }
 const _serviceWaiters = new Map(); // "kind:id" -> [resolve]
+// Keys background frames declared ("keys": ["Space"]): theirs anywhere outside a field.
+const _globalKeyCodes = new Set();
 const _withBootFrame = new Set();  // "kind:id" of framed extensions that have a boot.js
 const _stopped = new Set();        // "kind:id" stopped this session: its approval was removed (stopExtensions)
 const _sectionOwners = new Map();  // sidebar widget id -> "kind:id" of the extension it's registered for
@@ -689,6 +693,8 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
     dispatchKey(init) {
       if (document.activeElement === iframe) _dispatchKey(init);
     },
+    // Not only while it has the keyboard: the switcher took it at Alt+`.
+    altUp() { window.dispatchEvent(new Event('atmos:alt-up')); },
     openMenu(x, y, items, onChange) {
       if (surface.type === 'boot') return Promise.reject(new Error('background frames cannot open menus'));
       const rect = iframe.getBoundingClientRect();
@@ -832,9 +838,13 @@ function _createFrame(extension, surface, container, { presentation = null, hidd
         },
         entry: `${base}${surface.entry}`,
         appearance: _appearance(),
-        // Atmos's own single-key shortcut, which a focused frame passes on
-        // when it isn't typing: Tab (the sidebar).
-        shortcutKeys: ['Tab'],
+        // Atmos's own keys (keymap.mjs), which the SDK takes before the
+        // extension's code sees them, even while typing; and the keys an
+        // extension's background frame declared ("keys": ["Space"]), which
+        // it hands over outside fields and buttons unless the frame took
+        // the key itself (never both).
+        atmosKeys: atmosKeysForFrames(),
+        globalKeys: [..._globalKeyCodes],
       },
     }, origin, [channel.port2]);
     resolveReady(true);
@@ -1040,25 +1050,26 @@ function _mountDrawer(extension, surface, surfaceEl) {
     if (event.target?.closest?.('#settings-drawer, .ctx-menu-surface, .panel-host-controls, #command-bar-field, #command-bar-list')) return;
     physics.wheel(event.deltaY, event.deltaMode);
   };
-  // Escape arms, a second Escape within two seconds closes. With
-  // "keys": true, characters typed on the workspace while the drawer is open
-  // go to the frame (Audio Player's type-to-search), which takes focus.
-  const onKeydown = event => {
-    if (event.defaultPrevented || !physics.isOpen) return;
-    // An Escape that closes an Atmos menu is only that. (Listening in the
-    // capture phase sees the menu before its own Escape handler closes it.)
-    if (document.querySelector('body > .ctx-menu-surface:not(#ctx-menu), #ctx-menu.visible')) return;
-    // Keys typed in the command bar are its own: Esc there clears and closes it, not the drawer.
-    if (event.target?.closest?.('#command-bar-field, #command-bar-list, #sidebar-footer.is-commanding')) return;
-    if (event.key === 'Escape') {
+  // Escape arms, a second Escape within two seconds closes (the bottom
+  // layer of shortcuts.js's Escape stack: a menu, Settings or the switcher
+  // over it closes first). With "keys": true, characters typed on the
+  // workspace while the drawer is open go to the frame (Audio Player's
+  // type-to-search), which takes focus.
+  const stopEscape = onEscape({
+    priority: 10,
+    isOpen: () => physics.isOpen,
+    close: () => {
       if (drawerEl.classList.contains('pending-close')) commands.close();
       else setPending(true);
-      return;
-    }
+    },
+  });
+  const onKeydown = event => {
+    if (event.defaultPrevented || !physics.isOpen) return;
     if (!surface.drawer.keys || event.isTrusted === false) return;
     if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1 || !event.key.trim()) return;
     if (_isTyping(event.target)) return;
     if (document.activeElement?.tagName === 'IFRAME') return;
+    if (event.target?.closest?.('#command-bar-field, #command-bar-list, #sidebar-footer.is-commanding, #task-view, #task-view-keys')) return;
     event.preventDefault();
     frame.element.focus();
     post({ topic: 'drawerKey', payload: { key: event.key } });
@@ -1071,6 +1082,7 @@ function _mountDrawer(extension, surface, surfaceEl) {
   return () => {
     document.removeEventListener('wheel', onWheel);
     document.removeEventListener('keydown', onKeydown, true);
+    stopEscape();
     observer.disconnect();
     clearTimeout(pendingTimer);
     physics.dispose();
@@ -1156,6 +1168,7 @@ function _registerContribution(extension, surface) {
     });
   } else if (surface.surface === 'boot') {
     _withBootFrame.add(key(extension));
+    for (const code of surface.keys || []) _globalKeyCodes.add(code);
     registerBootHook(`${extension.kind}:${extension.id}`, {
       order: surface.order,
       async run() {

@@ -40,17 +40,20 @@ registerBootHook('wallpaper', {
 
     await initialize();
 
-    context.listen(window, 'keydown', async event => {
-      if (!(event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'v')) return;
-      event.preventDefault();
+    // rev/wallpaper paste (the copied image) and rev/wallpaper choose, from
+    // Atmos's command bar (command-bar.js). Ctrl+Shift+V did this until
+    // 0.22; it is "paste as plain text" in fields and pages.
+    context.listen(window, 'atmos:wallpaper', async event => {
+      if (event.detail?.action === 'choose') { chooseWallpaper(); return; }
       try {
         const items = await navigator.clipboard.read();
         for (const item of items) {
           const type = item.types.find(value => value.startsWith('image/'));
           if (!type) continue;
           await setWallpaper(new File([await item.getType(type)], 'pasted-wallpaper', { type }));
-          break;
+          return;
         }
+        console.warn('[wallpaper] nothing to paste: the clipboard holds no image');
       } catch (error) {
         console.warn('[wallpaper] clipboard image could not be applied:', error.message);
       }

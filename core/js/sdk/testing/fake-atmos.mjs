@@ -403,7 +403,7 @@ export function createFakeAtmos(options = {}) {
   }
 
   const atmos = {
-    SDK_VERSION: '1.4.0',
+    SDK_VERSION: '1.5.0',
     ready: Promise.resolve({ extension }),
     extension,
     surface: {

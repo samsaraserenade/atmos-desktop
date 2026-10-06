@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('atmosCore', {
   },
   getWindowEffects: ()                    => ipcRenderer.invoke('window-effects:get'),
   capturePanelPreview: rect               => ipcRenderer.invoke('task-view:capture-preview', rect),
+  reloadAtmos:         ()                 => ipcRenderer.send('atmos:reload'),
+  setColorScheme:      scheme             => ipcRenderer.send('appearance:color-scheme', scheme === 'light' ? 'light' : 'dark'),
   setTransparentWindow: enabled           => ipcRenderer.invoke('window-effects:set-transparent', enabled === true),
   minimize:         ()                   => ipcRenderer.send('win-minimize'),
   maximize:         ()                   => ipcRenderer.send('win-maximize'),

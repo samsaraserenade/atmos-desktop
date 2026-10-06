@@ -40,7 +40,7 @@ test('isCommand: only text starting with rev/ (a message bar\'s commands)', asyn
 test('nothing typed lists Atmos\'s commands in order', async () => {
   const { suggest } = await load();
   for (const text of ['', 'rev/', '/']) {
-    assert.deepEqual(titles(suggest(text, { panels: PANELS })), ['rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch'], text);
+    assert.deepEqual(titles(suggest(text, { panels: PANELS })), ['rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload'], text);
   }
   const rows = suggest('', { panels: PANELS }).rows;
   // Enter runs a command that needs nothing more; one that needs a panel gets a space.
@@ -53,8 +53,8 @@ test('nothing typed lists Atmos\'s commands in order', async () => {
 
 test('typing narrows the commands; a panel or a page of Settings by name is offered too', async () => {
   const { suggest } = await load();
-  assert.deepEqual(titles(suggest('rev/s', { panels: PANELS })), ['rev/sidebar', 'rev/settings', 'rev/switch'], 'one letter: commands only');
-  assert.deepEqual(titles(suggest('rev/si', { panels: PANELS })), ['rev/sidebar', 'Settings → Sidebar']);
+  assert.deepEqual(titles(suggest('rev/s', { panels: PANELS })), ['rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/switch'], 'one letter: commands only');
+  assert.deepEqual(titles(suggest('rev/si', { panels: PANELS })), ['rev/sidebar', 'rev/sidebar-side', 'Settings → Sidebar']);
   const finance = suggest('rev/fin', { panels: PANELS, activePanel: 'browser' });
   assert.deepEqual(titles(finance), ['Finance']);
   assert.deepEqual(finance.rows[0].enter, { run: { command: 'switch', target: 'portfolio-tracker' } });
@@ -122,16 +122,16 @@ const SOURCES = [AWAY, AUDIO, MATRIX];
 test('every command is listed, by what\'s showing: the panel\'s, widgets\', Atmos\'s own, then the rest, each under a heading', async () => {
   const { suggest, commandList } = await load();
   assert.deepEqual(commandList(SOURCES).map(command => `${command.name}:${command.rank}`),
-    ['go:0', 'leave:0', 'mute:0', 'play:2', 'sidebar:3', 'settings:3', 'extensions:3', 'switch:3', 'roll:4']);
+    ['go:0', 'leave:0', 'mute:0', 'play:2', 'sidebar:3', 'sidebar-side:3', 'settings:3', 'extensions:3', 'switch:3', 'wallpaper:3', 'reload:3', 'roll:4']);
   const all = suggest('', { sources: SOURCES });
   assert.deepEqual(all.rows.map(row => row.heading ?? row.title), [
     'Matrix Chat', 'rev/go', 'rev/leave', 'rev/mute', 'Audio Player', 'rev/play',
-    'Atmos', 'rev/sidebar', 'rev/settings', 'rev/extensions', 'rev/switch', 'Dice', 'rev/roll',
+    'Atmos', 'rev/sidebar', 'rev/sidebar-side', 'rev/settings', 'rev/extensions', 'rev/switch', 'rev/wallpaper', 'rev/reload', 'Dice', 'rev/roll',
   ], 'Dice, with nothing showing, last');
   assert.ok(all.rows.filter(row => row.title).every(row => row.source === ''), 'under its heading, a row doesn\'t repeat whose it is');
   const away = { extension: 'plugin:abacus', label: 'Abacus', rank: 4, commands: [{ name: 'count', about: 'Count' }] };
   assert.deepEqual(suggest('', { sources: [AWAY, away] }).rows.filter(row => row.heading).map(row => row.heading), ['Atmos', 'Abacus', 'Dice'], 'those with nothing showing by name');
-  assert.deepEqual(titles(suggest('r', { sources: SOURCES })), ['rev/roll'], 'typed, it\'s there');
+  assert.deepEqual(titles(suggest('r', { sources: SOURCES })), ['rev/reload', 'rev/roll'], 'typed, it\'s there (Atmos\'s own first)');
   assert.deepEqual(titles(suggest('rev/ro', { sources: SOURCES })), ['rev/roll']);
 });
 
@@ -269,4 +269,18 @@ test('two extensions with one name: the text means the one whose row completed i
   const fetched = { source: 'plugin:matrix-chat', name: 'go', args: 'gen', rows: [{ title: 'General', value: '!g' }], options: [] };
   assert.equal(suggest('rev/go gen', { sources, prefer: matrixRow.enter.prefer, fetched }).rows[0].source, 'Matrix Chat', 'its rows say whose, as the name has two owners');
   assert.equal(suggest('rev/go gen', { sources: [MATRIX], fetched }).rows[0].source, '', 'one owner: nothing to say');
+});
+
+test('Atmos\'s own commands without a key: the sidebar\'s side, the wallpaper, reloading', async () => {
+  const { suggest, CORE_COMMANDS } = await load();
+  const frames = require('./extension-frames.cjs');
+  assert.deepEqual(CORE_COMMANDS.map(command => command.name), [...frames.CORE_COMMAND_NAMES], 'extensions can\'t take any of them');
+  assert.deepEqual(suggest('rev/sidebar-side').rows[0].enter, { run: { command: 'sidebar-side', target: null } });
+  assert.deepEqual(suggest('rev/reload').rows[0].enter, { run: { command: 'reload', target: null } });
+  const wallpaper = suggest('rev/wallpaper ');
+  assert.deepEqual(titles(wallpaper), ['rev/wallpaper paste', 'rev/wallpaper choose']);
+  assert.deepEqual(wallpaper.rows[0].enter, { run: { command: 'wallpaper', target: 'paste' } });
+  assert.deepEqual(titles(suggest('rev/wallpaper ch')), ['rev/wallpaper choose']);
+  assert.deepEqual(titles(suggest('rev/wallpaper x')), ['note: rev/wallpaper takes paste or choose.']);
+  assert.deepEqual(suggest('rev/wall').rows[0].enter, { run: { command: 'wallpaper', target: null } }, 'Enter on the name pastes');
 });

@@ -1,0 +1,7 @@
+# Files that run on Linux (the portfolio server, scripts) keep Linux line
+# endings even in a Windows checkout: bash reads a Windows line ending as part
+# of the command ("set -o pipefail" failed on the VPS, 6 October).
+*.sh text eol=lf
+*.py text eol=lf
+*.service text eol=lf
+Dockerfile text eol=lf

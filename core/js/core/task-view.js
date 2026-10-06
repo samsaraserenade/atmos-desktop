@@ -4,6 +4,7 @@ import {
   listPanelPlugins,
 } from './panel-registry.js';
 import { previewParts } from './web-layer.js';
+import { onEscape, onShortcut } from './shortcuts.js';
 
 let _initialized = false;
 let _overlay = null;
@@ -13,6 +14,14 @@ let _returnFocus = null;
 let _captureTimer = null;
 let _captureInFlight = false;
 const _previews = new Map();
+// The switcher (Alt+`), as Windows' Alt+Tab: panels most recently shown
+// first; held, it opens on the one before this and switches when Alt comes
+// up. A quick tap flips between the last two without showing anything.
+const REVEAL_MS = 140;
+let _recent = [];
+let _held = false;
+let _revealTimer = null;
+let _keys = null; // where the keyboard waits while the switcher is held but not shown yet
 
 function _friendlyId(id) {
   return String(id)
@@ -22,12 +31,27 @@ function _friendlyId(id) {
     .join(' ');
 }
 
+/** The panels, those shown most recently first, the rest in their own order. */
 function _plugins() {
-  return listPanelPlugins();
+  const plugins = listPanelPlugins();
+  const rank = id => { const index = _recent.indexOf(id); return index === -1 ? Infinity : index; };
+  return plugins.map((plugin, index) => ({ plugin, index }))
+    .sort((a, b) => rank(a.plugin.id) - rank(b.plugin.id) || a.index - b.index)
+    .map(entry => entry.plugin);
 }
 
-function _isOpen() {
+function _noteShown(id) {
+  if (!id) return;
+  _recent = [id, ..._recent.filter(other => other !== id)].slice(0, 32);
+}
+
+function _isShown() {
   return _overlay?.classList.contains('open') === true;
+}
+
+/** Open: shown, or held (Alt+`) and about to be. */
+function _isOpen() {
+  return _isShown() || _held;
 }
 
 function _cards() {
@@ -51,8 +75,18 @@ function _select(index, { focus = true } = {}) {
 
 function _activate(pluginId) {
   if (!pluginId) return;
+  if (pluginId === getActivePanelPluginId()) { closeTaskView(); return; }
   activatePanelPlugin(pluginId);
-  closeTaskView();
+  closeTaskView({ restoreFocus: false });
+  // The keyboard goes to the panel now shown, once its frame has loaded:
+  // until then it stays on Atmos's page (a frame that isn't listening yet
+  // would lose Alt+` pressed again at once).
+  const frame = document.querySelector('#panel-content iframe.atmos-extension-frame-panel');
+  if (!frame) return;
+  const give = () => { if (frame.isConnected && document.activeElement === _keys) frame.focus({ preventScroll: true }); };
+  _keys.focus({ preventScroll: true });
+  frame.addEventListener('load', () => setTimeout(give, 50), { once: true });
+  setTimeout(give, 1500); // loaded already, or slow: either way, by then
 }
 
 function _schedulePreviewCapture(delay = 550) {
@@ -195,7 +229,7 @@ function _render() {
       card.classList.add('current');
       const badge = document.createElement('span');
       badge.className = 'task-view-current';
-      badge.textContent = 'Selected';
+      badge.textContent = 'Showing';
       details.appendChild(badge);
       _selectedIndex = index;
     }
@@ -220,21 +254,21 @@ function _gridColumns() {
 }
 
 function _onKeydown(event) {
-  if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === 'Tab') {
+  if (!_isOpen()) return;
+  // Esc with Alt still held lets go without switching (shortcuts.js's
+  // Escape takes it without Alt).
+  if (event.key === 'Escape' && event.altKey) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (!_isOpen()) {
-      openTaskView();
-    } else {
-      _select(_selectedIndex + (event.shiftKey ? -1 : 1));
-    }
+    closeTaskView();
     return;
   }
-  if (!_isOpen()) return;
-
-  if (event.key === 'Escape') {
+  // Alt+Shift+` (held): back one. (Alt+` itself is Atmos's key: shortcuts.js.)
+  if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Backquote') {
     event.preventDefault();
-    closeTaskView();
+    event.stopImmediatePropagation();
+    _reveal();
+    _select(_selectedIndex - 1);
     return;
   }
   if (event.key === 'Enter' || event.key === ' ') {
@@ -253,7 +287,43 @@ function _onKeydown(event) {
     : 0;
   if (!delta) return;
   event.preventDefault();
+  _reveal();
   _select(_selectedIndex + delta);
+}
+
+/** Alt+`: open held on the panel before this one, or move on to the next. */
+function _onSwitcherKey() {
+  if (_isOpen()) {
+    _reveal();
+    _select(_selectedIndex + 1, { focus: _isShown() });
+    return;
+  }
+  if (!_overlay || _plugins().length === 0) return;
+  _returnFocus = document.activeElement;
+  _held = true;
+  _render();
+  _select(_cards().length > 1 ? 1 : 0, { focus: false });
+  // The keyboard comes here at once (from a frame or a web page), so that
+  // Alt coming up is seen.
+  _keys.focus({ preventScroll: true });
+  clearTimeout(_revealTimer);
+  _revealTimer = setTimeout(_reveal, REVEAL_MS);
+}
+
+/** Alt came up: switch to the chosen panel (a held switcher only). */
+function _commitHeld() {
+  if (!_held) return;
+  _activate(_cards()[_selectedIndex]?.dataset.pluginId);
+}
+
+function _reveal() {
+  clearTimeout(_revealTimer);
+  _revealTimer = null;
+  if (!_overlay || _isShown()) return;
+  _overlay.classList.add('open');
+  _overlay.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('task-view-open');
+  _select(_selectedIndex);
 }
 
 function openTaskView() {
@@ -266,12 +336,16 @@ function openTaskView() {
   requestAnimationFrame(() => _select(_selectedIndex));
 }
 
-function closeTaskView() {
+function closeTaskView({ restoreFocus = true } = {}) {
   if (!_overlay || !_isOpen()) return;
+  _held = false;
+  clearTimeout(_revealTimer);
+  _revealTimer = null;
   _overlay.classList.remove('open');
   _overlay.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('task-view-open');
-  if (_returnFocus?.isConnected) _returnFocus.focus({ preventScroll: true });
+  if (restoreFocus && _returnFocus?.isConnected) _returnFocus.focus({ preventScroll: true });
+  else if (document.activeElement === _keys) _keys.blur();
   _returnFocus = null;
 }
 
@@ -292,9 +366,28 @@ export function initTaskView() {
   _overlay.querySelectorAll('[data-task-view-close]').forEach(element => {
     element.addEventListener('click', closeTaskView);
   });
+  _keys = document.createElement('div');
+  _keys.id = 'task-view-keys';
+  _keys.tabIndex = -1;
+  _keys.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(_keys);
   document.addEventListener('keydown', _onKeydown, true);
+  onShortcut('switcher', _onSwitcherKey);
+  onEscape({ priority: 80, isOpen: _isOpen, close: () => closeTaskView() });
+  // Alt up: on Atmos's page (where the keyboard went), or in a web page
+  // that still had it (web-layer.js, from web-host.cjs).
+  document.addEventListener('keyup', event => { if (event.key === 'Alt') _commitHeld(); }, true);
+  window.addEventListener('atmos:alt-up', _commitHeld);
+  // Alt let go where Atmos couldn't see it: the next pointer or key says so.
+  const altGone = event => { if (_held && !event.altKey) _commitHeld(); };
+  document.addEventListener('pointermove', altGone, true);
+  document.addEventListener('pointerdown', altGone, true);
+  // Atmos's window left (Windows' own Alt+Tab): nothing switches.
+  window.addEventListener('blur', () => { if (_held) closeTaskView(); });
   window.addEventListener('atmos:open-task-view', openTaskView);
+  _noteShown(getActivePanelPluginId());
   window.addEventListener('atmos:active-panel-changed', () => {
+    _noteShown(getActivePanelPluginId());
     if (_isOpen()) _render();
     _schedulePreviewCapture();
   });

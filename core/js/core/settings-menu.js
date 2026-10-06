@@ -38,6 +38,8 @@
 
 import { getRegisteredSections, setSectionEnabled } from './sidebar-registry.js';
 import { escapeHtml } from './escape-html.js';
+import { onEscape } from './shortcuts.js';
+import { displayKeys, KEYLESS_COMMANDS, shortcutSections } from './keymap.mjs';
 import {
   PANEL_LAYOUTS, listPanelPlugins, getPanelLayout, getPanelSections,
   setPanelLayout, assignPanelPlugin,
@@ -246,9 +248,7 @@ function _build() {
     _renderList();
   });
 
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && _overlay.classList.contains('open')) closeSettingsMenu();
-  });
+  onEscape({ priority: 70, isOpen: () => _overlay.classList.contains('open'), close: () => closeSettingsMenu() });
 }
 
 function _renderNav() {
@@ -574,6 +574,7 @@ function _renderHome() {
         <div class="sm-home-version">${_appVersion ? `Version ${_appVersion}` : 'Version —'}</div>
         <div class="sm-home-updates">${_atmosHomeHtml()}</div>
       </div>
+      ${_shortcutsHtml()}
     </div>`;
 
   // Theme still affects the wordmark shown on this page even though its
@@ -592,6 +593,40 @@ function _renderHome() {
   }));
 
   _wireManagerActions();
+}
+
+// Settings → Atmos, beside the version: every keyboard shortcut, from the
+// same table the keys come from (keymap.mjs), and the commands without one.
+function _keysHtml(display) {
+  return displayKeys(display)
+    .map(keys => keys.map(key => `<kbd>${escapeHtml(key)}</kbd>`).join('<span class="sm-keys-plus">+</span>'))
+    .join('<span class="sm-keys-or">or</span>');
+}
+
+function _shortcutsHtml() {
+  const sections = shortcutSections().map(section => `
+    <section class="sa-section">
+      <div class="sa-heading">${escapeHtml(section.title)}</div>
+      ${section.rows.map(row => `
+        <div class="sa-row sm-keys-row" data-shortcut="${escapeHtml(row.id)}">
+          <span class="sa-label">${escapeHtml(row.label)}</span>
+          <span class="sa-control sm-keys">${_keysHtml(row.display)}</span>
+        </div>`).join('')}
+    </section>`).join('');
+  const commands = `
+    <section class="sa-section">
+      <div class="sa-heading">Commands</div>
+      ${KEYLESS_COMMANDS.map(item => `
+        <div class="sa-row sm-keys-row">
+          <span class="sa-label">${escapeHtml(item.label)}</span>
+          <span class="sa-control sm-keys"><code>${escapeHtml(item.command)}</code></span>
+        </div>`).join('')}
+    </section>`;
+  return `<div class="sm-home-keys" aria-label="Keyboard shortcuts">
+    <div class="sm-home-keys-title">Keyboard shortcuts</div>
+    <div class="sm-home-keys-note">Atmos's keys work everywhere: in every panel, in text fields and in web pages.</div>
+    ${sections}${commands}
+  </div>`;
 }
 
 // Settings → Appearance: Core's Theme, Sidebar and Glass sections

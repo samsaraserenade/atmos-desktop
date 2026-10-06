@@ -1,4 +1,6 @@
 body.task-view-open { overflow:hidden; }
+/* Where the keyboard waits while the switcher is held, before it shows. */
+#task-view-keys { position:fixed; left:0; top:0; width:1px; height:1px; opacity:0; pointer-events:none; outline:none; }
 
 #task-view {
   position:fixed;

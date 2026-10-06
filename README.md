@@ -104,10 +104,15 @@ Atmos Core owns the shell, and extensions fill it.
 - **Panels and layouts.** Show one panel full screen, split two side by side
   or stacked, run four in a grid, or float them as windows you can move,
   resize and layer. Dividers are draggable and every layout remembers its
-  proportions. Ctrl+Tab opens Task View; a middle click opens Settings;
-  Alt+` opens and closes the sidebar from anywhere, web pages and text
-  fields included (Tab does too, outside them).
-- **A command bar.** Ctrl+\\ opens a bar over the bottom of the panel
+  proportions. Alt+` switches panels the way Alt+Tab switches windows
+  (tap it for the last one; hold Alt and press it again to pick); a middle
+  click opens Settings.
+- **Keys that always work.** Atmos's own shortcuts are taken before an
+  extension or a web page sees them, in text fields too: Alt+` the
+  switcher, Alt+\\ the command bar, Ctrl+` Settings, Ctrl+Shift+` the
+  sidebar. Ctrl+R reloads what has the keyboard (a panel, a page, or
+  Atmos). Settings → Atmos lists every shortcut.
+- **A command bar.** Alt+\\ opens a bar over the bottom of the panel
   you're in (or in the sidebar's footer, if you prefer) for `rev/`
   commands: switch panels, open Settings on a page, and the commands of
   your extensions, listed by what's on screen (`rev/go` a Matrix room,

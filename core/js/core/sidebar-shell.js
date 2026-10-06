@@ -2,6 +2,7 @@ import { save, onStateLoaded } from '../persist.js';
 import { sidebarState } from './sidebar-state.js';
 import { appearanceState, setSidebarPosition } from './appearance.js';
 import { openMenu } from './context-menu.js';
+import { onShortcut } from './shortcuts.js';
 import { getActivePanelPluginId, listPanelPlugins } from './panel-registry.js';
 
 const LEGACY_ORDER_KEY = 'atmos_section_order';
@@ -465,13 +466,8 @@ export function closeSidebar() {
   window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 }
 
-function toggleSidebar() {
+export function toggleSidebar() {
   sidebarState.open ? closeSidebar() : openSidebar();
-}
-
-function isTyping() {
-  const active = document.activeElement;
-  return !!active && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName));
 }
 
 document.getElementById('acc-sidebar')?.addEventListener('click', event => {
@@ -486,38 +482,18 @@ document.getElementById('acc-plugin-settings')?.addEventListener('click', event 
   toggleSettings();
 }, true);
 
-document.addEventListener('keydown', event => {
-  // Ctrl+` opens and closes Settings, even while typing (a plain ` is left
-  // for typing). Frames pass it on too, so it works inside any panel.
-  if (event.ctrlKey && !event.altKey && !event.metaKey && (event.code === 'Backquote' || event.key === '`')) {
-    event.preventDefault();
-    toggleSettings();
-    return;
-  }
-  // Alt+` opens and closes the sidebar from anywhere, even while typing:
-  // frames pass it on, and Atmos Browser takes it before a web page sees it
-  // (web-policy.cjs 'sidebar'). Tab, below, does too where Tab isn't
-  // someone else's (not in a field, not in a web page).
-  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.code === 'Backquote' || event.key === '`')) {
-    event.preventDefault();
-    toggleSidebar();
-    return;
-  }
-  if (isTyping() || event.ctrlKey || event.metaKey || event.altKey) return;
-  // While Settings is open, Tab moves between its controls (it used to hide
-  // the sidebar behind it instead).
-  if (event.key === 'Tab' && document.getElementById('settings-menu')?.classList.contains('open')) return;
-  if (event.key === 'Tab') {
-    event.preventDefault();
-    if (event.shiftKey) {
-      setSidebarPosition(appearanceState.sidebarPosition === 'left' ? 'right' : 'left');
-    } else {
-      toggleSidebar();
-    }
-  }
-});
+// Ctrl+Shift+` opens and closes the sidebar and Ctrl+` Settings, from
+// anywhere, even while typing (shortcuts.js; keymap.mjs has every key).
+// Moving the sidebar to the other side is a command (rev/sidebar-side).
+onShortcut('sidebar', () => toggleSidebar());
+onShortcut('settings', () => toggleSettings());
 
-// Alt+` in a web page (web-layer.js).
+/** The sidebar to the other side of the window (rev/sidebar-side). */
+export function flipSidebarSide() {
+  setSidebarPosition(appearanceState.sidebarPosition === 'left' ? 'right' : 'left');
+}
+
+// An older event name for the same (e2e scripts).
 window.addEventListener('atmos:toggle-sidebar', () => toggleSidebar());
 
 document.getElementById('sidebar-footer-settings')?.addEventListener('click', event => {

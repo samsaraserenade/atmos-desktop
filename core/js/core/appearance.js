@@ -68,9 +68,11 @@ const DEFAULT_APP_FONT_ID = 'default';
 // for the much smaller set of actual opaque/translucent panel and menu
 // backgrounds (#settings-drawer, #ctx-menu, plugins' dropdown surfaces).
 const APP_THEMES = Object.freeze([
-  { id: 'atmos-dark',  label: 'Atmos Dark',  ink: '255,255,255', surface: '22,22,24' },
-  { id: 'amoled',      label: 'AMOLED Black', ink: '255,255,255', surface: '0,0,0' },
-  { id: 'atmos-light', label: 'Atmos Light', ink: '15,15,18',    surface: '255,255,255' },
+  // workspace: what's behind everything with no wallpaper (removed, or not
+  // loaded yet); panelTint: the tint of panels' glass over the wallpaper.
+  { id: 'atmos-dark',  label: 'Atmos Dark',  ink: '255,255,255', surface: '22,22,24',   workspace: '5,5,6',       panelTint: '0,0,0' },
+  { id: 'amoled',      label: 'AMOLED Black', ink: '255,255,255', surface: '0,0,0',      workspace: '0,0,0',       panelTint: '0,0,0' },
+  { id: 'atmos-light', label: 'Atmos Light', ink: '15,15,18',    surface: '255,255,255', workspace: '228,229,233', panelTint: '250,250,252' },
 ]);
 const DEFAULT_APP_THEME_ID = 'atmos-dark';
 const DEFAULT_SHELL_BLUR = 30;
@@ -267,6 +269,8 @@ export function applyAppearance() {
   const theme = APP_THEMES.find(t => t.id === appearanceState.theme) || APP_THEMES[0];
   document.documentElement.style.setProperty('--ink-rgb', theme.ink);
   document.documentElement.style.setProperty('--surface-rgb', theme.surface);
+  document.documentElement.style.setProperty('--workspace-rgb', theme.workspace);
+  document.documentElement.style.setProperty('--panel-tint-rgb', theme.panelTint);
   document.documentElement.dataset.appTheme = theme.id;
   document.documentElement.style.setProperty('--shell-blur', `${normalizeShellBlur(appearanceState.shellBlur)}px`);
   document.documentElement.style.setProperty('--shell-opacity', (normalizeShellOpacity(appearanceState.shellOpacity) / 100).toFixed(2));
@@ -276,6 +280,8 @@ export function applyAppearance() {
   document.documentElement.dataset.sidebarPosition = appearanceState.sidebarPosition === 'left' ? 'left' : 'right';
   document.documentElement.dataset.commandBar = appearanceState.commandBar === 'sidebar' ? 'sidebar' : 'panel';
   document.documentElement.style.colorScheme = theme.id === 'atmos-light' ? 'light' : 'dark';
+  // Web pages and everything else Chromium draws follow the theme too.
+  window.atmosCore?.setColorScheme?.(document.documentElement.style.colorScheme);
   window.dispatchEvent(new Event('atmos:interactive-ui-changed'));
 
   for (const listener of _changeListeners) {
@@ -513,7 +519,7 @@ export function mountAppearanceControls(body, context, panels = []) {
       _row('Position', `<span class="sa-segmented" id="app-sidebar-position" role="radiogroup" aria-label="Sidebar position">
         <button type="button" data-value="left" role="radio">Left</button><button type="button" data-value="right" role="radio">Right</button></span>`),
       _row('Backdrop Shadow', _toggle('app-sidebar-shadow', 'Show sidebar backdrop shadow')),
-      _row('Command Bar', `<span class="sa-segmented" id="app-command-bar" role="radiogroup" aria-label="Where the command bar opens" title="Where Ctrl+\\ opens the command bar">
+      _row('Command Bar', `<span class="sa-segmented" id="app-command-bar" role="radiogroup" aria-label="Where the command bar opens" title="Where Alt+\\ opens the command bar">
         <button type="button" data-value="panel" role="radio">In the Panel</button><button type="button" data-value="sidebar" role="radio">In the Sidebar</button></span>`),
     ].join('')),
     _section('Glass', [

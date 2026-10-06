@@ -10,13 +10,15 @@
       ? saved.coreState.appearance.data.theme
       : null;
     var themes = {
-      'atmos-dark':  { ink: '255,255,255', surface: '22,22,24', scheme: 'dark' },
-      'amoled':      { ink: '255,255,255', surface: '0,0,0', scheme: 'dark' },
-      'atmos-light': { ink: '15,15,18', surface: '255,255,255', scheme: 'light' }
+      'atmos-dark':  { ink: '255,255,255', surface: '22,22,24', workspace: '5,5,6', panelTint: '0,0,0', scheme: 'dark' },
+      'amoled':      { ink: '255,255,255', surface: '0,0,0', workspace: '0,0,0', panelTint: '0,0,0', scheme: 'dark' },
+      'atmos-light': { ink: '15,15,18', surface: '255,255,255', workspace: '228,229,233', panelTint: '250,250,252', scheme: 'light' }
     };
     if (!themes[theme]) return;
     document.documentElement.style.setProperty('--ink-rgb', themes[theme].ink);
     document.documentElement.style.setProperty('--surface-rgb', themes[theme].surface);
+    document.documentElement.style.setProperty('--workspace-rgb', themes[theme].workspace);
+    document.documentElement.style.setProperty('--panel-tint-rgb', themes[theme].panelTint);
     document.documentElement.style.colorScheme = themes[theme].scheme;
     document.documentElement.dataset.appTheme = theme;
   } catch (error) { /* use the CSS defaults when saved state is unavailable */ }

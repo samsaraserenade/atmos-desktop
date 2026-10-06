@@ -335,7 +335,8 @@ function describeContributions(entry, files) {
 // "contributes.commands" so Atmos can list them while the extension's frames
 // are away and show them before a community extension is approved. Core's
 // own names can't be taken.
-const CORE_COMMAND_NAMES = Object.freeze(['sidebar', 'settings', 'extensions', 'switch']);
+// command-list.js CORE_COMMANDS' names (command-list.test.cjs checks they agree).
+const CORE_COMMAND_NAMES = Object.freeze(['sidebar', 'sidebar-side', 'settings', 'extensions', 'switch', 'wallpaper', 'reload']);
 const COMMAND_NAME = /^[a-z][a-z0-9-]{0,29}$/;
 const MAX_COMMANDS = 30;
 

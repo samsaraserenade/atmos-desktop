@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-# Real X input (XTest) for browser.cjs: clicks and keys go to whatever is
+# Real X input (XTest) for browser.cjs and keys.cjs: clicks and keys go to whatever is
 # under the pointer or has the keyboard, as they would from the OS, which
 # is how they reach a web page's <webview>. Needs python3-xlib. One command
 # a line on stdin; "ok" (or "error ...") a line on stdout.
 #   click X Y [BUTTON]   move X Y   key COMBO (e.g. ctrl+l, alt+Left, Tab)   type TEXT
+#   keydown KEY   keyup KEY   (one key held: alt, ctrl, shift or a key name)
 import sys, time
 from Xlib import X, XK, display
 from Xlib.ext import xtest
@@ -55,6 +56,8 @@ for line in sys.stdin:
                 xtest.fake_input(d, X.ButtonRelease, button); d.sync()
         elif cmd == 'key':
             combo(rest)
+        elif cmd in ('keydown', 'keyup'):
+            press(keycode(MODS.get(rest, rest)), cmd == 'keydown'); d.sync()
         elif cmd == 'type':
             for ch in rest:
                 combo(ch)

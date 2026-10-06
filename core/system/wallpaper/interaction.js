@@ -38,7 +38,9 @@ function refreshHitTesting() {
 
 export function applyWallpaperPresentation(state = wallpaperState) {
   if (!active) return;
-  const background = transparentWindowActive && state.mode === 'transparent' ? 'transparent' : '#000';
+  // Behind the wallpaper: the theme's workspace colour (light with Atmos
+  // Light), unless the window is see-through.
+  const background = transparentWindowActive && state.mode === 'transparent' ? 'transparent' : 'rgb(var(--workspace-rgb, 0,0,0))';
   document.documentElement.style.background = 'transparent';
   document.body.style.background = background;
   refreshHitTesting();
